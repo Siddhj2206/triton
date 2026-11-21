@@ -17,8 +17,16 @@ iced_core = { workspace = true, features = ["advanced"] }
 iced_futures = { workspace = true, features = ["tokio"] }
 iced_runtime.workspace = true
 iced_layershell.workspace = true
-# tiny-skia only (ADR-0005); `wayland` for softbuffer's backend.
-iced_renderer = { workspace = true, features = ["tiny-skia", "wayland", "geometry"] }
+# wgpu first, tiny-skia as the fallback when no GPU adapter works (ADR-0007).
+# iced_renderer 0.14 gates the wgpu renderer on `wgpu-bare`; `wgpu` adds its
+# defaults. `wayland` is softbuffer's backend, for the fallback.
+iced_renderer = { workspace = true, features = [
+  "wgpu-bare",
+  "wgpu",
+  "tiny-skia",
+  "wayland",
+  "geometry",
+] }
 iced_widget = { workspace = true, features = ["advanced", "canvas"] }
 niri-ipc.workspace = true
 tracing.workspace = true
@@ -28,3 +36,4 @@ triton-ui.workspace = true
 # Pins only (see the workspace manifest).
 winit-common.workspace = true
 winit-core.workspace = true
+

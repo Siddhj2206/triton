@@ -24,6 +24,10 @@ pub enum Surface {
     Material(Material),
     /// A floating panel: a material with the 28 px floating radius.
     Panel(Material),
+    /// A floating panel that is its own layer surface: niri casts its shadow (a
+    /// layer rule), so it paints only fill and highlight. A large iced shadow costs
+    /// seconds per frame on tiny-skia (spike 1).
+    LayerPanel(Material),
     /// A floating material tightly wrapping one control whose corner radius is
     /// `inner`, `inset` px in. Its corner is concentric with the control's.
     Wrap {
@@ -92,24 +96,24 @@ impl Theme {
             highlight: matches!(m, Material::Glass | Material::Thick),
             border: None,
         };
+        // Its own layer surface: niri casts the shadow.
+        let layered = |m: Material, r: f32| Paint {
+            shadow: None,
+            ..floating(m, r)
+        };
         let on = Some(s.on_surface);
         match class {
             Surface::None => (Paint::default(), None),
             Surface::Material(m) => (floating(m, RADII.tiled), on),
             Surface::Panel(m) => (floating(m, RADII.floating_window), on),
+            Surface::LayerPanel(m) => (layered(m, RADII.floating_window), on),
             Surface::Wrap {
                 material,
                 inner,
                 inset,
             } => (floating(material, concentric(inner, inset)), on),
             Surface::Island => (floating(Material::Glass, SIZE.bar_height / 2.0), on),
-            Surface::LayerIsland => (
-                Paint {
-                    shadow: None,
-                    ..floating(Material::Glass, SIZE.bar_height / 2.0)
-                },
-                on,
-            ),
+            Surface::LayerIsland => (layered(Material::Glass, SIZE.bar_height / 2.0), on),
             // .t-pill: 36 high, radius 18.
             Surface::Pill => (floating(Material::Glass, 18.0), on),
             Surface::Tooltip => (

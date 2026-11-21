@@ -27,7 +27,8 @@ pub use surface::Surface;
 pub use text::Tone;
 pub use theme::Theme;
 
-/// The one renderer Triton uses (ADR-0005).
+/// The renderer: tiny-skia here; the `triton` binary adds wgpu in front of it
+/// (ADR-0007), which turns this into iced's wgpu-or-tiny-skia fallback renderer.
 pub type Renderer = iced_renderer::Renderer;
 
 /// An element built from Triton components.

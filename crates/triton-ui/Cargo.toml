@@ -10,8 +10,8 @@ publish.workspace = true
 [lints]
 workspace = true
 
-# Widgets and the tiny-skia renderer only (ADR-0005): no winit, no compositor, so
-# components are built and snapshot-tested without a compositor.
+# Widgets and the tiny-skia renderer only (the shell adds wgpu, ADR-0007): no winit,
+# no compositor, so components are built and snapshot-tested without a compositor.
 [dependencies]
 # `advanced`: custom theme classes (`.class(..)`) are behind it.
 iced_core = { workspace = true, features = ["advanced"] }

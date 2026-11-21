@@ -1,5 +1,6 @@
 //! The Triton shell process (ADR-0003): one `iced_layershell` daemon that owns every
-//! shell surface. Starts with no surface; niri's outputs decide what appears.
+//! shell surface. Starts with no surface; niri's outputs decide what appears. It
+//! renders with wgpu on Vulkan, falling back to tiny-skia (ADR-0007).
 
 mod app;
 mod host;
@@ -12,7 +13,22 @@ use tracing_subscriber::EnvFilter;
 
 use crate::app::Shell;
 
+/// wgpu on Vulkan unless the user picked otherwise (ADR-0007). By default wgpu would
+/// also set up its GL backend, and in spike 1 GL used about 20 MB more than Vulkan.
+/// If no Vulkan adapter works, iced falls back to tiny-skia.
+fn prefer_vulkan() {
+    if std::env::var_os("WGPU_BACKEND").is_none() {
+        // SAFETY: called first thing in `main`, before any other thread exists, so
+        // nothing can read the environment concurrently.
+        #[expect(unsafe_code, reason = "set_var is unsafe in edition 2024")]
+        unsafe {
+            std::env::set_var("WGPU_BACKEND", "vulkan");
+        }
+    }
+}
+
 fn main() -> Result<(), iced_layershell::Error> {
+    prefer_vulkan();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
@@ -28,6 +44,9 @@ fn main() -> Result<(), iced_layershell::Error> {
             fonts: base.fonts,
             default_font: base.default_font,
             default_text_size: base.default_text_size,
+            // wgpu antialiases paths (the wave, smoothed corners) only with MSAA;
+            // without it their edges are jagged. Quads and text are smooth either way.
+            antialiasing: true,
             layer_settings: LayerShellSettings {
                 start_mode: StartMode::Background,
                 ..LayerShellSettings::default()
