@@ -32,8 +32,6 @@ window-rule {
     }
 }
 
-include optional=true "triton/index.kdl"
-
 // Spike 1 (crates/triton/examples/spike_glass.rs): blur behind its Thick panel.
 layer-rule {
     match namespace="^triton-spike$"

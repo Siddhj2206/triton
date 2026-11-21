@@ -1,9 +1,9 @@
 //! The first slice of ADR-0004: the include files triton owns under
 //! `$XDG_CONFIG_HOME/niri/triton/`. For now only the layer rules the shell's own
-//! surfaces need (rounding and shadows on floating surfaces). The full
-//! transaction (validate a staged copy, swap, confirm with `ConfigLoaded`, roll
-//! back) and adding the include line to the user's `config.kdl` come with the
-//! settings app.
+//! surfaces need (rounding and shadows on floating surfaces). On startup the
+//! files are (re)written and the user's `config.kdl` gets its one triton line if
+//! it is not already there; the settings app's full transaction (validate a
+//! staged copy, swap, confirm with `ConfigLoaded`, roll back) comes later.
 
 use std::path::{Path, PathBuf};
 use std::{fs, io};
@@ -22,6 +22,10 @@ fn hex(color: iced_core::Color) -> String {
 }
 
 const HEADER: &str = "// Written by triton. Changes here are overwritten; use the settings app.\n";
+
+/// The only line triton ever puts in the user's `config.kdl` (ADR-0004).
+/// `optional` keeps niri starting if the triton directory is ever removed.
+const INCLUDE_LINE: &str = "include optional=true \"triton/index.kdl\"";
 
 /// One layer-rule per namespace: corner radius for the shadow shape, shadow
 /// from the tokens.
@@ -64,32 +68,64 @@ pub fn render() -> Vec<(&'static str, String)> {
     vec![("index.kdl", index), ("layer-rules.kdl", layer_rules)]
 }
 
-fn dir() -> Option<PathBuf> {
+fn niri_dir() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".config")))?;
-    Some(base.join("niri").join("triton"))
+    Some(base.join("niri"))
 }
 
-/// Writes the files that differ from what is on disk. niri watches included
-/// files, so it reloads by itself.
+/// Writes `text` to `dir/name` only if it differs, through a same-dir rename.
+fn write_if_changed(dir: &Path, name: &str, text: &str) -> io::Result<()> {
+    let path = dir.join(name);
+    if fs::read_to_string(&path).is_ok_and(|old| old == text) {
+        return Ok(());
+    }
+    let staged = dir.join(format!(".{name}.new"));
+    fs::write(&staged, text)?;
+    fs::rename(&staged, &path)?;
+    tracing::info!(path = %path.display(), "wrote niri config");
+    Ok(())
+}
+
+/// `config.kdl` already hands off to triton when some `include` line names our
+/// index (any spelling). Comments never count.
+fn has_include(config: &str) -> bool {
+    config.lines().any(|line| {
+        let line = line.trim();
+        line.starts_with("include") && line.contains("triton/index.kdl")
+    })
+}
+
+/// Appends the include line to `dir`'s `config.kdl` once. The file may not
+/// exist yet or may not end in a newline.
+fn ensure_include_line(dir: &Path) -> io::Result<()> {
+    let old = fs::read_to_string(dir.join("config.kdl")).unwrap_or_default();
+    if has_include(&old) {
+        return Ok(());
+    }
+    let sep = if old.ends_with('\n') || old.is_empty() {
+        ""
+    } else {
+        "\n"
+    };
+    write_if_changed(dir, "config.kdl", &format!("{old}{sep}{INCLUDE_LINE}\n"))
+}
+
+/// Writes the files that differ from what is on disk, then makes sure the
+/// user's config includes them. niri watches included files and reloads by
+/// itself.
 pub fn install() -> io::Result<()> {
-    let Some(dir) = dir() else {
+    let Some(niri) = niri_dir() else {
         return Ok(());
     };
+    let dir = niri.join("triton");
     fs::create_dir_all(&dir)?;
     // Leaf files first, so the index never names a file that is not there yet.
     for (name, text) in render().into_iter().rev() {
-        let path = dir.join(name);
-        if fs::read_to_string(&path).is_ok_and(|old| old == text) {
-            continue;
-        }
-        let staged = dir.join(format!(".{name}.new"));
-        fs::write(&staged, &text)?;
-        fs::rename(&staged, &path)?;
-        tracing::info!(path = %path.display(), "wrote niri include");
+        write_if_changed(&dir, name, &text)?;
     }
-    Ok(())
+    ensure_include_line(&niri)
 }
 
 #[cfg(test)]
@@ -121,5 +157,40 @@ mod tests {
         }
         assert_eq!(rules.matches("geometry-corner-radius").count(), 2);
         assert!(!rules.contains("background-effect"));
+    }
+
+    #[test]
+    fn include_line_is_added_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.kdl");
+
+        ensure_include_line(dir.path()).unwrap();
+        let text = fs::read_to_string(&config).unwrap();
+        assert_eq!(text, format!("{INCLUDE_LINE}\n"));
+
+        // Second run is a no-op: one line, file unchanged.
+        ensure_include_line(dir.path()).unwrap();
+        assert_eq!(fs::read_to_string(&config).unwrap(), text);
+    }
+
+    #[test]
+    fn include_line_respects_existing_spelling_and_file_end() {
+        for existing in [
+            // Already included, either spelling — nothing appended.
+            "include \"triton/index.kdl\"\n",
+            &format!("{INCLUDE_LINE}\n"),
+            "// include \"triton/index.kdl\"\ninclude optional=true \"triton/index.kdl\"\n",
+        ] {
+            assert!(has_include(existing), "{existing}");
+        }
+        // A commented-out line does not count.
+        assert!(!has_include("// include \"triton/index.kdl\"\n"));
+
+        // No trailing newline: the line still lands on its own line.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("config.kdl"), "prefer-no-csd").unwrap();
+        ensure_include_line(dir.path()).unwrap();
+        let text = fs::read_to_string(dir.path().join("config.kdl")).unwrap();
+        assert_eq!(text, format!("prefer-no-csd\n{INCLUDE_LINE}\n"));
     }
 }

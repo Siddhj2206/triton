@@ -2637,6 +2637,7 @@ dependencies = [
  "iced_sessionlock",
  "iced_widget",
  "niri-ipc",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "triton-design",
