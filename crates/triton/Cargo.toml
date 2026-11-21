@@ -37,3 +37,6 @@ triton-ui.workspace = true
 winit-common.workspace = true
 winit-core.workspace = true
 
+[dev-dependencies]
+iced_sessionlock.workspace = true
+
