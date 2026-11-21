@@ -140,7 +140,7 @@ Screen recording, markup editor, Users page, per-display wallpaper polish, user 
 
 ## 6. Risks and conflicts to resolve
 
-- **MSAA on Vulkan** (ADR-0007): in the preview, wgpu on Vulkan renders paths without antialiasing even with MSAA on, while GL is fine. Find out whether it is iced_wgpu, wgpu or radv. If it can't be fixed, choose between GL (about +28 MB) and analytic antialiasing for our shapes.
+- **niri `geometry-corner-radius` + `blur` destroys layer-surface alpha** (resolved the "MSAA on Vulkan" scare — MSAA was fine all along): the rule combination binarizes interior alpha on every renderer. Move blur to `ext-background-effect` (needs `wl_surface` access in `iced_layershell`/`layershellev`), keep `geometry-corner-radius` + `shadow` only. See `docs/research/niri-layer-blur-alpha.md`.
 - **Memory budget** is now about 100 MB for the shell process (ADR-0007), measured in the preview. Re-measure on the real session once the shell runs there.
 - **The Settings board says "ship as a real libadwaita app".** This roadmap builds it in iced instead, to keep one stack. It still follows the board's layout.
 - **The canvas says "matugen".** We use the same engine (the `material-colors` crate) in-process instead of shelling out. The visible behavior is the same.
