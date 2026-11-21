@@ -16,6 +16,11 @@ pub enum Role {
     IslandEnd,
     /// The strip that reserves the bar's height.
     Zone,
+    /// The dim behind a modal panel. Declared before [`Role::Launcher`] so the
+    /// scrim maps first and stacks below it within the overlay layer.
+    Scrim,
+    /// The launcher panel (`Launcher` board).
+    Launcher,
 }
 
 /// One surface: a role on an output.
@@ -85,6 +90,10 @@ pub struct SurfaceSpec {
 pub const BAR_NAMESPACE: &str = "triton-bar";
 /// The bar's reserved strip; no layer rule matches it.
 pub const BAR_ZONE_NAMESPACE: &str = "triton-bar-zone";
+/// The modal scrim; no layer rule matches it (transparent input surface).
+pub const SCRIM_NAMESPACE: &str = "triton-scrim";
+/// The launcher's namespace; a layer rule rounds and shadows it.
+pub const LAUNCHER_NAMESPACE: &str = "triton-launcher";
 
 /// The islands sit `BAR_TOP` below the output's top edge, `BAR_SIDE` in from its
 /// sides.
@@ -122,6 +131,11 @@ fn island(end: bool, width: u32) -> SurfaceSpec {
     }
 }
 
+/// The launcher panel, fixed at the board's size for now: 900 wide, centered.
+/// Real result lists will drive the height through measurement later; 700
+/// fits the placeholder content (field + hits + hints) without clipping.
+pub const LAUNCHER_SIZE: (u32, u32) = (900, 700);
+
 /// An invisible 1 px strip across the top that reserves the bar's height, so
 /// windows start below the islands. It takes no input.
 fn zone() -> SurfaceSpec {
@@ -143,11 +157,52 @@ fn zone() -> SurfaceSpec {
     }
 }
 
+/// The modal scrim behind the launcher: covers its output so a press anywhere
+/// outside the panel dismisses it (ADR-0003). Transparent — modal by input.
+fn scrim() -> SurfaceSpec {
+    SurfaceSpec {
+        namespace: SCRIM_NAMESPACE,
+        layer: Layer::Overlay,
+        anchors: Anchors {
+            top: true,
+            bottom: true,
+            left: true,
+            right: true,
+        },
+        size: (0, 0),
+        // Auto: covers the whole output including exclusive areas, so a press
+        // over the bar strip dismisses the modal too.
+        exclusive_zone: -1,
+        margin: (0, 0, 0, 0),
+        keyboard: Keyboard::None,
+        input_height: None,
+        blur_radius: None,
+    }
+}
+
+/// The launcher: a Thick Glass panel, modal over the scrim. Anchored to no edge,
+/// so the compositor centers it; it grabs the keyboard while open.
+fn launcher() -> SurfaceSpec {
+    SurfaceSpec {
+        namespace: LAUNCHER_NAMESPACE,
+        layer: Layer::Overlay,
+        anchors: Anchors::default(),
+        size: LAUNCHER_SIZE,
+        exclusive_zone: -1,
+        margin: (0, 0, 0, 0),
+        keyboard: Keyboard::Exclusive,
+        input_height: None,
+        blur_radius: Some(triton_design::shape::RADII.floating_window as u32),
+    }
+}
+
 /// Every surface the shell wants, for the outputs niri has reported. `widths`
 /// holds the islands' measured widths; an unmeasured island starts as a circle.
+/// `launcher_output` is the output the launcher is open on, if any.
 pub fn desired<'a>(
     outputs: impl IntoIterator<Item = &'a str>,
     widths: &BTreeMap<SurfaceKey, u32>,
+    launcher_output: Option<&str>,
 ) -> BTreeMap<SurfaceKey, SurfaceSpec> {
     let mut out = BTreeMap::new();
     for output in outputs {
@@ -160,6 +215,10 @@ pub fn desired<'a>(
             let k = key(role);
             let width = widths.get(&k).copied().unwrap_or(UNMEASURED);
             out.insert(k, island(end, width));
+        }
+        if launcher_output == Some(output) {
+            out.insert(key(Role::Scrim), scrim());
+            out.insert(key(Role::Launcher), launcher());
         }
     }
     out

@@ -8,7 +8,7 @@ use triton_design::{Icon, Material, TypeStyle};
 
 use crate::button::{button, chip, icon_button, nav_item, segment_end, segmented};
 use crate::control::{checkbox, radio, switch};
-use crate::field::{filled_input, search, text_field};
+use crate::field::{Field, filled_input, search, text_field};
 use crate::menu::{Entry, menu};
 use crate::progress::{WaveTone, circular_progress, flat_progress, wave_shape, wavy_progress};
 use crate::scroll::{Divider, divider, scroll};
@@ -269,7 +269,7 @@ fn controls<'a, M: Clone + 'a>(press: &M) -> Element<'a, M> {
 
 fn entry<'a, M: Clone + 'a>(press: &M) -> Element<'a, M> {
     let fields = column![
-        search("Search apps and files", "", false).on_input(sends(press)),
+        search("Search apps and files", "", Field::Search).on_input(sends(press)),
         text_field(
             "Folder name",
             filled_input("", "niri-shell", false).on_input(sends(press)),
@@ -335,7 +335,7 @@ fn floating<'a, M: Clone + 'a>(press: &M) -> Element<'a, M> {
             ]
             .spacing(12)
             .align_y(Vertical::Center),
-            search("Search", "", true).on_input(sends(press)),
+            search("Search", "", Field::SearchOnGlass).on_input(sends(press)),
         ]
         .spacing(6),
         Surface::Panel(Material::Glass),

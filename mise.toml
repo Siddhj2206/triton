@@ -86,6 +86,10 @@ podman run --rm --name triton-preview \
 description = "niri msg against the preview session (mise run preview:msg -- windows)"
 run = "podman exec triton-preview /work/dev/preview/msg.sh"
 
+[tasks."preview:triton"]
+description = "triton msg against the preview session (mise run preview:triton -- launcher toggle)"
+run = "podman exec -e XDG_RUNTIME_DIR=/run/triton-preview triton-preview /work/target/debug/triton msg"
+
 [tasks."preview:shot"]
 description = "Screenshot the preview output to target/preview/shot.png"
 run = "podman exec triton-preview /work/dev/preview/msg.sh action screenshot-screen --show-pointer false --path /preview/shot.png"

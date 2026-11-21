@@ -45,7 +45,7 @@ use iced_layershell::to_layer_message;
 use iced_widget::{Column, Row, Space, Stack, responsive};
 use triton_design::motion::{Animated, Motion, Spring};
 use triton_design::{Icon, Material, TypeStyle};
-use triton_ui::field::search;
+use triton_ui::field::{Field, search};
 use triton_ui::surface::{icon_disc, surface};
 use triton_ui::text::text;
 use triton_ui::{Element, Renderer, Surface, Theme};
@@ -441,7 +441,8 @@ fn selection<'a>(at: f32) -> Element<'a, Message> {
 }
 
 fn body<'a>(scenario: Scenario, value: f32) -> Element<'a, Message> {
-    let field: Element<'a, Message> = search("Search apps, windows and files", "", true).into();
+    let field: Element<'a, Message> =
+        search("Search apps, windows and files", "", Field::SearchOnGlass).into();
     let content: Element<'a, Message> = if scenario == Scenario::Select {
         Stack::new().push(selection(value)).push(grid()).into()
     } else {

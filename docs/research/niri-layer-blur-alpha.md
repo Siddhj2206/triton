@@ -91,6 +91,22 @@ DankMaterialShell implement the same protocol (niri PR #3483 discussion).
   primitives for the smoothed corners, they must do their own AA (SDF or
   alpha-to-coverage), because MSAA will never cover them.
 
+## Related: a uniform translucent fill on a layer surface never composited
+
+Separate symptom seen while building the launcher scrim (Nov 2026): a
+fullscreen overlay surface whose buffer is uniformly `(0,0,0,77)` premultiplied
+(painted via iced `fill_quad` and via the path pipeline, identical on wgpu and
+tiny-skia/shm) rendered as fully transparent — byte-identical screenshot to no
+surface. The buffer content was verified by dumping the softbuffer memfd out of
+`/proc/pid/fd`; niri listed the surface as mapped with correct geometry, pointer
+enter fired, `wp_viewport` was right. Opaque fills composited normally, and a
+translucent red fill (`rgb>0`) also composited — only `rgb≈0, a<1` vanished.
+Unresolved; looks like a premultiplied-alpha edge case in the
+smithay/mesa sampling path for uniformly translucent-dark content. The launcher
+scrim currently paints nothing (modal-by-input decision), but any real
+translucent overlay will hit this — test with `rgb>0` variants before assuming
+a triton bug.
+
 ## Diagnostic tools left in the tree
 
 - `crates/triton/examples/spike_msaa.rs` — raw wgpu MSAA probe, no surface:

@@ -68,6 +68,9 @@ pub enum Surface {
     RadioDot,
     /// A Glass tooltip: 32 high, radius 12.
     Tooltip,
+    /// `.t-scrim`: the input-capture surface a modal sits on. Paints nothing —
+    /// the modal is modal by input, not by dimming.
+    Scrim,
 }
 
 fn shadow(token: Option<ShadowToken>) -> Option<Shadow> {
@@ -103,7 +106,9 @@ impl Theme {
         };
         let on = Some(s.on_surface);
         match class {
-            Surface::None => (Paint::default(), None),
+            // Scrim is `None` too: transparent — it exists so a press anywhere
+            // outside the modal dismisses it.
+            Surface::None | Surface::Scrim => (Paint::default(), None),
             Surface::Material(m) => (floating(m, RADII.tiled), on),
             Surface::Panel(m) => (floating(m, RADII.floating_window), on),
             Surface::LayerPanel(m) => (layered(m, RADII.floating_window), on),

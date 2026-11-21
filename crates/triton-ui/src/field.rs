@@ -6,18 +6,26 @@ use iced_widget::text_input::{Catalog, Icon as InputIcon, Side, Status, Style};
 use iced_widget::{Column, TextInput};
 use triton_design::color::with_alpha;
 use triton_design::material::veil;
+use triton_design::shape::nested;
 use triton_design::{Icon, IconStyle, SIZE};
 
 use crate::text::ui;
 use crate::{Renderer, Theme, Tone};
 
 /// What a text input is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Field {
     /// `.t-field`: the 52 px search pill. `veil` on Glass.
     #[default]
     Search,
     SearchOnGlass,
+    /// A `veil` search field nested `inset` px inside a container of radius
+    /// `outer`: its radius is `nested(outer, inset)` so the two corners are
+    /// concentric (the same rule `Surface::Wrap` applies).
+    Nested {
+        outer: f32,
+        inset: f32,
+    },
     /// A filled field: 56 high, radius 16. Focus draws a 2 px primary ring;
     /// `error` a 2 px error ring.
     Filled {
@@ -44,6 +52,7 @@ impl Catalog for Theme {
         let (background, radius) = match class {
             Field::Search => (s.surface_container_highest, SIZE.search_field / 2.0),
             Field::SearchOnGlass => (veil(self.variant), SIZE.search_field / 2.0),
+            Field::Nested { outer, inset } => (veil(self.variant), nested(*outer, *inset)),
             Field::Filled { .. } => (s.surface_container_highest, FILLED_RADIUS),
         };
         let ring = match (class, status) {
@@ -77,8 +86,10 @@ impl Catalog for Theme {
 
 pub type Input<'a, M> = TextInput<'a, M, Theme, Renderer>;
 
-/// `.t-field`: the search pill with a leading search icon. Add `.on_input(..)`.
-pub fn search<'a, M: Clone + 'a>(placeholder: &str, value: &str, on_glass: bool) -> Input<'a, M> {
+/// `.t-field`: the search field with a leading search icon, styled by `class`
+/// (`Field::SearchOnGlass` on a panel, `Field::Nested` inside a rounded one).
+/// Add `.on_input(..)`.
+pub fn search<'a, M: Clone + 'a>(placeholder: &str, value: &str, class: Field) -> Input<'a, M> {
     iced_widget::text_input(placeholder, value)
         .icon(InputIcon {
             font: Icon::font(IconStyle::Outlined),
@@ -91,11 +102,7 @@ pub fn search<'a, M: Clone + 'a>(placeholder: &str, value: &str, on_glass: bool)
         .line_height(LineHeight::Absolute(24.0.into()))
         .padding(Padding::from([14.0, 18.0]))
         .width(Length::Fill)
-        .class(if on_glass {
-            Field::SearchOnGlass
-        } else {
-            Field::Search
-        })
+        .class(class)
 }
 
 /// A filled text field: the label sits inside the field above the value, and an

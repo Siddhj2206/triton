@@ -103,7 +103,7 @@ mod tests {
     }
 
     fn want(outputs: &[&str]) -> BTreeMap<SurfaceKey, SurfaceSpec> {
-        desired(outputs.iter().copied(), &BTreeMap::new())
+        desired(outputs.iter().copied(), &BTreeMap::new(), None)
     }
 
     fn creates(ops: &[SurfaceOp]) -> Vec<&SurfaceKey> {
@@ -149,8 +149,8 @@ mod tests {
     fn a_measured_island_is_resized_not_recreated() {
         let k = key(Role::IslandStart, "eDP-1");
         let widths = BTreeMap::from([(k.clone(), 300)]);
-        let ops = plan(&desired(["eDP-1"], &widths), &want(&["eDP-1"]));
-        let spec = &desired(["eDP-1"], &widths)[&k];
+        let ops = plan(&desired(["eDP-1"], &widths, None), &want(&["eDP-1"]));
+        let spec = &desired(["eDP-1"], &widths, None)[&k];
         assert_eq!(
             ops,
             vec![SurfaceOp::Reconfigure(
@@ -174,6 +174,44 @@ mod tests {
                 vec![Change::Layer(Layer::Overlay), Change::ExclusiveZone(0)]
             )]
         );
+    }
+
+    #[test]
+    fn the_launcher_maps_scrim_first() {
+        // niri stacks same-layer surfaces in map order: the scrim must be
+        // created before the panel so it sits below it.
+        let ops = plan(
+            &desired(["eDP-1"], &BTreeMap::new(), Some("eDP-1")),
+            &want(&["eDP-1"]),
+        );
+        let scrim = ops
+            .iter()
+            .position(|op| matches!(op, SurfaceOp::Create(k, _) if k.role == Role::Scrim))
+            .expect("scrim");
+        let panel = ops
+            .iter()
+            .position(|op| matches!(op, SurfaceOp::Create(k, _) if k.role == Role::Launcher))
+            .expect("launcher");
+        assert!(scrim < panel);
+        let spec =
+            &desired(["eDP-1"], &BTreeMap::new(), Some("eDP-1"))[&key(Role::Launcher, "eDP-1")];
+        assert_eq!(spec.keyboard, Keyboard::Exclusive);
+        assert_eq!(spec.blur_radius, Some(28));
+    }
+
+    #[test]
+    fn the_launcher_only_lives_on_its_output() {
+        let d = desired(["eDP-1", "DP-1"], &BTreeMap::new(), Some("DP-1"));
+        assert!(!d.contains_key(&key(Role::Launcher, "eDP-1")));
+        assert!(d.contains_key(&key(Role::Launcher, "DP-1")));
+        // Its output vanishing takes the modal with it.
+        let ops = plan(&want(&["eDP-1"]), &d);
+        for role in [Role::Scrim, Role::Launcher] {
+            assert!(ops.iter().any(|op| matches!(
+                op,
+                SurfaceOp::Destroy(k) if k.role == role && k.output == "DP-1"
+            )));
+        }
     }
 
     #[test]

@@ -4,6 +4,7 @@
 
 mod app;
 mod host;
+mod msg;
 mod niri;
 mod niri_config;
 mod shell;
@@ -28,6 +29,18 @@ fn prefer_vulkan() {
 }
 
 fn main() -> Result<(), iced_layershell::Error> {
+    // `triton msg …`: a command line to the running shell, for niri binds.
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("msg") {
+        let command = args.collect::<Vec<_>>().join(" ");
+        return match msg::send(&command) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                eprintln!("triton msg {command}: {e} (is the shell running?)");
+                std::process::exit(1);
+            }
+        };
+    }
     prefer_vulkan();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))

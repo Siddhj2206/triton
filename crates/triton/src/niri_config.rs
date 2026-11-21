@@ -1,8 +1,9 @@
 //! The first slice of ADR-0004: the include files triton owns under
 //! `$XDG_CONFIG_HOME/niri/triton/`. For now only the layer rules the shell's own
-//! surfaces need (blur behind the bar). The full transaction (validate a staged
-//! copy, swap, confirm with `ConfigLoaded`, roll back) and adding the include line
-//! to the user's `config.kdl` come with the settings app.
+//! surfaces need (rounding and shadows on floating surfaces). The full
+//! transaction (validate a staged copy, swap, confirm with `ConfigLoaded`, roll
+//! back) and adding the include line to the user's `config.kdl` come with the
+//! settings app.
 
 use std::path::{Path, PathBuf};
 use std::{fs, io};
@@ -10,7 +11,7 @@ use std::{fs, io};
 use triton_design::SIZE;
 use triton_design::material::ShadowToken;
 
-use crate::shell::BAR_NAMESPACE;
+use crate::shell::{BAR_NAMESPACE, LAUNCHER_NAMESPACE};
 
 /// `#rrggbbaa`, as niri's config takes colors.
 fn hex(color: iced_core::Color) -> String {
@@ -22,21 +23,14 @@ fn hex(color: iced_core::Color) -> String {
 
 const HEADER: &str = "// Written by triton. Changes here are overwritten; use the settings app.\n";
 
-/// Every file triton owns, by name: `index.kdl` includes the rest.
-pub fn render() -> Vec<(&'static str, String)> {
-    // The islands are pills; the rule's corner radius shapes their Glass
-    // shadow (the floating shadow), since iced cannot draw outside the surface.
-    // No background-effect here: rule blur plus corner radius makes niri
-    // binarize the surface's alpha, so the islands request their own blur
-    // through ext-background-effect instead (docs/research/niri-layer-blur-alpha.md).
-    let radius = SIZE.bar_height / 2.0;
-    let shadow = ShadowToken::FLOATING;
+/// One layer-rule per namespace: corner radius for the shadow shape, shadow
+/// from the tokens.
+fn rule(namespace: &str, radius: f32, shadow: ShadowToken) -> String {
     let (x, y, softness, spread) = (shadow.x, shadow.y, shadow.blur, shadow.spread);
     let color = hex(shadow.color);
-    let layer_rules = format!(
-        "{HEADER}\
-layer-rule {{
-    match namespace=\"^{BAR_NAMESPACE}$\"
+    format!(
+        "layer-rule {{
+    match namespace=\"^{namespace}$\"
     geometry-corner-radius {radius}
     shadow {{
         on
@@ -47,6 +41,24 @@ layer-rule {{
     }}
 }}
 "
+    )
+}
+
+/// Every file triton owns, by name: `index.kdl` includes the rest.
+pub fn render() -> Vec<(&'static str, String)> {
+    // Floating surfaces take their corner radius and shadow from a rule, since
+    // iced cannot draw outside a surface's bounds. No background-effect here:
+    // rule blur plus corner radius makes niri binarize the surface's alpha, so
+    // surfaces request their own blur through ext-background-effect instead
+    // (docs/research/niri-layer-blur-alpha.md).
+    let layer_rules = format!(
+        "{HEADER}{}{}",
+        rule(BAR_NAMESPACE, SIZE.bar_height / 2.0, ShadowToken::FLOATING),
+        rule(
+            LAUNCHER_NAMESPACE,
+            triton_design::shape::RADII.floating_window,
+            ShadowToken::FLOATING_LARGE,
+        ),
     );
     let index = format!("{HEADER}include \"layer-rules.kdl\"\n");
     vec![("index.kdl", index), ("layer-rules.kdl", layer_rules)]
@@ -97,13 +109,17 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_is_rounded_and_shadowed_but_never_rule_blurred() {
+    fn floating_surfaces_are_rounded_and_shadowed_but_never_rule_blurred() {
         // Rule blur + corner radius binarizes the surface's alpha in niri
         // (docs/research/niri-layer-blur-alpha.md); blur is client-requested.
         let rules = &render()[1].1;
-        assert!(rules.contains("namespace=\"^triton-bar$\""));
-        assert!(rules.contains("geometry-corner-radius"));
-        assert!(rules.contains("shadow {"));
+        for namespace in ["triton-bar", "triton-launcher"] {
+            assert!(
+                rules.contains(&format!("namespace=\"^{namespace}$\"")),
+                "{namespace}"
+            );
+        }
+        assert_eq!(rules.matches("geometry-corner-radius").count(), 2);
         assert!(!rules.contains("background-effect"));
     }
 }
