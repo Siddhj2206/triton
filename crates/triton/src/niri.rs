@@ -41,6 +41,14 @@ impl Snapshot {
         let ws = self.workspaces_on(output).find(|w| w.is_active)?;
         self.windows.get(&ws.active_window_id?)
     }
+
+    /// The output holding the globally focused workspace, if niri reports one.
+    pub fn focus_output(&self) -> Option<String> {
+        self.workspaces
+            .iter()
+            .find(|w| w.is_focused)
+            .and_then(|w| w.output.clone())
+    }
 }
 
 fn outputs(socket: &mut Socket) -> Vec<String> {
@@ -150,6 +158,18 @@ pub fn act(action: Action) {
 pub fn focus_workspace(id: u64) {
     act(Action::FocusWorkspace {
         reference: WorkspaceReferenceArg::Id(id),
+    });
+}
+
+/// Focus a window (the launcher's window results).
+pub fn focus_window(id: u64) {
+    act(Action::FocusWindow { id });
+}
+
+/// The "Log out" power action.
+pub fn quit() {
+    act(Action::Quit {
+        skip_confirmation: true,
     });
 }
 

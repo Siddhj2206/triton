@@ -134,6 +134,7 @@ fn navigation<'a, M: Clone + 'a>(press: &M) -> Element<'a, M> {
                     icon(Icon::ChevronRight, triton_design::IconStyle::Outlined, 24.0).into(),
                 ),
                 selected: false,
+                on_press: None,
             },
             ListItem {
                 leading: Some(icon_disc(Icon::Bluetooth).into()),
@@ -141,6 +142,7 @@ fn navigation<'a, M: Clone + 'a>(press: &M) -> Element<'a, M> {
                 supporting: Some("WH-1000XM5"),
                 trailing: Some(tag("2 devices").into()),
                 selected: true,
+                on_press: None,
             },
             ListItem {
                 leading: Some(icon_disc(Icon::Bedtime).into()),
@@ -148,6 +150,7 @@ fn navigation<'a, M: Clone + 'a>(press: &M) -> Element<'a, M> {
                 supporting: Some("Until 06:30"),
                 trailing: None,
                 selected: false,
+                on_press: None,
             },
         ],
         false,

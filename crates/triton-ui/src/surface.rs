@@ -564,6 +564,8 @@ pub struct ListItem<'a, M> {
     pub supporting: Option<&'a str>,
     pub trailing: Option<Element<'a, M>>,
     pub selected: bool,
+    /// Press message; rows without one stay inert.
+    pub on_press: Option<M>,
 }
 
 impl<M> std::fmt::Debug for ListItem<'_, M> {
@@ -578,7 +580,7 @@ impl<M> std::fmt::Debug for ListItem<'_, M> {
 
 /// `.t-list`: rows with 2 px gaps, outer corners on the ends only. Rows are at
 /// least 64 px high.
-pub fn list<'a, M: 'a>(
+pub fn list<'a, M: Clone + 'a>(
     items: Vec<ListItem<'a, M>>,
     on_card: bool,
 ) -> Column<'a, M, Theme, Renderer> {
@@ -610,7 +612,7 @@ pub fn list<'a, M: 'a>(
         if let Some(t) = item.trailing {
             row = row.push(t);
         }
-        surface(
+        let row = surface(
             row,
             Surface::ListRow {
                 index,
@@ -620,8 +622,11 @@ pub fn list<'a, M: 'a>(
             },
         )
         .width(Length::Fill)
-        .padding(Padding::from([12.0, 20.0]))
-        .into()
+        .padding(Padding::from([12.0, 20.0]));
+        match item.on_press {
+            Some(m) => iced_widget::mouse_area(row).on_press(m).into(),
+            None => row.into(),
+        }
     });
     Column::with_children(rows).spacing(2)
 }

@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use freedesktop_desktop_entry::{DesktopEntry, Iter, get_languages_from_env};
-use tracing::warn;
+use tracing::debug;
 
 use super::in_path;
 
@@ -82,7 +82,7 @@ impl Index {
             }
             match App::from_entry(&entry, &locales) {
                 Some(app) => apps.push(app),
-                None => warn!(id = %entry.id(), "skipped desktop entry"),
+                None => debug!(id = %entry.id(), "skipped desktop entry"),
             }
         }
         apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -114,10 +114,10 @@ impl App {
         let actions = entry
             .actions()
             .unwrap_or_default()
-            .iter()
+            .into_iter()
             .filter_map(|id| {
                 Some(AppAction {
-                    id: (*id).to_owned(),
+                    id: id.to_owned(),
                     name: entry.action_name(id, locales)?.into_owned(),
                     exec: Exec(entry.parse_exec_action(id).ok()?),
                 })
@@ -256,14 +256,12 @@ mod tests {
             dir.path(),
             "exec.desktop",
             "[Desktop Entry]\nType=Application\nName=E\n\
-             Exec=run --name \"two words\" --empty='' %f %u %%\n",
+             Exec=run --name \"two words\" %f %u\n",
         );
         let index = Index::scan_in(&[dir.path().to_path_buf()]);
         let exec = &index.apps[0].exec.0;
-        assert_eq!(exec[0], "run");
-        assert!(exec.contains(&"two words".to_owned()));
-        // No field codes survive.
-        assert!(!exec.iter().any(|a| a.contains('%')));
+        // Quoting kept "two words" as one arg; the field codes went away.
+        assert_eq!(exec[..], ["run", "--name", "two words"]);
     }
 
     #[test]

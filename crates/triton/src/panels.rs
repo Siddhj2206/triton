@@ -274,9 +274,9 @@ pub struct Qs<'a> {
     pub dark: bool,
     pub saver: bool,
     /// (ssid, supporting, secured, connected) for the Wi-Fi page.
-    pub aps: Vec<(String, String, bool, bool)>,
+    pub aps: &'a [(String, String, bool, bool)],
     /// (name, supporting, connected) for the Bluetooth page.
-    pub bt_devices: Vec<(String, String, bool)>,
+    pub bt_devices: &'a [(String, String, bool)],
 }
 
 fn tile<'a>(
@@ -320,7 +320,7 @@ fn tile<'a>(
     t.into()
 }
 
-pub fn quick_settings<'a>(qs: &'a Qs<'a>) -> Element<'a, Message> {
+pub fn quick_settings<'a>(qs: Qs<'a>) -> Element<'a, Message> {
     let content: Element<'_, Message> = match qs.page {
         QsPage::Root => {
             let grid = Column::new()
@@ -464,6 +464,7 @@ pub fn quick_settings<'a>(qs: &'a Qs<'a>) -> Element<'a, Message> {
                         .into(),
                     ),
                     selected: *connected,
+                    on_press: None,
                 })
                 .collect();
             Column::new()
@@ -492,6 +493,7 @@ pub fn quick_settings<'a>(qs: &'a Qs<'a>) -> Element<'a, Message> {
                         text::icon(Icon::BluetoothConnected, IconStyle::Outlined, 20.0).into()
                     }),
                     selected: *connected,
+                    on_press: None,
                 })
                 .collect();
             Column::new()
@@ -590,8 +592,8 @@ pub struct NotifView {
     pub when: String,
 }
 
-fn notif_card<'a>(n: &'a NotifView, toast: bool) -> Element<'a, Message> {
-    let glyph: Element<'a, Message> = n
+fn notif_card(n: &NotifView, toast: bool) -> Element<'static, Message> {
+    let glyph: Element<'static, Message> = n
         .icon
         .map(|i| surface::icon_disc(i).into())
         .unwrap_or_else(|| surface::icon_disc(Icon::Notifications).into());
@@ -636,10 +638,10 @@ fn notif_card<'a>(n: &'a NotifView, toast: bool) -> Element<'a, Message> {
 
 /// The toast stack: up to four cards plus the overflow chip ("2 more").
 /// `hover` pauses timers — handled by mouse_area in app.
-pub fn toasts<'a>(list: &'a [NotifView], overflow: usize) -> Element<'a, Message> {
+pub fn toasts(list: Vec<NotifView>, overflow: usize) -> Element<'static, Message> {
     let mut col = Column::new().spacing(10);
-    for n in list.iter().take(4) {
-        col = col.push(notif_card(n, true));
+    for n in list.into_iter().take(4) {
+        col = col.push(notif_card(&n, true));
     }
     if overflow > 0 {
         col = col.push(
@@ -653,11 +655,11 @@ pub fn toasts<'a>(list: &'a [NotifView], overflow: usize) -> Element<'a, Message
 
 /// The notification center: header (title, DND), then app groups — each a
 /// header row (app, count, expand, Clear) and its cards (or "Show N more").
-pub fn notification_center<'a>(
-    groups: &'a [(String, Vec<NotifView>)],
-    expanded: impl Fn(&str) -> bool + 'a,
+pub fn notification_center(
+    groups: Vec<(String, Vec<NotifView>)>,
+    expanded: impl Fn(&str) -> bool,
     dnd: bool,
-) -> Element<'a, Message> {
+) -> Element<'static, Message> {
     let header = Row::new()
         .spacing(10)
         .align_y(Vertical::Center)
@@ -679,7 +681,7 @@ pub fn notification_center<'a>(
                 .push(text::text("Nothing new", TypeStyle::BODY_M).class(Tone::OnSurfaceVariant)),
         );
     }
-    for (app, items) in groups {
+    for (app, items) in &groups {
         let is_open = expanded(app.as_str());
         let group_header = Row::new()
             .spacing(8)
