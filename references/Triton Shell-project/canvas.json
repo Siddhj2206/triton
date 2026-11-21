@@ -1,0 +1,379 @@
+{
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1646,
+      "h": 1029,
+      "title": "Triton: desktop on the real wallpaper",
+      "page": "overview"
+    },
+    {
+      "file": "Adwaita.dc.html",
+      "x": 1726,
+      "y": 0,
+      "w": 1646,
+      "h": 1029,
+      "title": "Futura: libadwaita apps",
+      "page": "overview"
+    },
+    {
+      "file": "Color.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1646,
+      "h": 1100,
+      "title": "Foundations: color",
+      "page": "foundations"
+    },
+    {
+      "file": "Type.dc.html",
+      "x": 1726,
+      "y": 0,
+      "w": 1646,
+      "h": 1590,
+      "title": "Foundations: type, shape, motion",
+      "page": "foundations"
+    },
+    {
+      "file": "Materials.dc.html",
+      "x": 3452,
+      "y": 0,
+      "w": 1646,
+      "h": 1029,
+      "title": "Futura: materials",
+      "page": "foundations"
+    },
+    {
+      "file": "Controls.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1646,
+      "h": 1360,
+      "title": "Components: controls",
+      "page": "components"
+    },
+    {
+      "file": "Containers.dc.html",
+      "x": 1726,
+      "y": 0,
+      "w": 1646,
+      "h": 1320,
+      "title": "Components: containers",
+      "page": "components"
+    },
+    {
+      "file": "ComponentIndex.dc.html",
+      "x": 3452,
+      "y": 0,
+      "w": 1646,
+      "h": 1620,
+      "title": "Design system: component index",
+      "page": "components"
+    },
+    {
+      "file": "BarStates.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1646,
+      "h": 2330,
+      "title": "Shell: bar states",
+      "page": "panels"
+    },
+    {
+      "file": "MediaBar.dc.html",
+      "x": 1726,
+      "y": 0,
+      "w": 1646,
+      "h": 1380,
+      "title": "Shell: bar media controls",
+      "page": "panels"
+    },
+    {
+      "file": "Notifications.dc.html",
+      "x": 3452,
+      "y": 0,
+      "w": 1646,
+      "h": 1500,
+      "title": "Shell: notifications",
+      "page": "panels"
+    },
+    {
+      "file": "OSD.dc.html",
+      "x": 0,
+      "y": 2450,
+      "w": 1646,
+      "h": 1370,
+      "title": "Shell: on-screen displays",
+      "page": "panels"
+    },
+    {
+      "file": "QuickSettings.dc.html",
+      "x": 1726,
+      "y": 2450,
+      "w": 1646,
+      "h": 1029,
+      "title": "Shell: quick settings hand-off",
+      "page": "panels"
+    },
+    {
+      "file": "Launcher.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1646,
+      "h": 1029,
+      "title": "Shell: launcher",
+      "page": "launch"
+    },
+    {
+      "file": "Overview.dc.html",
+      "x": 1726,
+      "y": 0,
+      "w": 1646,
+      "h": 1029,
+      "title": "Shell: overview",
+      "page": "launch"
+    },
+    {
+      "file": "WindowSwitcher.dc.html",
+      "x": 0,
+      "y": 1149,
+      "w": 1646,
+      "h": 1029,
+      "title": "Shell: window switcher",
+      "page": "launch"
+    },
+    {
+      "file": "WindowSwitcherStates.dc.html",
+      "x": 1726,
+      "y": 1149,
+      "w": 1646,
+      "h": 1820,
+      "title": "Shell: switcher states",
+      "page": "launch"
+    },
+    {
+      "file": "Clipboard.dc.html",
+      "x": 0,
+      "y": 3089,
+      "w": 1646,
+      "h": 1029,
+      "title": "Shell: clipboard history",
+      "page": "launch"
+    },
+    {
+      "file": "ClipboardStates.dc.html",
+      "x": 1726,
+      "y": 3089,
+      "w": 1646,
+      "h": 1820,
+      "title": "Shell: clipboard states",
+      "page": "launch"
+    },
+    {
+      "file": "Lock.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1646,
+      "h": 1029,
+      "title": "Shell: lock screen",
+      "page": "session"
+    },
+    {
+      "file": "Greeter.dc.html",
+      "x": 1726,
+      "y": 0,
+      "w": 1646,
+      "h": 1029,
+      "title": "Shell: greeter",
+      "page": "session"
+    },
+    {
+      "file": "LoginStates.dc.html",
+      "x": 3452,
+      "y": 0,
+      "w": 1646,
+      "h": 1110,
+      "title": "Shell: login states",
+      "page": "session"
+    },
+    {
+      "file": "Power.dc.html",
+      "x": 0,
+      "y": 1230,
+      "w": 1646,
+      "h": 1029,
+      "title": "Shell: power menu",
+      "page": "session"
+    },
+    {
+      "file": "PowerStates.dc.html",
+      "x": 1726,
+      "y": 1230,
+      "w": 1646,
+      "h": 1150,
+      "title": "Shell: power states",
+      "page": "session"
+    },
+    {
+      "file": "Settings.dc.html",
+      "x": 0,
+      "y": 0,
+      "w": 1646,
+      "h": 1029,
+      "title": "Shell: settings",
+      "page": "apps"
+    },
+    {
+      "file": "SettingsStates.dc.html",
+      "x": 1726,
+      "y": 0,
+      "w": 1646,
+      "h": 2400,
+      "title": "Shell: settings pages",
+      "page": "apps"
+    },
+    {
+      "file": "Wallpaper.dc.html",
+      "x": 0,
+      "y": 2520,
+      "w": 1646,
+      "h": 1029,
+      "title": "Shell: wallpaper picker",
+      "page": "apps"
+    },
+    {
+      "file": "WallpaperStates.dc.html",
+      "x": 1726,
+      "y": 2520,
+      "w": 1646,
+      "h": 1820,
+      "title": "Shell: wallpaper states",
+      "page": "apps"
+    },
+    {
+      "file": "Screenshot.dc.html",
+      "x": 0,
+      "y": 4460,
+      "w": 1646,
+      "h": 1029,
+      "title": "Shell: screenshot",
+      "page": "apps"
+    },
+    {
+      "file": "ScreenshotStates.dc.html",
+      "x": 1726,
+      "y": 4460,
+      "w": 1646,
+      "h": 1880,
+      "title": "Shell: capture states",
+      "page": "apps"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "title-overview",
+      "x": 0,
+      "y": -300,
+      "w": 240,
+      "maxW": 5100,
+      "text": "Overview",
+      "kind": "title1",
+      "page": "overview"
+    },
+    {
+      "id": "title-foundations",
+      "x": 0,
+      "y": -300,
+      "w": 240,
+      "maxW": 5100,
+      "text": "Foundations",
+      "kind": "title1",
+      "page": "foundations"
+    },
+    {
+      "id": "title-components",
+      "x": 0,
+      "y": -300,
+      "w": 240,
+      "maxW": 5100,
+      "text": "Components",
+      "kind": "title1",
+      "page": "components"
+    },
+    {
+      "id": "title-panels",
+      "x": 0,
+      "y": -300,
+      "w": 240,
+      "maxW": 5100,
+      "text": "Bar and panels",
+      "kind": "title1",
+      "page": "panels"
+    },
+    {
+      "id": "title-launch",
+      "x": 0,
+      "y": -300,
+      "w": 240,
+      "maxW": 5100,
+      "text": "Launch and switch",
+      "kind": "title1",
+      "page": "launch"
+    },
+    {
+      "id": "title-session",
+      "x": 0,
+      "y": -300,
+      "w": 240,
+      "maxW": 5100,
+      "text": "Session",
+      "kind": "title1",
+      "page": "session"
+    },
+    {
+      "id": "title-apps",
+      "x": 0,
+      "y": -300,
+      "w": 240,
+      "maxW": 5100,
+      "text": "Settings and capture",
+      "kind": "title1",
+      "page": "apps"
+    }
+  ],
+  "launch": {
+    "view": "canvas"
+  },
+  "pages": [
+    {
+      "id": "overview",
+      "name": "Overview"
+    },
+    {
+      "id": "foundations",
+      "name": "Foundations"
+    },
+    {
+      "id": "components",
+      "name": "Components"
+    },
+    {
+      "id": "panels",
+      "name": "Bar and panels"
+    },
+    {
+      "id": "launch",
+      "name": "Launch and switch"
+    },
+    {
+      "id": "session",
+      "name": "Session"
+    },
+    {
+      "id": "apps",
+      "name": "Settings and capture"
+    }
+  ]
+}

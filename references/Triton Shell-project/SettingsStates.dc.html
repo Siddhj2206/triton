@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Triton Settings States</title>
+<script src="./_runtime/react.js"></script>
+<script src="./_runtime/react-dom.js"></script>
+<script src="./_runtime/support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@400..700&family=Jost:wght@400..700&family=JetBrains+Mono:wght@400;500&family=Material+Symbols+Rounded:FILL,GRAD,opsz,wght@0..1,-25..200,20..48,100..700&display=block" rel="stylesheet">
+<style>
+/* triton:begin */
+/* Triton / Material 3 Futura: design tokens. Generated from tokens.json. Logical px at 1.75x. */
+:root{
+  --t-primary:#B0C6FF;
+  --t-on-primary:#002D6E;
+  --t-primary-container:#00429B;
+  --t-on-primary-container:#D9E2FF;
+  --t-secondary:#BFC6DC;
+  --t-on-secondary:#293041;
+  --t-secondary-container:#3F4759;
+  --t-on-secondary-container:#DBE2F9;
+  --t-tertiary:#FFB59B;
+  --t-on-tertiary:#5A1B00;
+  --t-tertiary-container:#7C3114;
+  --t-on-tertiary-container:#FFDBCE;
+  --t-error:#FFB4AB;
+  --t-on-error:#690005;
+  --t-error-container:#93000A;
+  --t-on-error-container:#FFDAD6;
+  --t-surface:#111318;
+  --t-surface-container-lowest:#0C0E13;
+  --t-surface-container-low:#191C20;
+  --t-surface-container:#1D2024;
+  --t-surface-container-high:#282A2F;
+  --t-surface-container-highest:#33353A;
+  --t-on-surface:#E2E2E9;
+  --t-on-surface-variant:#C4C6D0;
+  --t-outline:#8E9099;
+  --t-outline-variant:#44474F;
+  --t-signal-warn:#FFC857;
+  --t-signal-info:#6FE0F5;
+  --t-font:'Google Sans Flex','Roboto Flex',system-ui,sans-serif;--t-display:'Jost','Google Sans Flex',sans-serif;--t-mono:'JetBrains Mono',ui-monospace,monospace;
+  --t-r-xs:8px;--t-r-sm:12px;--t-r-md:16px;--t-r-lg:20px;--t-r-xl:28px;--t-r-full:9999px;--t-r-list-outer:24px;--t-r-list-inner:6px;
+  --t-sp-1:4px;--t-sp-2:8px;--t-sp-3:12px;--t-sp-4:16px;--t-sp-5:20px;--t-sp-6:24px;--t-sp-8:32px;--t-sp-10:40px;
+  --t-h-s:32px;--t-h-m:40px;--t-h-l:48px;--t-h-xl:56px;
+  --t-mica:rgb(25 28 32 / .72);--t-glass:rgb(40 42 47 / .70);--t-thick:rgb(40 42 47 / .88);
+  /* veil: the fill for controls that sit on Glass or a scrim (a solid container would read as a hole) */
+  --t-veil:rgb(255 255 255 / .10);--t-veil-hi:rgb(255 255 255 / .16);
+  /* adaptive Mica: the bar adds this much alpha when the wallpaper under it is bright (mean luminance over .6) */
+  --t-mica-adaptive:.08;
+  --t-mica-fx:blur(48px) saturate(1.4) brightness(.8);--t-glass-fx:blur(32px) saturate(1.5) brightness(.85);--t-thick-fx:blur(40px) saturate(1.4) brightness(.8);
+  --t-shadow-float:0 16px 40px rgb(0 0 0 / .45);--t-shadow-float-lg:0 30px 80px rgb(0 0 0 / .55);--t-highlight:inset 0 1px 0 rgb(255 255 255 / .14);
+  /* springs as CSS: approximate with linear() in your runtime, or use stiffness and damping directly */
+  --t-spring-spatial-fast:800 .6;--t-spring-spatial:380 .8;--t-spring-spatial-slow:200 .8;--t-spring-fx-fast:3800 1;--t-spring-fx:1600 1;--t-spring-fx-slow:800 1;
+}
+:root[data-scheme="light"]{
+  --t-primary:#2F5AC0;
+  --t-on-primary:#FFFFFF;
+  --t-primary-container:#D9E2FF;
+  --t-on-primary-container:#001945;
+  --t-secondary:#565E71;
+  --t-on-secondary:#FFFFFF;
+  --t-secondary-container:#DBE2F9;
+  --t-on-secondary-container:#131C2B;
+  --t-tertiary:#8C4A2B;
+  --t-on-tertiary:#FFFFFF;
+  --t-tertiary-container:#FFDBCE;
+  --t-on-tertiary-container:#380D00;
+  --t-error:#BA1A1A;
+  --t-on-error:#FFFFFF;
+  --t-error-container:#FFDAD6;
+  --t-on-error-container:#410002;
+  --t-surface:#F9F9FF;
+  --t-surface-container-lowest:#FFFFFF;
+  --t-surface-container-low:#F3F3FA;
+  --t-surface-container:#EDEDF4;
+  --t-surface-container-high:#E7E8EE;
+  --t-surface-container-highest:#E2E2E9;
+  --t-on-surface:#191B20;
+  --t-on-surface-variant:#44474F;
+  --t-outline:#74777F;
+  --t-outline-variant:#C4C6D0;
+  --t-signal-warn:#FFC857;
+  --t-signal-info:#6FE0F5;
+  --t-mica:rgb(243 243 250 / .78);--t-glass:rgb(231 232 238 / .82);--t-thick:rgb(231 232 238 / .90);
+  --t-veil:rgb(25 28 32 / .06);--t-veil-hi:rgb(25 28 32 / .10);--t-mica-adaptive:.06;
+  /* light: never dim the backdrop, it costs dark text its contrast */
+  --t-mica-fx:blur(48px) saturate(1.2) brightness(1.05);--t-glass-fx:blur(32px) saturate(1.3) brightness(1.05);--t-thick-fx:blur(40px) saturate(1.2) brightness(1.05);
+}
+
+/* Triton / Material 3 Futura: shell-wide components. Needs tokens.css and the Material Symbols Rounded font. Class prefix t-. */
+.t-ms{font-family:'Material Symbols Rounded';font-weight:400;font-style:normal;font-size:24px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;font-variation-settings:'FILL' 0,'wght' 500,'GRAD' 0,'opsz' 24;flex:none}
+.t-ms.f{font-variation-settings:'FILL' 1,'wght' 500,'GRAD' 0,'opsz' 24}
+/* materials */
+.t-solid{background:var(--t-surface-container-low)}
+.t-mica{background:var(--t-mica);backdrop-filter:var(--t-mica-fx)}
+.t-glass{background:var(--t-glass);backdrop-filter:var(--t-glass-fx);box-shadow:var(--t-highlight),var(--t-shadow-float)}
+.t-thick{background:var(--t-thick);backdrop-filter:var(--t-thick-fx);box-shadow:var(--t-highlight),var(--t-shadow-float-lg)}
+/* windows */
+.t-window-tiled{border-radius:0;gap:0}
+.t-window-floating{border-radius:var(--t-r-xl);overflow:hidden;box-shadow:0 0 0 1px rgb(255 255 255 / .12),var(--t-shadow-float-lg)}
+.t-island{height:56px;border-radius:var(--t-r-full);display:flex;align-items:center;color:var(--t-on-surface)}
+/* buttons */
+.t-btn{height:var(--t-h-m);padding:0 24px;border:0;border-radius:20px;display:inline-flex;align-items:center;justify-content:center;gap:8px;font:600 14px var(--t-font);box-sizing:border-box;white-space:nowrap;background:var(--t-primary);color:var(--t-on-primary)}
+.t-btn.tonal{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}
+.t-btn.outlined{background:transparent;color:var(--t-primary);box-shadow:inset 0 0 0 1px var(--t-outline)}
+.t-btn.text{background:transparent;color:var(--t-primary);padding:0 14px}
+.t-btn.s{height:var(--t-h-s);padding:0 16px;font-size:13px;border-radius:16px}.t-btn.l{height:var(--t-h-l);padding:0 28px;font-size:16px;border-radius:24px}.t-btn.xl{height:var(--t-h-xl);padding:0 32px;font-size:17px;border-radius:28px}
+.t-btn:active{border-radius:12px}
+.t-btn[disabled]{background:rgb(226 226 233 / .12);color:rgb(226 226 233 / .38)}
+/* on Glass or a scrim: the veil replaces the solid container */
+.t-btn.veil,.t-ibtn.veil{background:var(--t-veil);color:var(--t-on-surface)}
+/* a button that is itself a floating thing (greeter session, keyboard layout) */
+.t-btn.t-glass{background:var(--t-glass);color:var(--t-on-surface)}
+.t-ibtn{width:var(--t-h-m);height:var(--t-h-m);border-radius:20px;display:inline-flex;align-items:center;justify-content:center;border:0;padding:0;background:transparent;color:var(--t-on-surface-variant)}
+.t-ibtn.filled{background:var(--t-primary);color:var(--t-on-primary)}.t-ibtn.tonal{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}
+.t-ibtn.toggled{border-radius:12px}
+.t-ibtn.outlined{box-shadow:inset 0 0 0 1px var(--t-outline);color:var(--t-on-surface-variant)}
+/* unselected toggle: neutral fill, selection adds color and squares the corners (.toggled) */
+.t-ibtn.neutral{background:var(--t-surface-container-highest);color:var(--t-on-surface-variant)}
+.t-ibtn.l{width:var(--t-h-l);height:var(--t-h-l);border-radius:24px}.t-ibtn.l.toggled{border-radius:14px}
+.t-ibtn.s{width:var(--t-h-s);height:var(--t-h-s);border-radius:16px}
+/* connected group: container .t-seg, children are plain elements, .on marks the selection */
+.t-seg{display:flex;gap:3px}
+.t-seg>*{flex:1;height:44px;display:flex;align-items:center;justify-content:center;gap:8px;padding:0 20px;font-size:14px;font-weight:600;background:var(--t-surface-container-high);color:var(--t-on-surface);border-radius:8px;box-sizing:border-box}
+.t-seg>:first-child{border-radius:22px 8px 8px 22px}.t-seg>:last-child{border-radius:8px 22px 22px 8px}.t-seg>.on{background:var(--t-primary);color:var(--t-on-primary)}
+.t-seg .t-ms{font-size:20px}
+.t-seg.l>*{height:var(--t-h-l);font-size:15px}.t-seg.l>:first-child{border-radius:24px 8px 8px 24px}.t-seg.l>:last-child{border-radius:8px 24px 24px 8px}
+.t-seg.veil>:not(.on){background:var(--t-veil)}
+/* switch: <span class="t-switch on"><i><span class="t-ms f">check</span></i></span>; the <i> is the thumb and may hold the check */
+.t-switch{position:relative;width:52px;height:32px;border-radius:16px;box-sizing:border-box;background:var(--t-surface-container-highest);border:2px solid var(--t-outline);flex:none}
+.t-switch>i{position:absolute;left:6px;top:6px;width:16px;height:16px;border-radius:8px;background:var(--t-outline)}
+.t-switch.on{background:var(--t-primary);border-color:var(--t-primary)}
+.t-switch.on>i{left:22px;top:2px;width:24px;height:24px;border-radius:12px;background:var(--t-on-primary);display:flex;align-items:center;justify-content:center}
+.t-switch.on>i .t-ms{font-size:16px;color:var(--t-primary)}
+.t-slider{position:relative;height:44px}.t-slider .a{position:absolute;left:0;top:14px;height:16px;border-radius:8px 2px 2px 8px;background:var(--t-primary)}.t-slider .b{position:absolute;right:0;top:14px;height:16px;border-radius:2px 8px 8px 2px;background:var(--t-surface-container-highest)}.t-slider .h{position:absolute;top:0;width:4px;height:44px;border-radius:2px;background:var(--t-primary);margin-left:-2px}
+.t-chip{height:36px;border-radius:10px;padding:0 14px;display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;box-sizing:border-box;box-shadow:inset 0 0 0 1px var(--t-outline);color:var(--t-on-surface-variant)}
+.t-chip.on{background:var(--t-secondary-container);color:var(--t-on-secondary-container);box-shadow:none}
+.t-chip .t-ms{font-size:18px}
+.t-field{height:52px;border-radius:26px;background:rgb(255 255 255 / .1);display:flex;align-items:center;gap:12px;padding:0 18px;color:var(--t-on-surface-variant)}
+/* lists: .t-list > .t-li; inside a row .g is the growing text block, .t the title, .s the supporting line */
+.t-list{display:flex;flex-direction:column;gap:2px}
+.t-li{background:var(--t-surface-container);min-height:64px;box-sizing:border-box;padding:12px 20px;display:flex;align-items:center;gap:16px;border-radius:var(--t-r-list-inner)}
+.t-li:first-child{border-radius:24px 24px 6px 6px}.t-li:last-child{border-radius:6px 6px 24px 24px}.t-li:only-child{border-radius:24px}
+.t-li .t{font-size:16px;font-weight:500}.t-li .s{font-size:13px;color:var(--t-on-surface-variant);margin-top:1px}.t-li .g{flex:1;min-width:0}
+.t-ic{width:40px;height:40px;border-radius:20px;background:var(--t-secondary-container);color:var(--t-on-secondary-container);display:flex;align-items:center;justify-content:center;flex:none}
+.t-ic .t-ms{font-size:22px}
+/* selected row (pickers, file lists) */
+.t-li.on{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}.t-li.on .s{color:inherit;opacity:.8}
+/* navigation: sidebar items and their group labels */
+.t-nav-label{font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--t-on-surface-variant);opacity:.8;padding:18px 16px 6px}
+.t-nav{height:48px;border-radius:24px;display:flex;align-items:center;gap:16px;padding:0 16px;font-size:15px;font-weight:500;color:var(--t-on-surface)}
+.t-nav.on{background:var(--t-primary-container);color:var(--t-on-primary-container);font-weight:600}
+.t-nav .t-ms{font-size:22px;color:var(--t-on-surface-variant)}.t-nav.on .t-ms{color:var(--t-on-primary-container)}
+.t-card{background:var(--t-surface-container-low);border-radius:24px;padding:20px 22px}
+/* rows sit one tone above what is behind them: on a card they step up to container-high */
+.t-card .t-li:not(.on){background:var(--t-surface-container-high)}
+.t-tag{font-size:12px;font-weight:600;letter-spacing:.04em;padding:3px 10px;border-radius:10px;background:var(--t-tertiary-container);color:var(--t-on-tertiary-container)}
+/* floating label: window names in the overview, capture hints. Not interactive, so not a chip. Pair with .t-glass */
+.t-pill{height:36px;border-radius:18px;padding:0 14px 0 10px;display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600;box-sizing:border-box;white-space:nowrap;color:var(--t-on-surface)}
+.t-pill .t-ms{font-size:18px}
+.t-kbd{text-decoration:none;min-width:24px;height:24px;border-radius:7px;padding:0 6px;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;font:600 12px var(--t-mono);box-shadow:inset 0 0 0 1px rgb(255 255 255 / .35)}
+.t-eyebrow{font-size:13px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--t-primary)}
+/* wave: use the path in tokens.json (shape.wave.path, viewBox 0 0 100 100) as an SVG symbol or clip-path */
+.t-wave{display:inline-block}
+
+/* triton:end */
+
+
+
+
+
+:root{--bg:#0C0E13;--surf:#111318;--low:#191C20;--sc:#1D2024;--high:#282A2F;--highest:#33353A;--on:#E2E2E9;--onv:#C4C6D0;--out:#8E9099;--outv:#43474E;--primary:#B0C6FF;--onp:#002D6E;--pc:#00429B;--opc:#D9E2FF;--sec:#3F4759;--osc:#DBE2F9;--tertiary:#FFB59B;--onT:#5A1B00;--tc:#7C3114;--otc:#FFDBCE;--error:#FFB4AB;--ec:#93000A;
+--font:'Google Sans Flex','Roboto Flex',system-ui,sans-serif;--display:'Jost','Google Sans Flex',sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace}
+body{margin:0}
+.root{position:relative;overflow:hidden;color:var(--on);font-family:var(--font);font-size:15px;line-height:1.4}
+/* sidebar */
+.sb{display:flex;flex-direction:column;gap:2px;padding:0 12px}
+/* groups */
+.sec{font-size:14px;font-weight:600;color:var(--primary);padding:28px 8px 10px;letter-spacing:.02em}
+.sld{position:relative;height:44px;flex:1}
+.sld .a{position:absolute;left:0;top:14px;height:16px;border-radius:8px 2px 2px 8px;background:var(--primary)}
+.sld .b{position:absolute;right:0;top:14px;height:16px;border-radius:2px 8px 8px 2px;background:var(--highest)}
+.sld .h{position:absolute;top:0;width:4px;height:44px;border-radius:2px;background:var(--primary);margin-left:-2px}
+.sld .d{position:absolute;top:20px;width:4px;height:4px;border-radius:2px;background:var(--onp)}
+.sld .d.o{background:var(--primary)}
+.kc{display:inline-flex;gap:6px}
+.kc u{text-decoration:none;min-width:30px;height:30px;border-radius:8px;padding:0 9px;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;font:500 13px var(--mono);background:var(--high);box-shadow:inset 0 -2px 0 rgb(0 0 0 / .35);color:var(--on)}
+</style>
+</helmet>
+
+<div class="root" style="width:1646px;height:2400px;background:#0C0E13">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="blob" viewBox="0 0 100 100"><path d="M50.00,9.80 L51.40,9.98 L52.76,10.51 L54.06,11.33 L55.29,12.38 L56.42,13.56 L57.49,14.78 L58.50,15.92 L59.48,16.92 L60.49,17.71 L61.56,18.24 L62.72,18.52 L64.00,18.56 L65.40,18.44 L66.91,18.20 L68.50,17.96 L70.13,17.78 L71.74,17.77 L73.27,17.97 L74.65,18.45 L75.84,19.21 L76.79,20.24 L77.50,21.52 L77.97,22.99 L78.23,24.58 L78.34,26.22 L78.38,27.83 L78.41,29.36 L78.53,30.76 L78.80,32.01 L79.27,33.10 L79.98,34.06 L80.93,34.92 L82.08,35.72 L83.39,36.51 L84.77,37.35 L86.13,38.26 L87.37,39.28 L88.41,40.42 L89.17,41.67 L89.59,43.02 L89.65,44.43 L89.37,45.86 L88.79,47.29 L87.97,48.67 L87.00,50.00 L85.99,51.26 L85.03,52.45 L84.22,53.60 L83.63,54.73 L83.29,55.87 L83.21,57.06 L83.39,58.32 L83.76,59.68 L84.25,61.13 L84.77,62.65 L85.22,64.23 L85.52,65.81 L85.58,67.35 L85.36,68.80 L84.81,70.10 L83.96,71.22 L82.82,72.14 L81.46,72.85 L79.94,73.39 L78.34,73.78 L76.76,74.10 L75.26,74.40 L73.90,74.75 L72.72,75.23 L71.73,75.89 L70.91,76.76 L70.23,77.84 L69.64,79.12 L69.08,80.54 L68.50,82.04 L67.83,83.54 L67.04,84.95 L66.10,86.17 L65.00,87.13 L63.75,87.78 L62.37,88.08 L60.91,88.06 L59.41,87.73 L57.90,87.16 L56.42,86.44 L55.01,85.66 L53.67,84.93 L52.40,84.33 L51.19,83.94 L50.00,83.80 L48.81,83.94 L47.60,84.33 L46.33,84.93 L44.99,85.66 L43.58,86.44 L42.10,87.16 L40.59,87.73 L39.09,88.06 L37.63,88.08 L36.25,87.78 L35.00,87.13 L33.90,86.17 L32.96,84.95 L32.17,83.54 L31.50,82.04 L30.92,80.54 L30.36,79.12 L29.77,77.84 L29.09,76.76 L28.27,75.89 L27.28,75.23 L26.10,74.75 L24.74,74.40 L23.24,74.10 L21.66,73.78 L20.06,73.39 L18.54,72.85 L17.18,72.14 L16.04,71.22 L15.19,70.10 L14.64,68.80 L14.42,67.35 L14.48,65.81 L14.78,64.23 L15.23,62.65 L15.75,61.13 L16.24,59.68 L16.61,58.32 L16.79,57.06 L16.71,55.87 L16.37,54.73 L15.78,53.60 L14.97,52.45 L14.01,51.26 L13.00,50.00 L12.03,48.67 L11.21,47.29 L10.63,45.86 L10.35,44.43 L10.41,43.02 L10.83,41.67 L11.59,40.42 L12.63,39.28 L13.87,38.26 L15.23,37.35 L16.61,36.51 L17.92,35.72 L19.07,34.92 L20.02,34.06 L20.73,33.10 L21.20,32.01 L21.47,30.76 L21.59,29.36 L21.62,27.83 L21.66,26.22 L21.77,24.58 L22.03,22.99 L22.50,21.52 L23.21,20.24 L24.16,19.21 L25.35,18.45 L26.73,17.97 L28.26,17.77 L29.87,17.78 L31.50,17.96 L33.09,18.20 L34.60,18.44 L36.00,18.56 L37.28,18.52 L38.44,18.24 L39.51,17.71 L40.52,16.92 L41.50,15.92 L42.51,14.78 L43.58,13.56 L44.71,12.38 L45.94,11.33 L47.24,10.51 L48.60,9.98Z"/></symbol><clipPath id="waveclip" clipPathUnits="objectBoundingBox"><path d="M0.5000,0.0980 L0.5140,0.0998 L0.5276,0.1051 L0.5406,0.1133 L0.5529,0.1238 L0.5642,0.1356 L0.5749,0.1478 L0.5850,0.1592 L0.5948,0.1692 L0.6049,0.1771 L0.6156,0.1824 L0.6272,0.1852 L0.6400,0.1856 L0.6540,0.1844 L0.6691,0.1820 L0.6850,0.1796 L0.7013,0.1778 L0.7174,0.1777 L0.7327,0.1797 L0.7465,0.1845 L0.7584,0.1921 L0.7679,0.2024 L0.7750,0.2152 L0.7797,0.2299 L0.7823,0.2458 L0.7834,0.2622 L0.7838,0.2783 L0.7841,0.2936 L0.7853,0.3076 L0.7880,0.3201 L0.7927,0.3310 L0.7998,0.3406 L0.8093,0.3492 L0.8208,0.3572 L0.8339,0.3651 L0.8477,0.3735 L0.8613,0.3826 L0.8737,0.3928 L0.8841,0.4042 L0.8917,0.4167 L0.8959,0.4302 L0.8965,0.4443 L0.8937,0.4586 L0.8879,0.4729 L0.8797,0.4867 L0.8700,0.5000 L0.8599,0.5126 L0.8503,0.5245 L0.8422,0.5360 L0.8363,0.5473 L0.8329,0.5587 L0.8321,0.5706 L0.8339,0.5832 L0.8376,0.5968 L0.8425,0.6113 L0.8477,0.6265 L0.8522,0.6423 L0.8552,0.6581 L0.8558,0.6735 L0.8536,0.6880 L0.8481,0.7010 L0.8396,0.7122 L0.8282,0.7214 L0.8146,0.7285 L0.7994,0.7339 L0.7834,0.7378 L0.7676,0.7410 L0.7526,0.7440 L0.7390,0.7475 L0.7272,0.7523 L0.7173,0.7589 L0.7091,0.7676 L0.7023,0.7784 L0.6964,0.7912 L0.6908,0.8054 L0.6850,0.8204 L0.6783,0.8354 L0.6704,0.8495 L0.6610,0.8617 L0.6500,0.8713 L0.6375,0.8778 L0.6237,0.8808 L0.6091,0.8806 L0.5941,0.8773 L0.5790,0.8716 L0.5642,0.8644 L0.5501,0.8566 L0.5367,0.8493 L0.5240,0.8433 L0.5119,0.8394 L0.5000,0.8380 L0.4881,0.8394 L0.4760,0.8433 L0.4633,0.8493 L0.4499,0.8566 L0.4358,0.8644 L0.4210,0.8716 L0.4059,0.8773 L0.3909,0.8806 L0.3763,0.8808 L0.3625,0.8778 L0.3500,0.8713 L0.3390,0.8617 L0.3296,0.8495 L0.3217,0.8354 L0.3150,0.8204 L0.3092,0.8054 L0.3036,0.7912 L0.2977,0.7784 L0.2909,0.7676 L0.2827,0.7589 L0.2728,0.7523 L0.2610,0.7475 L0.2474,0.7440 L0.2324,0.7410 L0.2166,0.7378 L0.2006,0.7339 L0.1854,0.7285 L0.1718,0.7214 L0.1604,0.7122 L0.1519,0.7010 L0.1464,0.6880 L0.1442,0.6735 L0.1448,0.6581 L0.1478,0.6423 L0.1523,0.6265 L0.1575,0.6113 L0.1624,0.5968 L0.1661,0.5832 L0.1679,0.5706 L0.1671,0.5587 L0.1637,0.5473 L0.1578,0.5360 L0.1497,0.5245 L0.1401,0.5126 L0.1300,0.5000 L0.1203,0.4867 L0.1121,0.4729 L0.1063,0.4586 L0.1035,0.4443 L0.1041,0.4302 L0.1083,0.4167 L0.1159,0.4042 L0.1263,0.3928 L0.1387,0.3826 L0.1523,0.3735 L0.1661,0.3651 L0.1792,0.3572 L0.1907,0.3492 L0.2002,0.3406 L0.2073,0.3310 L0.2120,0.3201 L0.2147,0.3076 L0.2159,0.2936 L0.2162,0.2783 L0.2166,0.2622 L0.2177,0.2458 L0.2203,0.2299 L0.2250,0.2152 L0.2321,0.2024 L0.2416,0.1921 L0.2535,0.1845 L0.2673,0.1797 L0.2826,0.1777 L0.2987,0.1778 L0.3150,0.1796 L0.3309,0.1820 L0.3460,0.1844 L0.3600,0.1856 L0.3728,0.1852 L0.3844,0.1824 L0.3951,0.1771 L0.4052,0.1692 L0.4150,0.1592 L0.4251,0.1478 L0.4358,0.1356 L0.4471,0.1238 L0.4594,0.1133 L0.4724,0.1051 L0.4860,0.0998Z"/></clipPath></svg>
+<div style="position:absolute;left:40px;top:40px;max-width:1180px"><div class="t-eyebrow">Triton · Shell</div><h1 style="margin:10px 0 0;font-family:var(--display);font-size:72px;line-height:1;font-weight:600;letter-spacing:-2.4px">Settings pages</h1><div style="margin-top:12px;font-size:15px;color:var(--onv)">Five more pages at real width, plus the search state and the rules behind them.</div></div><div style="position:absolute;left:0;top:60px;width:1646px;height:2340px"><div style="position:absolute;left:40px;top:150px;width:763px"><div class="t-eyebrow">Displays</div><div style="font-size:14px;color:var(--onv);margin:4px 0 14px;height:20px">Scale from the real panel</div><div style="height:640px;background:var(--surf);box-shadow:0 0 0 1px rgb(255 255 255 / .1);overflow:hidden;position:relative"><div style="padding:0 32px"><div style="font:500 32px/1.1 var(--display);padding:28px 0 4px">Displays</div><div style="margin-top:14px;height:190px;border-radius:24px;background:var(--low);position:relative;box-shadow:inset 0 0 0 1px var(--outv)"><div style="position:absolute;left:150px;top:38px;width:240px;height:130px;border-radius:14px;background:var(--pc);box-shadow:inset 0 0 0 2px var(--primary);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--opc)"><i class="t-ms f" style="font-size:22px">laptop_mac</i><div style="font-weight:600;font-size:14px">eDP-1</div><div style="font-size:12px;opacity:.8;font-family:var(--mono)">1646 × 1029</div></div><div style="position:absolute;left:398px;top:38px;width:200px;height:112px;border-radius:14px;background:var(--high);box-shadow:inset 0 0 0 1px var(--outv);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--onv)"><i class="t-ms" style="font-size:22px">tv</i><div style="font-weight:600;font-size:14px">DP-2</div><div style="font-size:12px;opacity:.8;font-family:var(--mono)">2560 × 1440</div></div><div style="position:absolute;right:16px;bottom:12px;font-size:12.5px;color:var(--onv)">Drag to arrange. Snaps to edges.</div></div><div class="sec">eDP-1 · Built-in display</div><div class="t-list"><div class="t-li"><div class="g"><div class="t">Scale</div><div class="s">Physical 2880 × 1800 · 1.75× gives 1646 × 1029</div></div><div class="sld" style="max-width:250px;flex:none;width:250px"><div class="a" style="width:calc(70% - 6px)"></div><div class="b" style="width:calc(30% - 6px)"></div><i class="d" style="left:calc(0.0% - 2px)"></i><i class="d" style="left:calc(25.0% - 2px)"></i><i class="d" style="left:calc(50.0% - 2px)"></i><i class="d o" style="left:calc(75.0% - 2px)"></i><i class="d o" style="left:calc(100.0% - 2px)"></i><div class="h" style="left:70%"></div></div></div><div class="t-li" style="gap:8px;padding:14px 20px"><div class="g"><div class="t">Refresh rate</div></div><span class="t-chip">60 Hz</span><span class="t-chip on"><i class="t-ms f">check</i>120 Hz</span><span class="t-chip">VRR</span></div><div class="t-li"><div class="g"><div class="t">Variable refresh rate</div><div class="s">Drops to 48 Hz on static content</div></div><span class="t-switch on"><i><span class="t-ms f">check</span></i></span></div><div class="t-li"><div class="g"><div class="t">Night light</div><div class="s">Warm from 21:00 to 06:30 · 3400 K</div></div><span class="t-switch on"><i><span class="t-ms f">check</span></i></span></div></div></div></div></div><div style="position:absolute;left:843px;top:150px;width:763px"><div class="t-eyebrow">Bar & Shell</div><div style="font-size:14px;color:var(--onv);margin:4px 0 14px;height:20px">Autohide is a first-class choice</div><div style="height:640px;background:var(--surf);box-shadow:0 0 0 1px rgb(255 255 255 / .1);overflow:hidden;position:relative"><div style="padding:0 32px"><div style="font:500 32px/1.1 var(--display);padding:28px 0 4px">Bar & Shell</div><div style="display:flex;gap:10px;margin-top:18px"><div style="flex:1;border-radius:22px;background:var(--sc);padding:14px;box-sizing:border-box;box-shadow:inset 0 0 0 1px var(--outv)"><div style="height:76px;border-radius:12px;background:#16356f;position:relative;overflow:hidden"><img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:saturate(.9)"></div><div style="font-weight:600;font-size:15px;margin-top:12px;display:flex;align-items:center;gap:6px">Hidden</div><div style="font-size:12.5px;color:var(--onv);margin-top:2px">Only on Super</div></div><div style="flex:1;border-radius:22px;background:var(--sec);padding:14px;box-sizing:border-box;box-shadow:none"><div style="height:76px;border-radius:12px;background:#16356f;position:relative;overflow:hidden"><img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:saturate(.9)"><div class="t-glass" style="position:absolute;left:8px;top:6px;width:50px;height:12px;border-radius:6px"></div><div class="t-glass" style="position:absolute;right:8px;top:6px;width:80px;height:12px;border-radius:6px"></div></div><div style="font-weight:600;font-size:15px;margin-top:12px;display:flex;align-items:center;gap:6px">Reveal on edge<span class="t-ms f" style="font-size:18px;color:var(--primary);margin-left:auto">check_circle</span></div><div style="font-size:12.5px;color:var(--osc);margin-top:2px">Autohide, default</div></div><div style="flex:1;border-radius:22px;background:var(--sc);padding:14px;box-sizing:border-box;box-shadow:inset 0 0 0 1px var(--outv)"><div style="height:76px;border-radius:12px;background:#16356f;position:relative;overflow:hidden"><img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:saturate(.9)"><div class="t-mica" style="position:absolute;left:0;right:0;top:0;height:14px;background:rgb(24 27 34 / .85)"></div></div><div style="font-weight:600;font-size:15px;margin-top:12px;display:flex;align-items:center;gap:6px">Pinned</div><div style="font-size:12.5px;color:var(--onv);margin-top:2px">Takes 32 px</div></div></div><div class="sec">Autohide</div><div class="t-list"><div class="t-li"><div class="g"><div class="t">Reveal edge</div><div class="s">Top is where the bar lives</div></div><div class="t-seg" style="width:170px"><div class="on">Top</div><div class="">Bottom</div></div></div><div class="t-li"><div class="g"><div class="t">Reveal delay</div><div class="s">Pointer must rest this long</div></div><div class="sld" style="max-width:230px;flex:none;width:230px"><div class="a" style="width:calc(30% - 6px)"></div><div class="b" style="width:calc(70% - 6px)"></div><i class="d" style="left:calc(0.0% - 2px)"></i><i class="d" style="left:calc(25.0% - 2px)"></i><i class="d o" style="left:calc(50.0% - 2px)"></i><i class="d o" style="left:calc(75.0% - 2px)"></i><i class="d o" style="left:calc(100.0% - 2px)"></i><div class="h" style="left:30%"></div></div><span style="font:13px var(--mono);color:var(--onv);width:52px;text-align:right">150 ms</span></div><div class="t-li"><div class="g"><div class="t">Reveal on urgent notification</div><div class="s">The bar peeks for 4 s then hides</div></div><span class="t-switch on"><i><span class="t-ms f">check</span></i></span></div><div class="t-li"><div class="g"><div class="t">Show window title</div><div class="s">Next to workspaces when revealed</div></div><span class="t-switch"><i></i></span></div></div><div class="sec">Indicators</div><div class="t-list"><div class="t-li"><div class="g"><div class="t">Battery as wavy ring</div><div class="s">Percentage only below 20 %</div></div><span class="t-switch on"><i><span class="t-ms f">check</span></i></span></div><div class="t-li"><div class="g"><div class="t">Seconds in clock</div></div><span class="t-switch"><i></i></span></div></div></div></div></div><div style="position:absolute;left:40px;top:906px;width:763px"><div class="t-eyebrow">Windows</div><div style="font-size:14px;color:var(--onv);margin:4px 0 14px;height:20px">Edge to edge by default</div><div style="height:700px;background:var(--surf);box-shadow:0 0 0 1px rgb(255 255 255 / .1);overflow:hidden;position:relative"><div style="padding:0 32px"><div style="font:500 32px/1.1 var(--display);padding:28px 0 4px">Windows</div><div style="color:var(--onv);font-size:14px;margin-top:2px">Tiled windows touch edge to edge. Only floating ones get radius.</div><div style="margin-top:18px;height:150px;border-radius:24px;background:var(--low);box-shadow:inset 0 0 0 1px var(--outv);position:relative;overflow:hidden"><div style="position:absolute;left:24px;top:22px;width:300px;height:106px;border-radius:0;background:var(--high);box-shadow:inset 0 0 0 2px var(--primary)"></div><div style="position:absolute;left:326px;top:22px;width:200px;height:106px;background:var(--high)"></div><div style="position:absolute;left:528px;top:22px;width:200px;height:106px;background:var(--highest);opacity:.6"></div><div style="position:absolute;left:210px;top:44px;width:200px;height:82px;border-radius:18px;background:var(--pc);box-shadow:0 8px 24px rgb(0 0 0 / .5);display:flex;align-items:center;justify-content:center;color:var(--opc);font-size:13px;font-weight:600">Floating</div></div><div class="sec">Layout</div><div class="t-list"><div class="t-li"><div class="g"><div class="t">Gap between windows</div><div class="s">Zero keeps every pixel for your work</div></div><span class="t-chip on" style="font-family:var(--mono)">0 px</span></div><div class="t-li"><div class="g"><div class="t">Corner radius</div><div class="s">Tiled windows stay square</div></div><span class="t-chip" style="font-family:var(--mono)">0 px</span></div><div class="t-li"><div class="g"><div class="t">Floating radius</div><div class="s">Windows, menus and panels</div></div><span class="t-chip on" style="font-family:var(--mono)">28 px</span></div><div class="t-li" style="gap:8px;padding:14px 20px"><div class="g"><div class="t">Preset column widths</div></div><span class="t-chip on">⅓</span><span class="t-chip on">½</span><span class="t-chip on">⅔</span><span class="t-chip"><i class="t-ms">add</i></span></div></div><div class="sec">Focus</div><div class="t-list"><div class="t-li"><div class="g"><div class="t">Focus follows mouse</div><div class="s">Warps pointer to a new window</div></div><span class="t-switch"><i></i></span></div><div class="t-li"><div class="g"><div class="t">Center focused column</div><div class="s">Never, On overflow or Always</div></div><div class="t-seg" style="width:300px"><div class="">Never</div><div class="on">Overflow</div><div class="">Always</div></div></div></div></div></div></div><div style="position:absolute;left:843px;top:906px;width:763px"><div class="t-eyebrow">Keyboard</div><div style="font-size:14px;color:var(--onv);margin:4px 0 14px;height:20px">Conflicts are flagged inline</div><div style="height:700px;background:var(--surf);box-shadow:0 0 0 1px rgb(255 255 255 / .1);overflow:hidden;position:relative"><div style="padding:0 32px"><div style="font:500 32px/1.1 var(--display);padding:28px 0 4px">Keyboard</div><div style="height:52px;border-radius:26px;background:var(--high);display:flex;align-items:center;gap:12px;padding:0 18px;margin-top:14px;color:var(--onv)"><i class="t-ms">search</i>Search shortcuts</div><div class="sec">Shell</div><div class="t-list"><div class="t-li" style="min-height:56px;padding:8px 20px"><div class="g"><div class="t" style="font-size:15px">Open launcher</div></div><span class="kc"><u>Super</u><u>Space</u></span></div><div class="t-li" style="min-height:56px;padding:8px 20px"><div class="g"><div class="t" style="font-size:15px">Overview</div></div><span class="kc"><u>Super</u><u>Tab</u></span></div><div class="t-li" style="min-height:56px;padding:8px 20px"><div class="g"><div class="t" style="font-size:15px">Screenshot</div></div><span class="kc"><u>Print</u></span></div><div class="t-li" style="min-height:56px;padding:8px 20px"><div class="g"><div class="t" style="font-size:15px">Notification center</div></div><span class="kc"><u>Super</u><u>N</u></span></div><div class="t-li" style="min-height:56px;padding:8px 20px"><div class="g"><div class="t" style="font-size:15px">Lock screen</div></div><span class="kc"><u>Super</u><u>L</u></span></div></div><div class="sec">Windows</div><div class="t-list"><div class="t-li" style="min-height:56px;padding:8px 20px"><div class="g"><div class="t" style="font-size:15px">Focus column left</div></div><span class="kc"><u>Super</u><u>←</u></span></div><div class="t-li" style="min-height:56px;padding:8px 20px"><div class="g"><div class="t" style="font-size:15px">Move column right</div></div><span class="kc"><u>Super</u><u>Ctrl</u><u>→</u></span></div><div class="t-li" style="min-height:56px;padding:8px 20px"><div class="g"><div class="t" style="font-size:15px">Toggle floating</div></div><span class="kc"><u>Super</u><u>V</u></span></div><div class="t-li" style="min-height:56px;padding:8px 20px;box-shadow:inset 0 0 0 2px var(--error)"><div class="g"><div class="t" style="font-size:15px">Close window</div><div class="s" style="color:var(--error)">Also used by Open launcher</div></div><span class="kc"><u>Super</u><u>Q</u></span></div></div></div></div></div><div style="position:absolute;left:40px;top:1722px;width:763px"><div class="t-eyebrow">Search</div><div style="font-size:14px;color:var(--onv);margin:4px 0 14px;height:20px">Matches across every page</div><div style="height:520px;background:var(--surf);box-shadow:0 0 0 1px rgb(255 255 255 / .1);overflow:hidden;position:relative"><div style="display:flex;height:100%"><div class="t-mica" style="width:320px;box-sizing:border-box;background-image:linear-gradient(rgb(13 37 82 / .9),rgb(13 37 82 / .9))"><div class="sb"><div style="height:52px;border-radius:26px;background:rgb(255 255 255 / .1);display:flex;align-items:center;gap:12px;padding:0 18px;margin:24px 0 4px;color:var(--onv)"><i class="t-ms">search</i><span style="font-size:15px;color:var(--on)"> blur</span></div><div class="t-nav-label">Connect</div><div class="t-nav"><i class="t-ms">wifi</i>Network</div><div class="t-nav"><i class="t-ms">bluetooth</i>Bluetooth</div><div class="t-nav-label">Devices</div><div class="t-nav"><i class="t-ms">monitor</i>Displays</div><div class="t-nav"><i class="t-ms">volume_up</i>Sound</div><div class="t-nav"><i class="t-ms">keyboard</i>Keyboard</div><div class="t-nav"><i class="t-ms">mouse</i>Mouse & touchpad</div><div class="t-nav"><i class="t-ms">battery_full</i>Power</div><div class="t-nav-label">Triton</div><div class="t-nav"><i class="t-ms">palette</i>Appearance</div><div class="t-nav"><i class="t-ms">toolbar</i>Bar & Shell</div><div class="t-nav"><i class="t-ms">web_asset</i>Windows</div><div class="t-nav"><i class="t-ms">notifications</i>Notifications</div><div class="t-nav-label">System</div><div class="t-nav"><i class="t-ms">apps</i>Apps</div><div class="t-nav"><i class="t-ms">person</i>Users</div><div class="t-nav"><i class="t-ms">info</i>About</div></div></div><div style="flex:1"><div style="padding:0 24px"><div style="font:500 32px/1.1 var(--display);padding:28px 0 4px">Results for “blur”</div><div style="color:var(--onv);font-size:14px">4 matches. Press Enter to open the first.</div><div class="t-list" style="margin-top:20px"><div class="t-li" style="min-height:60px;padding:8px 20px"><span class="t-ic"><i class="t-ms">palette</i></span><div class="g"><div class="t" style="font-size:15px"><b style="background:var(--pc);color:var(--opc);border-radius:4px;padding:0 3px">Blur</b> material</div><div class="s">Appearance · Materials</div></div><i class="t-ms" style="color:var(--onv)">chevron_right</i></div><div class="t-li" style="min-height:60px;padding:8px 20px"><span class="t-ic"><i class="t-ms">palette</i></span><div class="g"><div class="t" style="font-size:15px">Fall back to Solid on battery saver</div><div class="s">Appearance · Materials</div></div><i class="t-ms" style="color:var(--onv)">chevron_right</i></div><div class="t-li" style="min-height:60px;padding:8px 20px"><span class="t-ic"><i class="t-ms">web_asset</i></span><div class="g"><div class="t" style="font-size:15px">Glass on <b style="background:var(--pc);color:var(--opc);border-radius:4px;padding:0 3px">blur</b>red floating windows</div><div class="s">Windows</div></div><i class="t-ms" style="color:var(--onv)">chevron_right</i></div><div class="t-li" style="min-height:60px;padding:8px 20px"><span class="t-ic"><i class="t-ms">toolbar</i></span><div class="g"><div class="t" style="font-size:15px">Bar background <b style="background:var(--pc);color:var(--opc);border-radius:4px;padding:0 3px">blur</b></div><div class="s">Bar & Shell</div></div><i class="t-ms" style="color:var(--onv)">chevron_right</i></div></div></div></div></div></div></div><div style="position:absolute;left:843px;top:1722px;width:763px"><div class="t-eyebrow">Notes</div><div style="font-size:14px;color:var(--onv);margin:4px 0 14px;height:20px">How the window behaves</div><div style="height:520px;background:var(--low);box-shadow:0 0 0 1px rgb(255 255 255 / .1)"><div style="padding:28px 32px"><div class="t-eyebrow" style="margin-bottom:16px">Rules</div><div style="margin-bottom:14px"><div style="font-weight:600;font-size:15px">Re-skin, never re-layout</div><div style="font-size:14px;color:var(--onv);margin-top:2px">The window is a stock two-pane adaptive layout so it can ship as a real libadwaita app.</div></div><div style="margin-bottom:14px"><div style="font-weight:600;font-size:15px">Mica sidebar, solid pane</div><div style="font-size:14px;color:var(--onv);margin-top:2px">Navigation floats on the wallpaper. Controls sit on a solid surface so text never competes with the sky.</div></div><div style="margin-bottom:14px"><div style="font-weight:600;font-size:15px">Grouped rows</div><div style="font-size:14px;color:var(--onv);margin-top:2px">2 px gaps, 24 px outer corners, 6 px inner. The only radius in a tiled window is inside its content.</div></div><div style="margin-bottom:14px"><div style="font-weight:600;font-size:15px">Settings apply live</div><div style="font-size:14px;color:var(--onv);margin-top:2px">No Apply button. Changes run through matugen and a toast reports which targets finished.</div></div><div style="margin-bottom:14px"><div style="font-weight:600;font-size:15px">Search first</div><div style="font-size:14px;color:var(--onv);margin-top:2px">Every setting is indexed. Typing anywhere in the window starts a search.</div></div><div style="margin-bottom:14px"><div style="font-weight:600;font-size:15px">Narrow windows</div><div style="font-size:14px;color:var(--onv);margin-top:2px">Below 860 px the sidebar becomes a full-width list and each page slides in over it.</div></div></div></div></div>
+</div></div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1646,"height":2400}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

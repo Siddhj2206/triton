@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Futura Materials</title>
+<script src="./_runtime/react.js"></script>
+<script src="./_runtime/react-dom.js"></script>
+<script src="./_runtime/support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@400..700&family=Jost:wght@400..700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* triton:begin */
+/* Triton / Material 3 Futura: design tokens. Generated from tokens.json. Logical px at 1.75x. */
+:root{
+  --t-primary:#B0C6FF;
+  --t-on-primary:#002D6E;
+  --t-primary-container:#00429B;
+  --t-on-primary-container:#D9E2FF;
+  --t-secondary:#BFC6DC;
+  --t-on-secondary:#293041;
+  --t-secondary-container:#3F4759;
+  --t-on-secondary-container:#DBE2F9;
+  --t-tertiary:#FFB59B;
+  --t-on-tertiary:#5A1B00;
+  --t-tertiary-container:#7C3114;
+  --t-on-tertiary-container:#FFDBCE;
+  --t-error:#FFB4AB;
+  --t-on-error:#690005;
+  --t-error-container:#93000A;
+  --t-on-error-container:#FFDAD6;
+  --t-surface:#111318;
+  --t-surface-container-lowest:#0C0E13;
+  --t-surface-container-low:#191C20;
+  --t-surface-container:#1D2024;
+  --t-surface-container-high:#282A2F;
+  --t-surface-container-highest:#33353A;
+  --t-on-surface:#E2E2E9;
+  --t-on-surface-variant:#C4C6D0;
+  --t-outline:#8E9099;
+  --t-outline-variant:#44474F;
+  --t-signal-warn:#FFC857;
+  --t-signal-info:#6FE0F5;
+  --t-font:'Google Sans Flex','Roboto Flex',system-ui,sans-serif;--t-display:'Jost','Google Sans Flex',sans-serif;--t-mono:'JetBrains Mono',ui-monospace,monospace;
+  --t-r-xs:8px;--t-r-sm:12px;--t-r-md:16px;--t-r-lg:20px;--t-r-xl:28px;--t-r-full:9999px;--t-r-list-outer:24px;--t-r-list-inner:6px;
+  --t-sp-1:4px;--t-sp-2:8px;--t-sp-3:12px;--t-sp-4:16px;--t-sp-5:20px;--t-sp-6:24px;--t-sp-8:32px;--t-sp-10:40px;
+  --t-h-s:32px;--t-h-m:40px;--t-h-l:48px;--t-h-xl:56px;
+  --t-mica:rgb(25 28 32 / .72);--t-glass:rgb(40 42 47 / .70);--t-thick:rgb(40 42 47 / .88);
+  /* veil: the fill for controls that sit on Glass or a scrim (a solid container would read as a hole) */
+  --t-veil:rgb(255 255 255 / .10);--t-veil-hi:rgb(255 255 255 / .16);
+  /* adaptive Mica: the bar adds this much alpha when the wallpaper under it is bright (mean luminance over .6) */
+  --t-mica-adaptive:.08;
+  --t-mica-fx:blur(48px) saturate(1.4) brightness(.8);--t-glass-fx:blur(32px) saturate(1.5) brightness(.85);--t-thick-fx:blur(40px) saturate(1.4) brightness(.8);
+  --t-shadow-float:0 16px 40px rgb(0 0 0 / .45);--t-shadow-float-lg:0 30px 80px rgb(0 0 0 / .55);--t-highlight:inset 0 1px 0 rgb(255 255 255 / .14);
+  /* springs as CSS: approximate with linear() in your runtime, or use stiffness and damping directly */
+  --t-spring-spatial-fast:800 .6;--t-spring-spatial:380 .8;--t-spring-spatial-slow:200 .8;--t-spring-fx-fast:3800 1;--t-spring-fx:1600 1;--t-spring-fx-slow:800 1;
+}
+:root[data-scheme="light"]{
+  --t-primary:#2F5AC0;
+  --t-on-primary:#FFFFFF;
+  --t-primary-container:#D9E2FF;
+  --t-on-primary-container:#001945;
+  --t-secondary:#565E71;
+  --t-on-secondary:#FFFFFF;
+  --t-secondary-container:#DBE2F9;
+  --t-on-secondary-container:#131C2B;
+  --t-tertiary:#8C4A2B;
+  --t-on-tertiary:#FFFFFF;
+  --t-tertiary-container:#FFDBCE;
+  --t-on-tertiary-container:#380D00;
+  --t-error:#BA1A1A;
+  --t-on-error:#FFFFFF;
+  --t-error-container:#FFDAD6;
+  --t-on-error-container:#410002;
+  --t-surface:#F9F9FF;
+  --t-surface-container-lowest:#FFFFFF;
+  --t-surface-container-low:#F3F3FA;
+  --t-surface-container:#EDEDF4;
+  --t-surface-container-high:#E7E8EE;
+  --t-surface-container-highest:#E2E2E9;
+  --t-on-surface:#191B20;
+  --t-on-surface-variant:#44474F;
+  --t-outline:#74777F;
+  --t-outline-variant:#C4C6D0;
+  --t-signal-warn:#FFC857;
+  --t-signal-info:#6FE0F5;
+  --t-mica:rgb(243 243 250 / .78);--t-glass:rgb(231 232 238 / .82);--t-thick:rgb(231 232 238 / .90);
+  --t-veil:rgb(25 28 32 / .06);--t-veil-hi:rgb(25 28 32 / .10);--t-mica-adaptive:.06;
+  /* light: never dim the backdrop, it costs dark text its contrast */
+  --t-mica-fx:blur(48px) saturate(1.2) brightness(1.05);--t-glass-fx:blur(32px) saturate(1.3) brightness(1.05);--t-thick-fx:blur(40px) saturate(1.2) brightness(1.05);
+}
+
+/* Triton / Material 3 Futura: shell-wide components. Needs tokens.css and the Material Symbols Rounded font. Class prefix t-. */
+.t-ms{font-family:'Material Symbols Rounded';font-weight:400;font-style:normal;font-size:24px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;font-variation-settings:'FILL' 0,'wght' 500,'GRAD' 0,'opsz' 24;flex:none}
+.t-ms.f{font-variation-settings:'FILL' 1,'wght' 500,'GRAD' 0,'opsz' 24}
+/* materials */
+.t-solid{background:var(--t-surface-container-low)}
+.t-mica{background:var(--t-mica);backdrop-filter:var(--t-mica-fx)}
+.t-glass{background:var(--t-glass);backdrop-filter:var(--t-glass-fx);box-shadow:var(--t-highlight),var(--t-shadow-float)}
+.t-thick{background:var(--t-thick);backdrop-filter:var(--t-thick-fx);box-shadow:var(--t-highlight),var(--t-shadow-float-lg)}
+/* windows */
+.t-window-tiled{border-radius:0;gap:0}
+.t-window-floating{border-radius:var(--t-r-xl);overflow:hidden;box-shadow:0 0 0 1px rgb(255 255 255 / .12),var(--t-shadow-float-lg)}
+.t-island{height:56px;border-radius:var(--t-r-full);display:flex;align-items:center;color:var(--t-on-surface)}
+/* buttons */
+.t-btn{height:var(--t-h-m);padding:0 24px;border:0;border-radius:20px;display:inline-flex;align-items:center;justify-content:center;gap:8px;font:600 14px var(--t-font);box-sizing:border-box;white-space:nowrap;background:var(--t-primary);color:var(--t-on-primary)}
+.t-btn.tonal{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}
+.t-btn.outlined{background:transparent;color:var(--t-primary);box-shadow:inset 0 0 0 1px var(--t-outline)}
+.t-btn.text{background:transparent;color:var(--t-primary);padding:0 14px}
+.t-btn.s{height:var(--t-h-s);padding:0 16px;font-size:13px;border-radius:16px}.t-btn.l{height:var(--t-h-l);padding:0 28px;font-size:16px;border-radius:24px}.t-btn.xl{height:var(--t-h-xl);padding:0 32px;font-size:17px;border-radius:28px}
+.t-btn:active{border-radius:12px}
+.t-btn[disabled]{background:rgb(226 226 233 / .12);color:rgb(226 226 233 / .38)}
+/* on Glass or a scrim: the veil replaces the solid container */
+.t-btn.veil,.t-ibtn.veil{background:var(--t-veil);color:var(--t-on-surface)}
+/* a button that is itself a floating thing (greeter session, keyboard layout) */
+.t-btn.t-glass{background:var(--t-glass);color:var(--t-on-surface)}
+.t-ibtn{width:var(--t-h-m);height:var(--t-h-m);border-radius:20px;display:inline-flex;align-items:center;justify-content:center;border:0;padding:0;background:transparent;color:var(--t-on-surface-variant)}
+.t-ibtn.filled{background:var(--t-primary);color:var(--t-on-primary)}.t-ibtn.tonal{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}
+.t-ibtn.toggled{border-radius:12px}
+.t-ibtn.outlined{box-shadow:inset 0 0 0 1px var(--t-outline);color:var(--t-on-surface-variant)}
+/* unselected toggle: neutral fill, selection adds color and squares the corners (.toggled) */
+.t-ibtn.neutral{background:var(--t-surface-container-highest);color:var(--t-on-surface-variant)}
+.t-ibtn.l{width:var(--t-h-l);height:var(--t-h-l);border-radius:24px}.t-ibtn.l.toggled{border-radius:14px}
+.t-ibtn.s{width:var(--t-h-s);height:var(--t-h-s);border-radius:16px}
+/* connected group: container .t-seg, children are plain elements, .on marks the selection */
+.t-seg{display:flex;gap:3px}
+.t-seg>*{flex:1;height:44px;display:flex;align-items:center;justify-content:center;gap:8px;padding:0 20px;font-size:14px;font-weight:600;background:var(--t-surface-container-high);color:var(--t-on-surface);border-radius:8px;box-sizing:border-box}
+.t-seg>:first-child{border-radius:22px 8px 8px 22px}.t-seg>:last-child{border-radius:8px 22px 22px 8px}.t-seg>.on{background:var(--t-primary);color:var(--t-on-primary)}
+.t-seg .t-ms{font-size:20px}
+.t-seg.l>*{height:var(--t-h-l);font-size:15px}.t-seg.l>:first-child{border-radius:24px 8px 8px 24px}.t-seg.l>:last-child{border-radius:8px 24px 24px 8px}
+.t-seg.veil>:not(.on){background:var(--t-veil)}
+/* switch: <span class="t-switch on"><i><span class="t-ms f">check</span></i></span>; the <i> is the thumb and may hold the check */
+.t-switch{position:relative;width:52px;height:32px;border-radius:16px;box-sizing:border-box;background:var(--t-surface-container-highest);border:2px solid var(--t-outline);flex:none}
+.t-switch>i{position:absolute;left:6px;top:6px;width:16px;height:16px;border-radius:8px;background:var(--t-outline)}
+.t-switch.on{background:var(--t-primary);border-color:var(--t-primary)}
+.t-switch.on>i{left:22px;top:2px;width:24px;height:24px;border-radius:12px;background:var(--t-on-primary);display:flex;align-items:center;justify-content:center}
+.t-switch.on>i .t-ms{font-size:16px;color:var(--t-primary)}
+.t-slider{position:relative;height:44px}.t-slider .a{position:absolute;left:0;top:14px;height:16px;border-radius:8px 2px 2px 8px;background:var(--t-primary)}.t-slider .b{position:absolute;right:0;top:14px;height:16px;border-radius:2px 8px 8px 2px;background:var(--t-surface-container-highest)}.t-slider .h{position:absolute;top:0;width:4px;height:44px;border-radius:2px;background:var(--t-primary);margin-left:-2px}
+.t-chip{height:36px;border-radius:10px;padding:0 14px;display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;box-sizing:border-box;box-shadow:inset 0 0 0 1px var(--t-outline);color:var(--t-on-surface-variant)}
+.t-chip.on{background:var(--t-secondary-container);color:var(--t-on-secondary-container);box-shadow:none}
+.t-chip .t-ms{font-size:18px}
+.t-field{height:52px;border-radius:26px;background:rgb(255 255 255 / .1);display:flex;align-items:center;gap:12px;padding:0 18px;color:var(--t-on-surface-variant)}
+/* lists: .t-list > .t-li; inside a row .g is the growing text block, .t the title, .s the supporting line */
+.t-list{display:flex;flex-direction:column;gap:2px}
+.t-li{background:var(--t-surface-container);min-height:64px;box-sizing:border-box;padding:12px 20px;display:flex;align-items:center;gap:16px;border-radius:var(--t-r-list-inner)}
+.t-li:first-child{border-radius:24px 24px 6px 6px}.t-li:last-child{border-radius:6px 6px 24px 24px}.t-li:only-child{border-radius:24px}
+.t-li .t{font-size:16px;font-weight:500}.t-li .s{font-size:13px;color:var(--t-on-surface-variant);margin-top:1px}.t-li .g{flex:1;min-width:0}
+.t-ic{width:40px;height:40px;border-radius:20px;background:var(--t-secondary-container);color:var(--t-on-secondary-container);display:flex;align-items:center;justify-content:center;flex:none}
+.t-ic .t-ms{font-size:22px}
+/* selected row (pickers, file lists) */
+.t-li.on{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}.t-li.on .s{color:inherit;opacity:.8}
+/* navigation: sidebar items and their group labels */
+.t-nav-label{font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--t-on-surface-variant);opacity:.8;padding:18px 16px 6px}
+.t-nav{height:48px;border-radius:24px;display:flex;align-items:center;gap:16px;padding:0 16px;font-size:15px;font-weight:500;color:var(--t-on-surface)}
+.t-nav.on{background:var(--t-primary-container);color:var(--t-on-primary-container);font-weight:600}
+.t-nav .t-ms{font-size:22px;color:var(--t-on-surface-variant)}.t-nav.on .t-ms{color:var(--t-on-primary-container)}
+.t-card{background:var(--t-surface-container-low);border-radius:24px;padding:20px 22px}
+/* rows sit one tone above what is behind them: on a card they step up to container-high */
+.t-card .t-li:not(.on){background:var(--t-surface-container-high)}
+.t-tag{font-size:12px;font-weight:600;letter-spacing:.04em;padding:3px 10px;border-radius:10px;background:var(--t-tertiary-container);color:var(--t-on-tertiary-container)}
+/* floating label: window names in the overview, capture hints. Not interactive, so not a chip. Pair with .t-glass */
+.t-pill{height:36px;border-radius:18px;padding:0 14px 0 10px;display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600;box-sizing:border-box;white-space:nowrap;color:var(--t-on-surface)}
+.t-pill .t-ms{font-size:18px}
+.t-kbd{text-decoration:none;min-width:24px;height:24px;border-radius:7px;padding:0 6px;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;font:600 12px var(--t-mono);box-shadow:inset 0 0 0 1px rgb(255 255 255 / .35)}
+.t-eyebrow{font-size:13px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--t-primary)}
+/* wave: use the path in tokens.json (shape.wave.path, viewBox 0 0 100 100) as an SVG symbol or clip-path */
+.t-wave{display:inline-block}
+
+/* triton:end */
+
+
+
+
+
+
+
+
+body{margin:0}
+/* Layout: one wallpaper, three specimens in a row (content / chrome / floating), each with a spec card below. */
+:root{
+--primary:#B0C6FF;--on-primary:#002D6E;--primary-container:#00429B;--on-primary-container:#D9E2FF;
+--secondary:#BFC6DC;--secondary-container:#3F4759;--on-secondary-container:#DBE2F9;
+--tertiary:#FFB59B;--tertiary-container:#7C3114;
+--error:#FFB4AB;
+--surface:#111318;--on-surface:#E2E2E9;--on-surface-variant:#C4C6D0;--outline:#8E9099;--outline-variant:#44474F;
+--sc-lowest:#0C0E13;--sc-low:#191C20;--sc:#1D2024;--sc-high:#282A2F;--sc-highest:#33353A;
+--font:'Google Sans Flex','Roboto Flex',system-ui,sans-serif;--display:'Jost','Google Sans Flex',sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace;
+}
+.root{position:relative;width:1646px;height:1029px;overflow:hidden;background:#1b3f86;color:var(--on-surface);font-family:var(--font);font-size:15px;line-height:1.4}
+.wall{position:absolute;left:0;top:0}
+.col{position:absolute;top:290px;width:470px}
+.spec{position:absolute;top:670px;width:470px;box-sizing:border-box;height:319px;border-radius:28px;background:var(--sc-low);padding:24px 28px;display:flex;flex-direction:column;gap:14px}
+.spec h3{margin:0;font-family:var(--display);font-size:32px;font-weight:600;letter-spacing:-.4px;display:flex;align-items:baseline;gap:12px}
+.spec h3 small{font-size:14px;font-weight:500;color:var(--on-surface-variant);letter-spacing:0}
+.kv{display:grid;grid-template-columns:84px 1fr;gap:4px 14px;font-size:14px;line-height:1.45}
+.kv dt{color:var(--on-surface-variant);font-weight:500}
+.kv dd{margin:0}
+.kv code{font-family:var(--mono);font-size:13px;color:var(--primary)}
+.row{height:44px;border-radius:22px;display:flex;align-items:center;gap:12px;padding:0 16px;font-size:15px;font-weight:500;color:var(--on-surface-variant)}
+.row.on{background:var(--secondary-container);color:var(--on-secondary-container);font-weight:600}
+.code{margin:0;font-family:var(--mono);font-size:14px;line-height:24px}
+.k{color:var(--primary)}.s{color:var(--tertiary)}.c{color:var(--outline)}.p{color:var(--secondary)}.n{color:#F2B8B5}
+.mi{height:48px;border-radius:24px;display:flex;align-items:center;padding:0 20px;font-size:16px;font-weight:500}
+.mi.hov{background:rgb(178 203 213 / .16)}
+</style>
+</helmet>
+
+<div class="root">
+
+<img class="wall" src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" alt="" style="width:1646px;height:1029px;object-fit:cover;object-position:center">
+
+<!-- title -->
+<div style="position:absolute;left:64px;top:24px;width:780px;box-sizing:border-box;padding:28px 32px 30px;border-radius:28px;background:var(--t-glass);backdrop-filter:blur(32px) saturate(1.5) brightness(.85);-webkit-backdrop-filter:blur(32px) saturate(1.5) brightness(.85);box-shadow:inset 0 1px 0 rgb(255 255 255 / .14),0 20px 60px rgb(0 0 0 / .45)">
+  <div style="font-size:14px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--primary)">Triton · Futura design language</div>
+  <h1 style="margin:10px 0 12px;font-family:var(--display);font-size:72px;line-height:1;font-weight:600;letter-spacing:-2px">Material 3 Futura</h1>
+  <p style="margin:0;font-size:19px;line-height:1.4;color:var(--on-surface-variant);max-width:700px">Space-age livery on Material 3 Expressive. Cobalt from the sky, hull white, rust from the cargo crates. Content stays solid, chrome takes the wallpaper’s tint, and only things that float get glass.</p>
+</div>
+
+<!-- ============ SOLID ============ -->
+<div class="col" style="left:78px">
+  <div style="height:360px;border-radius:20px;background:var(--sc-low);overflow:hidden">
+    <div style="height:56px;display:flex;align-items:center;padding:0 24px;font-size:16px;font-weight:600">Bar.qml</div>
+    <div style="display:flex;gap:18px;padding:6px 24px">
+      <pre class="code c" style="text-align:right;margin:0">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12</pre>
+<pre class="code"><span class="k">PanelWindow</span> {
+    <span class="p">anchors</span> { top: <span class="k">true</span> }
+    <span class="p">implicitHeight</span>: <span class="n">56</span>
+    <span class="p">color</span>: <span class="s">"transparent"</span>
+
+    <span class="k">Island</span> {
+        <span class="p">radius</span>: Shape.full
+        <span class="p">color</span>: Theme.glass
+    }
+}</pre></div>
+  </div>
+</div>
+<div class="spec" style="left:78px">
+  <h3>Solid <small>Content</small></h3>
+  <dl class="kv">
+    <dt>Use for</dt><dd>Text, code, lists, media. Anything read for more than a glance.</dd>
+    <dt>Fill</dt><dd><code>surface-container-low</code> to <code>-highest</code>, 100% opaque</dd>
+    <dt>Never</dt><dd>Blurred, tinted or translucent. Contrast stays at 7:1 or better.</dd>
+    <dt>Edges</dt><dd>Square when tiled. Rounded only when floating.</dd>
+  </dl>
+</div>
+
+<!-- ============ MICA ============ -->
+<div class="col" style="left:588px">
+  <div style="position:relative;height:360px;border-radius:20px;overflow:hidden;background:var(--t-mica);backdrop-filter:blur(48px) saturate(1.4) brightness(.8);-webkit-backdrop-filter:blur(48px) saturate(1.4) brightness(.8)">
+    <div style="position:absolute;left:0;top:0;width:158px;bottom:0;padding:64px 10px 0;display:flex;flex-direction:column;gap:2px">
+      <div class="row on">Home</div><div class="row">Recent</div><div class="row">Starred</div><div class="row">Trash</div>
+    </div>
+    <div style="position:absolute;left:24px;top:0;height:56px;display:flex;align-items:center;font-size:16px;font-weight:600">Files</div>
+    <div style="position:absolute;left:158px;top:56px;right:0;bottom:0;background:var(--sc-low);padding:20px 24px">
+      <div style="font-size:28px;font-weight:600;letter-spacing:-.4px">niri-shell</div>
+      <div style="display:flex;flex-direction:column;gap:2px;margin-top:12px;font-size:15px">
+        <div style="height:44px;display:flex;align-items:center;justify-content:space-between;color:var(--on-surface)"><span>quickshell</span><span style="color:var(--on-surface-variant)">Today</span></div>
+        <div style="height:44px;display:flex;align-items:center;justify-content:space-between"><span>matugen</span><span style="color:var(--on-surface-variant)">Yesterday</span></div>
+        <div style="height:44px;display:flex;align-items:center;justify-content:space-between"><span>colors.json</span><span style="color:var(--on-surface-variant)">Today</span></div>
+        <div style="height:44px;display:flex;align-items:center;justify-content:space-between"><span>README.md</span><span style="color:var(--on-surface-variant)">Nov 12</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="spec" style="left:588px">
+  <h3>Mica <small>Chrome</small></h3>
+  <dl class="kv">
+    <dt>Use for</dt><dd>Header bars, sidebars, terminal backgrounds. Persistent, so it stays calm.</dd>
+    <dt>Fill</dt><dd><code>surface-container-low</code> at 72%, blur <code>48px</code>, saturate <code>1.4</code>, brightness <code>.8</code></dd>
+    <dt>niri</dt><dd><code>xray true</code>. Samples the wallpaper only, so it never recomputes.</dd>
+    <dt>Fallback</dt><dd>Solid on battery saver or when a window loses focus for long.</dd>
+  </dl>
+</div>
+
+<!-- ============ GLASS ============ -->
+<div class="col" style="left:1098px">
+  <div style="position:absolute;left:0;top:0;width:318px;box-sizing:border-box;border-radius:28px;padding:10px;background:var(--t-glass);backdrop-filter:blur(32px) saturate(1.5) brightness(.85);-webkit-backdrop-filter:blur(32px) saturate(1.5) brightness(.85);box-shadow:inset 0 1px 0 rgb(255 255 255 / .12),0 20px 50px rgb(0 0 0 / .45)">
+    <div class="mi">Open in Console</div>
+    <div class="mi hov">Copy path</div>
+    <div class="mi">Compress…</div>
+    <div class="mi">Rename</div>
+    <div style="height:1px;margin:6px 16px;background:rgb(255 255 255 / .12)"></div>
+    <div class="mi" style="color:var(--error)">Move to Trash</div>
+  </div>
+  <div style="position:absolute;left:0;top:322px;width:318px;height:56px;box-sizing:border-box;border-radius:28px;padding:0 20px;display:flex;align-items:center;gap:14px;background:var(--t-glass);backdrop-filter:blur(32px) saturate(1.5) brightness(.85);-webkit-backdrop-filter:blur(32px) saturate(1.5) brightness(.85);box-shadow:inset 0 1px 0 rgb(255 255 255 / .12),0 12px 30px rgb(0 0 0 / .4)">
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#DEE3E7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zM16.5 8.5a5 5 0 0 1 0 7"/></svg>
+    <div style="flex:1;height:8px;border-radius:4px;background:rgb(255 255 255 / .2);position:relative"><div style="position:absolute;left:0;top:0;bottom:0;width:62%;border-radius:4px;background:var(--primary)"></div></div>
+    <span style="font-size:14px;font-weight:600;font-variant-numeric:tabular-nums">62</span>
+  </div>
+</div>
+<div class="spec" style="left:1098px">
+  <h3>Glass <small>Floating</small></h3>
+  <dl class="kv">
+    <dt>Use for</dt><dd>Bar, quick settings, menus, OSD, floating windows. Things that sit above work.</dd>
+    <dt>Fill</dt><dd><code>surface-container-high</code> at 70%, blur <code>32px</code>, saturate <code>1.5</code>, brightness <code>.85</code>, 1px top highlight</dd>
+    <dt>niri</dt><dd><code>xray false</code>. Sees the windows below, so use it sparingly.</dd>
+    <dt>Rules</dt><dd>No glass on glass. If text drops under 4.5:1, go solid.</dd>
+  </dl>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1646,"height":1029}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

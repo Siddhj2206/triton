@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Triton Bar States</title>
+<script src="./_runtime/react.js"></script>
+<script src="./_runtime/react-dom.js"></script>
+<script src="./_runtime/support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@400..700&family=Jost:wght@400..700&family=JetBrains+Mono:wght@400;500&family=Material+Symbols+Rounded:FILL,GRAD,opsz,wght@0..1,-25..200,20..48,100..700&display=block" rel="stylesheet">
+<style>
+/* triton:begin */
+/* Triton / Material 3 Futura: design tokens. Generated from tokens.json. Logical px at 1.75x. */
+:root{
+  --t-primary:#B0C6FF;
+  --t-on-primary:#002D6E;
+  --t-primary-container:#00429B;
+  --t-on-primary-container:#D9E2FF;
+  --t-secondary:#BFC6DC;
+  --t-on-secondary:#293041;
+  --t-secondary-container:#3F4759;
+  --t-on-secondary-container:#DBE2F9;
+  --t-tertiary:#FFB59B;
+  --t-on-tertiary:#5A1B00;
+  --t-tertiary-container:#7C3114;
+  --t-on-tertiary-container:#FFDBCE;
+  --t-error:#FFB4AB;
+  --t-on-error:#690005;
+  --t-error-container:#93000A;
+  --t-on-error-container:#FFDAD6;
+  --t-surface:#111318;
+  --t-surface-container-lowest:#0C0E13;
+  --t-surface-container-low:#191C20;
+  --t-surface-container:#1D2024;
+  --t-surface-container-high:#282A2F;
+  --t-surface-container-highest:#33353A;
+  --t-on-surface:#E2E2E9;
+  --t-on-surface-variant:#C4C6D0;
+  --t-outline:#8E9099;
+  --t-outline-variant:#44474F;
+  --t-signal-warn:#FFC857;
+  --t-signal-info:#6FE0F5;
+  --t-font:'Google Sans Flex','Roboto Flex',system-ui,sans-serif;--t-display:'Jost','Google Sans Flex',sans-serif;--t-mono:'JetBrains Mono',ui-monospace,monospace;
+  --t-r-xs:8px;--t-r-sm:12px;--t-r-md:16px;--t-r-lg:20px;--t-r-xl:28px;--t-r-full:9999px;--t-r-list-outer:24px;--t-r-list-inner:6px;
+  --t-sp-1:4px;--t-sp-2:8px;--t-sp-3:12px;--t-sp-4:16px;--t-sp-5:20px;--t-sp-6:24px;--t-sp-8:32px;--t-sp-10:40px;
+  --t-h-s:32px;--t-h-m:40px;--t-h-l:48px;--t-h-xl:56px;
+  --t-mica:rgb(25 28 32 / .72);--t-glass:rgb(40 42 47 / .70);--t-thick:rgb(40 42 47 / .88);
+  /* veil: the fill for controls that sit on Glass or a scrim (a solid container would read as a hole) */
+  --t-veil:rgb(255 255 255 / .10);--t-veil-hi:rgb(255 255 255 / .16);
+  /* adaptive Mica: the bar adds this much alpha when the wallpaper under it is bright (mean luminance over .6) */
+  --t-mica-adaptive:.08;
+  --t-mica-fx:blur(48px) saturate(1.4) brightness(.8);--t-glass-fx:blur(32px) saturate(1.5) brightness(.85);--t-thick-fx:blur(40px) saturate(1.4) brightness(.8);
+  --t-shadow-float:0 16px 40px rgb(0 0 0 / .45);--t-shadow-float-lg:0 30px 80px rgb(0 0 0 / .55);--t-highlight:inset 0 1px 0 rgb(255 255 255 / .14);
+  /* springs as CSS: approximate with linear() in your runtime, or use stiffness and damping directly */
+  --t-spring-spatial-fast:800 .6;--t-spring-spatial:380 .8;--t-spring-spatial-slow:200 .8;--t-spring-fx-fast:3800 1;--t-spring-fx:1600 1;--t-spring-fx-slow:800 1;
+}
+:root[data-scheme="light"]{
+  --t-primary:#2F5AC0;
+  --t-on-primary:#FFFFFF;
+  --t-primary-container:#D9E2FF;
+  --t-on-primary-container:#001945;
+  --t-secondary:#565E71;
+  --t-on-secondary:#FFFFFF;
+  --t-secondary-container:#DBE2F9;
+  --t-on-secondary-container:#131C2B;
+  --t-tertiary:#8C4A2B;
+  --t-on-tertiary:#FFFFFF;
+  --t-tertiary-container:#FFDBCE;
+  --t-on-tertiary-container:#380D00;
+  --t-error:#BA1A1A;
+  --t-on-error:#FFFFFF;
+  --t-error-container:#FFDAD6;
+  --t-on-error-container:#410002;
+  --t-surface:#F9F9FF;
+  --t-surface-container-lowest:#FFFFFF;
+  --t-surface-container-low:#F3F3FA;
+  --t-surface-container:#EDEDF4;
+  --t-surface-container-high:#E7E8EE;
+  --t-surface-container-highest:#E2E2E9;
+  --t-on-surface:#191B20;
+  --t-on-surface-variant:#44474F;
+  --t-outline:#74777F;
+  --t-outline-variant:#C4C6D0;
+  --t-signal-warn:#FFC857;
+  --t-signal-info:#6FE0F5;
+  --t-mica:rgb(243 243 250 / .78);--t-glass:rgb(231 232 238 / .82);--t-thick:rgb(231 232 238 / .90);
+  --t-veil:rgb(25 28 32 / .06);--t-veil-hi:rgb(25 28 32 / .10);--t-mica-adaptive:.06;
+  /* light: never dim the backdrop, it costs dark text its contrast */
+  --t-mica-fx:blur(48px) saturate(1.2) brightness(1.05);--t-glass-fx:blur(32px) saturate(1.3) brightness(1.05);--t-thick-fx:blur(40px) saturate(1.2) brightness(1.05);
+}
+
+/* Triton / Material 3 Futura: shell-wide components. Needs tokens.css and the Material Symbols Rounded font. Class prefix t-. */
+.t-ms{font-family:'Material Symbols Rounded';font-weight:400;font-style:normal;font-size:24px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;font-variation-settings:'FILL' 0,'wght' 500,'GRAD' 0,'opsz' 24;flex:none}
+.t-ms.f{font-variation-settings:'FILL' 1,'wght' 500,'GRAD' 0,'opsz' 24}
+/* materials */
+.t-solid{background:var(--t-surface-container-low)}
+.t-mica{background:var(--t-mica);backdrop-filter:var(--t-mica-fx)}
+.t-glass{background:var(--t-glass);backdrop-filter:var(--t-glass-fx);box-shadow:var(--t-highlight),var(--t-shadow-float)}
+.t-thick{background:var(--t-thick);backdrop-filter:var(--t-thick-fx);box-shadow:var(--t-highlight),var(--t-shadow-float-lg)}
+/* windows */
+.t-window-tiled{border-radius:0;gap:0}
+.t-window-floating{border-radius:var(--t-r-xl);overflow:hidden;box-shadow:0 0 0 1px rgb(255 255 255 / .12),var(--t-shadow-float-lg)}
+.t-island{height:56px;border-radius:var(--t-r-full);display:flex;align-items:center;color:var(--t-on-surface)}
+/* buttons */
+.t-btn{height:var(--t-h-m);padding:0 24px;border:0;border-radius:20px;display:inline-flex;align-items:center;justify-content:center;gap:8px;font:600 14px var(--t-font);box-sizing:border-box;white-space:nowrap;background:var(--t-primary);color:var(--t-on-primary)}
+.t-btn.tonal{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}
+.t-btn.outlined{background:transparent;color:var(--t-primary);box-shadow:inset 0 0 0 1px var(--t-outline)}
+.t-btn.text{background:transparent;color:var(--t-primary);padding:0 14px}
+.t-btn.s{height:var(--t-h-s);padding:0 16px;font-size:13px;border-radius:16px}.t-btn.l{height:var(--t-h-l);padding:0 28px;font-size:16px;border-radius:24px}.t-btn.xl{height:var(--t-h-xl);padding:0 32px;font-size:17px;border-radius:28px}
+.t-btn:active{border-radius:12px}
+.t-btn[disabled]{background:rgb(226 226 233 / .12);color:rgb(226 226 233 / .38)}
+/* on Glass or a scrim: the veil replaces the solid container */
+.t-btn.veil,.t-ibtn.veil{background:var(--t-veil);color:var(--t-on-surface)}
+/* a button that is itself a floating thing (greeter session, keyboard layout) */
+.t-btn.t-glass{background:var(--t-glass);color:var(--t-on-surface)}
+.t-ibtn{width:var(--t-h-m);height:var(--t-h-m);border-radius:20px;display:inline-flex;align-items:center;justify-content:center;border:0;padding:0;background:transparent;color:var(--t-on-surface-variant)}
+.t-ibtn.filled{background:var(--t-primary);color:var(--t-on-primary)}.t-ibtn.tonal{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}
+.t-ibtn.toggled{border-radius:12px}
+.t-ibtn.outlined{box-shadow:inset 0 0 0 1px var(--t-outline);color:var(--t-on-surface-variant)}
+/* unselected toggle: neutral fill, selection adds color and squares the corners (.toggled) */
+.t-ibtn.neutral{background:var(--t-surface-container-highest);color:var(--t-on-surface-variant)}
+.t-ibtn.l{width:var(--t-h-l);height:var(--t-h-l);border-radius:24px}.t-ibtn.l.toggled{border-radius:14px}
+.t-ibtn.s{width:var(--t-h-s);height:var(--t-h-s);border-radius:16px}
+/* connected group: container .t-seg, children are plain elements, .on marks the selection */
+.t-seg{display:flex;gap:3px}
+.t-seg>*{flex:1;height:44px;display:flex;align-items:center;justify-content:center;gap:8px;padding:0 20px;font-size:14px;font-weight:600;background:var(--t-surface-container-high);color:var(--t-on-surface);border-radius:8px;box-sizing:border-box}
+.t-seg>:first-child{border-radius:22px 8px 8px 22px}.t-seg>:last-child{border-radius:8px 22px 22px 8px}.t-seg>.on{background:var(--t-primary);color:var(--t-on-primary)}
+.t-seg .t-ms{font-size:20px}
+.t-seg.l>*{height:var(--t-h-l);font-size:15px}.t-seg.l>:first-child{border-radius:24px 8px 8px 24px}.t-seg.l>:last-child{border-radius:8px 24px 24px 8px}
+.t-seg.veil>:not(.on){background:var(--t-veil)}
+/* switch: <span class="t-switch on"><i><span class="t-ms f">check</span></i></span>; the <i> is the thumb and may hold the check */
+.t-switch{position:relative;width:52px;height:32px;border-radius:16px;box-sizing:border-box;background:var(--t-surface-container-highest);border:2px solid var(--t-outline);flex:none}
+.t-switch>i{position:absolute;left:6px;top:6px;width:16px;height:16px;border-radius:8px;background:var(--t-outline)}
+.t-switch.on{background:var(--t-primary);border-color:var(--t-primary)}
+.t-switch.on>i{left:22px;top:2px;width:24px;height:24px;border-radius:12px;background:var(--t-on-primary);display:flex;align-items:center;justify-content:center}
+.t-switch.on>i .t-ms{font-size:16px;color:var(--t-primary)}
+.t-slider{position:relative;height:44px}.t-slider .a{position:absolute;left:0;top:14px;height:16px;border-radius:8px 2px 2px 8px;background:var(--t-primary)}.t-slider .b{position:absolute;right:0;top:14px;height:16px;border-radius:2px 8px 8px 2px;background:var(--t-surface-container-highest)}.t-slider .h{position:absolute;top:0;width:4px;height:44px;border-radius:2px;background:var(--t-primary);margin-left:-2px}
+.t-chip{height:36px;border-radius:10px;padding:0 14px;display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;box-sizing:border-box;box-shadow:inset 0 0 0 1px var(--t-outline);color:var(--t-on-surface-variant)}
+.t-chip.on{background:var(--t-secondary-container);color:var(--t-on-secondary-container);box-shadow:none}
+.t-chip .t-ms{font-size:18px}
+.t-field{height:52px;border-radius:26px;background:rgb(255 255 255 / .1);display:flex;align-items:center;gap:12px;padding:0 18px;color:var(--t-on-surface-variant)}
+/* lists: .t-list > .t-li; inside a row .g is the growing text block, .t the title, .s the supporting line */
+.t-list{display:flex;flex-direction:column;gap:2px}
+.t-li{background:var(--t-surface-container);min-height:64px;box-sizing:border-box;padding:12px 20px;display:flex;align-items:center;gap:16px;border-radius:var(--t-r-list-inner)}
+.t-li:first-child{border-radius:24px 24px 6px 6px}.t-li:last-child{border-radius:6px 6px 24px 24px}.t-li:only-child{border-radius:24px}
+.t-li .t{font-size:16px;font-weight:500}.t-li .s{font-size:13px;color:var(--t-on-surface-variant);margin-top:1px}.t-li .g{flex:1;min-width:0}
+.t-ic{width:40px;height:40px;border-radius:20px;background:var(--t-secondary-container);color:var(--t-on-secondary-container);display:flex;align-items:center;justify-content:center;flex:none}
+.t-ic .t-ms{font-size:22px}
+/* selected row (pickers, file lists) */
+.t-li.on{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}.t-li.on .s{color:inherit;opacity:.8}
+/* navigation: sidebar items and their group labels */
+.t-nav-label{font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--t-on-surface-variant);opacity:.8;padding:18px 16px 6px}
+.t-nav{height:48px;border-radius:24px;display:flex;align-items:center;gap:16px;padding:0 16px;font-size:15px;font-weight:500;color:var(--t-on-surface)}
+.t-nav.on{background:var(--t-primary-container);color:var(--t-on-primary-container);font-weight:600}
+.t-nav .t-ms{font-size:22px;color:var(--t-on-surface-variant)}.t-nav.on .t-ms{color:var(--t-on-primary-container)}
+.t-card{background:var(--t-surface-container-low);border-radius:24px;padding:20px 22px}
+/* rows sit one tone above what is behind them: on a card they step up to container-high */
+.t-card .t-li:not(.on){background:var(--t-surface-container-high)}
+.t-tag{font-size:12px;font-weight:600;letter-spacing:.04em;padding:3px 10px;border-radius:10px;background:var(--t-tertiary-container);color:var(--t-on-tertiary-container)}
+/* floating label: window names in the overview, capture hints. Not interactive, so not a chip. Pair with .t-glass */
+.t-pill{height:36px;border-radius:18px;padding:0 14px 0 10px;display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600;box-sizing:border-box;white-space:nowrap;color:var(--t-on-surface)}
+.t-pill .t-ms{font-size:18px}
+.t-kbd{text-decoration:none;min-width:24px;height:24px;border-radius:7px;padding:0 6px;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;font:600 12px var(--t-mono);box-shadow:inset 0 0 0 1px rgb(255 255 255 / .35)}
+.t-eyebrow{font-size:13px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--t-primary)}
+/* wave: use the path in tokens.json (shape.wave.path, viewBox 0 0 100 100) as an SVG symbol or clip-path */
+.t-wave{display:inline-block}
+
+/* triton:end */
+
+
+
+
+
+body{margin:0}
+/* Layout: the bar at real size in full-width strips, one state per strip. Hidden, revealed, pinned, with window title, indicators, then popovers. */
+:root{--bg:#0C0E13;--low:#191C20;--on:#E2E2E9;--onv:#C4C6D0;--outv:#44474F;--primary:#B0C6FF;--onp:#002D6E;--pc:#00429B;--opc:#D9E2FF;--sc:#3F4759;--osc:#DBE2F9;--tertiary:#FFB59B;--onT:#5A1B00;--tc:#7C3114;--otc:#FFDBCE;--error:#FFB4AB;--ec:#93000A;--oec:#FFDAD6;--hst:#33353A;
+--font:'Google Sans Flex','Roboto Flex',system-ui,sans-serif;--display:'Jost','Google Sans Flex',sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace}
+.root{position:relative;width:1646px;height:2330px;overflow:hidden;background:var(--bg);color:var(--on);font-family:var(--font);font-size:15px;line-height:1.4}
+.sec{font-size:13px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--onv);margin:0 0 12px}
+.blk{position:absolute;left:64px;width:1518px}
+.stage{position:relative;overflow:hidden;border-radius:28px;color:#fff}
+.stage>img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover}
+.pg{position:absolute;left:0;top:0;width:900px;bottom:0;background:var(--low)}
+.pg i{position:absolute;display:block;height:12px;border-radius:6px;background:rgb(226 226 233 / .26)}
+.isl{position:absolute;top:8px;height:56px;border-radius:28px;display:flex;align-items:center;padding:0 6px;gap:4px;z-index:3}
+.wv{position:relative;width:44px;height:44px;flex:none}
+.wv svg{position:absolute;inset:0}
+.wv i{position:absolute;left:11px;top:11px}
+.ws{height:40px;min-width:40px;border-radius:20px;display:flex;align-items:center;justify-content:center;font:600 17px var(--display);color:var(--onv)}
+.ws.on{min-width:56px;background:var(--primary);color:var(--onp)}
+.clk{display:flex;align-items:baseline;gap:12px;padding:0 16px 0 18px}
+.clk b{font:600 26px var(--display);letter-spacing:-.2px}
+.clk span{font-size:14px;font-weight:500;color:var(--onv)}
+.stat{height:44px;border-radius:22px;display:flex;align-items:center;gap:16px;padding:0 18px;font-weight:600;background:var(--pc);color:var(--opc)}
+.bell{position:relative;width:44px;height:44px;border-radius:22px;background:rgb(255 255 255 / .1);display:flex;align-items:center;justify-content:center}
+.bell u{position:absolute;top:9px;right:10px;width:10px;height:10px;border-radius:5px;background:var(--tertiary);box-shadow:0 0 0 2px #3a3c41}
+.pill{height:44px;border-radius:22px;display:flex;align-items:center;gap:8px;padding:0 16px 0 12px;font-size:14px;font-weight:600}
+.cap{margin-top:10px;font-size:14px;color:var(--onv);max-width:1100px}
+.cap b{color:var(--on);font-weight:600}
+.row{position:absolute;left:300px;display:flex;align-items:center}
+.lab{position:absolute;left:28px;font-size:14px;font-weight:600;color:#fff;text-shadow:0 1px 10px rgb(0 0 0 / .6)}
+.lab small{display:block;font-size:12px;font-weight:400;opacity:.85}
+.card{background:var(--low);border-radius:24px;padding:20px 24px}
+.card dl{margin:0;display:grid;grid-template-columns:110px 1fr;gap:8px 16px}
+.card dt{font-size:14px;font-weight:600;color:var(--onv)}
+.card dd{margin:0;font-size:14px}
+</style>
+</helmet>
+
+<div class="root">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="blob" viewBox="0 0 100 100"><path d="M50.00,9.80 L51.40,9.98 L52.76,10.51 L54.06,11.33 L55.29,12.38 L56.42,13.56 L57.49,14.78 L58.50,15.92 L59.48,16.92 L60.49,17.71 L61.56,18.24 L62.72,18.52 L64.00,18.56 L65.40,18.44 L66.91,18.20 L68.50,17.96 L70.13,17.78 L71.74,17.77 L73.27,17.97 L74.65,18.45 L75.84,19.21 L76.79,20.24 L77.50,21.52 L77.97,22.99 L78.23,24.58 L78.34,26.22 L78.38,27.83 L78.41,29.36 L78.53,30.76 L78.80,32.01 L79.27,33.10 L79.98,34.06 L80.93,34.92 L82.08,35.72 L83.39,36.51 L84.77,37.35 L86.13,38.26 L87.37,39.28 L88.41,40.42 L89.17,41.67 L89.59,43.02 L89.65,44.43 L89.37,45.86 L88.79,47.29 L87.97,48.67 L87.00,50.00 L85.99,51.26 L85.03,52.45 L84.22,53.60 L83.63,54.73 L83.29,55.87 L83.21,57.06 L83.39,58.32 L83.76,59.68 L84.25,61.13 L84.77,62.65 L85.22,64.23 L85.52,65.81 L85.58,67.35 L85.36,68.80 L84.81,70.10 L83.96,71.22 L82.82,72.14 L81.46,72.85 L79.94,73.39 L78.34,73.78 L76.76,74.10 L75.26,74.40 L73.90,74.75 L72.72,75.23 L71.73,75.89 L70.91,76.76 L70.23,77.84 L69.64,79.12 L69.08,80.54 L68.50,82.04 L67.83,83.54 L67.04,84.95 L66.10,86.17 L65.00,87.13 L63.75,87.78 L62.37,88.08 L60.91,88.06 L59.41,87.73 L57.90,87.16 L56.42,86.44 L55.01,85.66 L53.67,84.93 L52.40,84.33 L51.19,83.94 L50.00,83.80 L48.81,83.94 L47.60,84.33 L46.33,84.93 L44.99,85.66 L43.58,86.44 L42.10,87.16 L40.59,87.73 L39.09,88.06 L37.63,88.08 L36.25,87.78 L35.00,87.13 L33.90,86.17 L32.96,84.95 L32.17,83.54 L31.50,82.04 L30.92,80.54 L30.36,79.12 L29.77,77.84 L29.09,76.76 L28.27,75.89 L27.28,75.23 L26.10,74.75 L24.74,74.40 L23.24,74.10 L21.66,73.78 L20.06,73.39 L18.54,72.85 L17.18,72.14 L16.04,71.22 L15.19,70.10 L14.64,68.80 L14.42,67.35 L14.48,65.81 L14.78,64.23 L15.23,62.65 L15.75,61.13 L16.24,59.68 L16.61,58.32 L16.79,57.06 L16.71,55.87 L16.37,54.73 L15.78,53.60 L14.97,52.45 L14.01,51.26 L13.00,50.00 L12.03,48.67 L11.21,47.29 L10.63,45.86 L10.35,44.43 L10.41,43.02 L10.83,41.67 L11.59,40.42 L12.63,39.28 L13.87,38.26 L15.23,37.35 L16.61,36.51 L17.92,35.72 L19.07,34.92 L20.02,34.06 L20.73,33.10 L21.20,32.01 L21.47,30.76 L21.59,29.36 L21.62,27.83 L21.66,26.22 L21.77,24.58 L22.03,22.99 L22.50,21.52 L23.21,20.24 L24.16,19.21 L25.35,18.45 L26.73,17.97 L28.26,17.77 L29.87,17.78 L31.50,17.96 L33.09,18.20 L34.60,18.44 L36.00,18.56 L37.28,18.52 L38.44,18.24 L39.51,17.71 L40.52,16.92 L41.50,15.92 L42.51,14.78 L43.58,13.56 L44.71,12.38 L45.94,11.33 L47.24,10.51 L48.60,9.98Z"/></symbol></svg>
+
+<div style="position:absolute;left:64px;top:56px">
+  <div class="t-eyebrow">Triton · Shell</div>
+  <h1 style="margin:10px 0 0;font-family:var(--display);font-size:88px;line-height:1;font-weight:600;letter-spacing:-3px">Bar states</h1>
+</div>
+<div class="card" style="position:absolute;left:830px;top:56px;width:752px;box-sizing:border-box">
+  <dl>
+    <dt>Reveal</dt><dd>Pointer touches the top edge for 120 ms. Also on Super+B, or when a window needs attention (its workspace pulses).</dd>
+    <dt>Hide</dt><dd>600 ms after the pointer leaves. Never while a popover is open or a notification is expanded.</dd>
+    <dt>Material</dt><dd>Floating means Glass. Pinned and docked means Mica, because it has become chrome.</dd>
+    <dt>Fullscreen</dt><dd>Suppressed. Reveal works with a 300 ms dwell instead.</dd>
+  </dl>
+</div>
+
+<!-- ============ 1 HIDDEN ============ -->
+<div class="blk" style="top:262px">
+  <div class="sec">1 · Hidden</div>
+  <div class="stage" style="height:130px"><img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" alt="" style="object-position:70% 50%">
+    <div class="pg"><i style="left:34px;top:40px;width:200px;height:22px;background:#E2E2E9;border-radius:11px"></i><i style="left:34px;top:84px;width:640px"></i><i style="left:34px;top:108px;width:560px"></i></div>
+    <div style="position:absolute;left:0;right:0;top:0;height:2px;background:rgb(176 198 255 / .55)"></div>
+    <svg width="26" height="26" viewBox="0 0 26 26" style="position:absolute;left:1180px;top:6px" aria-hidden="true"><path d="M4 2l16 9-7 2-3 8z" fill="#fff" stroke="#111318" stroke-width="1.5" stroke-linejoin="round"/></svg>
+    <div class="t-glass" style="position:absolute;left:1214px;top:34px;height:32px;border-radius:16px;padding:0 14px;display:flex;align-items:center;font-size:13px;font-weight:600">2px reveal edge</div>
+  </div>
+  <div class="cap"><b>Nothing reserved.</b> Windows use the whole screen. The only trace is an invisible 2 px strip along the top edge that wakes the bar.</div>
+</div>
+
+<!-- ============ 2 REVEALED ============ -->
+<div class="blk" style="top:501px">
+  <div class="sec">2 · Revealed</div>
+  <div class="stage" style="height:130px"><img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" alt="" style="object-position:70% 50%">
+    <div class="pg"><i style="left:34px;top:40px;width:200px;height:22px;background:#E2E2E9;border-radius:11px"></i><i style="left:34px;top:84px;width:640px"></i><i style="left:34px;top:108px;width:560px"></i></div>
+    <div class="isl t-glass" style="left:16px"><span class="wv"><svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true"><use href="#blob" fill="#B0C6FF"/></svg><i class="t-ms" style="font-size:22px;color:#002D6E">apps</i></span><span style="width:8px"></span><span class="ws on">1</span><span class="ws">2</span><span class="ws">3</span><span class="ws">4</span></div>
+    <div class="isl t-glass" style="right:16px"><div class="clk"><b>21:41</b><span>Sat 21 Nov</span></div><div class="stat"><i class="t-ms">wifi</i><i class="t-ms">volume_up</i><span style="display:flex;align-items:center;gap:6px"><i class="t-ms">battery_5_bar</i>82%</span></div><div class="bell"><i class="t-ms">notifications</i><u></u></div></div>
+  </div>
+  <div class="cap"><b>Floating over the work.</b> Two Glass islands drop in on the default spatial spring. They cover what is under them, and the gap between them leaves your window visible.</div>
+</div>
+
+<!-- ============ 3 PINNED ============ -->
+<div class="blk" style="top:740px">
+  <div class="sec">3 · Pinned</div>
+  <div class="stage" style="height:130px"><img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" alt="" style="object-position:70% 50%">
+    <div class="pg" style="top:56px;width:100%;background:var(--low)"><i style="left:34px;top:24px;width:200px;height:22px;background:#E2E2E9;border-radius:11px"></i><i style="left:34px;top:60px;width:640px"></i></div>
+    <div class="t-mica" style="position:absolute;left:0;right:0;top:0;height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 10px">
+      <div style="display:flex;align-items:center;gap:4px"><span class="wv"><svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true"><use href="#blob" fill="#B0C6FF"/></svg><i class="t-ms" style="font-size:22px;color:#002D6E">apps</i></span><span style="width:8px"></span><span class="ws on">1</span><span class="ws">2</span><span class="ws">3</span><span class="ws">4</span></div>
+      <div style="display:flex;align-items:center;gap:4px"><div class="clk"><b>21:41</b><span>Sat 21 Nov</span></div><div class="stat"><i class="t-ms">wifi</i><i class="t-ms">volume_up</i><span style="display:flex;align-items:center;gap:6px"><i class="t-ms">battery_5_bar</i>82%</span></div><div class="bell"><i class="t-ms">notifications</i><u style="box-shadow:0 0 0 2px #2a2c31"></u></div></div>
+    </div>
+  </div>
+  <div class="cap"><b>Docked.</b> Pin it and the bar becomes a full-width Mica strip, square and edge to edge. Windows start below it. For when you want it always there.</div>
+</div>
+
+<!-- ============ 4 WINDOW TITLE ============ -->
+<div class="blk" style="top:979px">
+  <div class="sec">4 · With the window title</div>
+  <div class="stage" style="height:130px"><img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" alt="" style="object-position:70% 50%">
+    <div class="pg"><i style="left:34px;top:40px;width:200px;height:22px;background:#E2E2E9;border-radius:11px"></i><i style="left:34px;top:84px;width:640px"></i><i style="left:34px;top:108px;width:560px"></i></div>
+    <div class="isl t-glass" style="left:16px"><span class="wv"><svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true"><use href="#blob" fill="#B0C6FF"/></svg><i class="t-ms" style="font-size:22px;color:#002D6E">apps</i></span><span style="width:8px"></span><span class="ws on">1</span><span class="ws">2</span><span class="ws">3</span><span class="ws">4</span><span style="width:1px;height:28px;background:rgb(255 255 255 / .2);margin:0 10px 0 8px"></span><i class="t-ms f" style="font-size:22px;color:var(--primary)">folder</i><span style="font-size:15px;font-weight:600;margin-left:6px;white-space:nowrap">Files</span><span style="font-size:14px;color:var(--onv);margin:0 16px 0 6px;white-space:nowrap">niri-shell</span></div>
+    <div class="isl t-glass" style="right:16px"><div class="clk"><b>21:41</b><span>Sat 21 Nov</span></div><div class="stat"><i class="t-ms">wifi</i><i class="t-ms">volume_up</i><span style="display:flex;align-items:center;gap:6px"><i class="t-ms">battery_5_bar</i>82%</span></div><div class="bell"><i class="t-ms">notifications</i><u></u></div></div>
+  </div>
+  <div class="cap"><b>Where am I.</b> The left island grows to show the focused app and its document, then shrinks again. Long titles fade out at the edge, they never push the clock.</div>
+</div>
+
+<!-- ============ 5 INDICATORS ============ -->
+<div class="blk" style="top:1218px">
+  <div class="sec">5 · Indicators on the right island</div>
+  <div class="stage" style="height:520px"><img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" alt="" style="object-position:70% 55%;filter:brightness(.7) blur(6px)">
+
+    <div class="lab" style="top:20px">Normal</div>
+    <div class="isl t-glass" style="top:10px;left:300px;position:absolute"><div class="clk"><b>21:41</b><span>Sat 21 Nov</span></div><div class="stat"><i class="t-ms">wifi</i><i class="t-ms">volume_up</i><span style="display:flex;align-items:center;gap:6px"><i class="t-ms">battery_5_bar</i>82%</span></div><div class="bell"><i class="t-ms">notifications</i><u></u></div></div>
+
+    <div class="lab" style="top:90px">Recording<small>Screen or camera</small></div>
+    <div class="isl t-glass" style="top:80px;left:300px;position:absolute"><div class="pill" style="background:var(--ec);color:var(--oec)"><i class="t-ms f" style="font-size:20px">fiber_manual_record</i>Recording 00:42<span style="width:30px;height:30px;border-radius:10px;background:rgb(255 255 255 / .18);display:flex;align-items:center;justify-content:center;margin-left:4px"><i class="t-ms f" style="font-size:18px">stop</i></span></div><div class="clk"><b>21:41</b></div><div class="stat"><i class="t-ms">wifi</i><i class="t-ms">volume_up</i><span style="display:flex;align-items:center;gap:6px"><i class="t-ms">battery_5_bar</i>82%</span></div><div class="bell"><i class="t-ms">notifications</i></div></div>
+
+    <div class="lab" style="top:160px">Microphone in use<small>By an app</small></div>
+    <div class="isl t-glass" style="top:150px;left:300px;position:absolute"><div class="pill" style="background:var(--tc);color:var(--otc)"><i class="t-ms f" style="font-size:20px">mic</i>Meet</div><div class="clk"><b>21:41</b><span>Sat 21 Nov</span></div><div class="stat"><i class="t-ms">wifi</i><i class="t-ms">volume_up</i><span style="display:flex;align-items:center;gap:6px"><i class="t-ms">battery_5_bar</i>82%</span></div><div class="bell"><i class="t-ms">notifications</i></div></div>
+
+    <div class="lab" style="top:230px">Do Not Disturb</div>
+    <div class="isl t-glass" style="top:220px;left:300px;position:absolute"><div class="clk"><b>21:41</b><span>Sat 21 Nov</span></div><div class="stat"><i class="t-ms">wifi</i><i class="t-ms">volume_up</i><span style="display:flex;align-items:center;gap:6px"><i class="t-ms">battery_5_bar</i>82%</span></div><div class="bell" style="background:var(--sc);color:var(--osc)"><i class="t-ms f">notifications_off</i></div></div>
+
+    <div class="lab" style="top:300px">Charging</div>
+    <div class="isl t-glass" style="top:290px;left:300px;position:absolute"><div class="clk"><b>21:41</b><span>Sat 21 Nov</span></div><div class="stat"><i class="t-ms">wifi</i><i class="t-ms">volume_up</i><span style="display:flex;align-items:center;gap:6px"><i class="t-ms f" style="color:var(--tertiary)">bolt</i>82%</span></div><div class="bell"><i class="t-ms">notifications</i></div></div>
+
+    <div class="lab" style="top:370px">Battery low</div>
+    <div class="isl t-glass" style="top:360px;left:300px;position:absolute"><div class="clk"><b>21:41</b><span>Sat 21 Nov</span></div><div class="stat" style="background:var(--ec);color:var(--oec)"><i class="t-ms">wifi</i><i class="t-ms">volume_up</i><span style="display:flex;align-items:center;gap:6px"><i class="t-ms f">battery_alert</i>14%</span></div><div class="bell"><i class="t-ms">notifications</i></div></div>
+
+    <div class="lab" style="top:440px">Offline</div>
+    <div class="isl t-glass" style="top:430px;left:300px;position:absolute"><div class="clk"><b>21:41</b><span>Sat 21 Nov</span></div><div class="stat" style="background:var(--tc);color:var(--otc)"><i class="t-ms">wifi_off</i><i class="t-ms">volume_up</i><span style="display:flex;align-items:center;gap:6px"><i class="t-ms">battery_5_bar</i>82%</span></div><div class="bell"><i class="t-ms">notifications</i></div></div>
+  </div>
+  <div class="cap"><b>Warm colors mean attention.</b> The status group is blue when all is well, rust when something is off, error red when it is urgent. Recording and microphone get their own chip so they are never missed.</div>
+</div>
+
+<!-- ============ 6 POPOVERS ============ -->
+<div class="blk" style="top:1847px">
+  <div class="sec">6 · Popovers from the bar</div>
+  <div class="stage" style="height:340px"><img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" alt="" style="object-position:70% 50%">
+    <div class="pg"><i style="left:34px;top:40px;width:200px;height:22px;background:#E2E2E9;border-radius:11px"></i><i style="left:34px;top:84px;width:640px"></i><i style="left:34px;top:108px;width:560px"></i></div>
+
+    <div class="isl t-glass" style="left:16px"><span class="wv"><svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true"><use href="#blob" fill="#B0C6FF"/></svg><i class="t-ms" style="font-size:22px;color:#002D6E">apps</i></span><span style="width:8px"></span><span class="ws">1</span><span class="ws on" style="min-width:56px">2</span><span class="ws">3</span><span class="ws">4</span></div>
+    <div class="isl t-glass" style="right:16px"><span class="ib" style="width:44px;height:44px;border-radius:22px;background:var(--pc);color:var(--opc);display:flex;align-items:center;justify-content:center"><i class="t-ms">more_horiz</i></span><div class="clk"><b>21:41</b><span>Sat 21 Nov</span></div><div class="stat"><i class="t-ms">wifi</i><i class="t-ms">volume_up</i><span style="display:flex;align-items:center;gap:6px"><i class="t-ms">battery_5_bar</i>82%</span></div><div class="bell"><i class="t-ms">notifications</i></div></div>
+
+    <!-- workspace preview -->
+    <div class="t-glass" style="position:absolute;left:96px;top:76px;width:440px;box-sizing:border-box;border-radius:28px;padding:14px 16px 16px;z-index:2">
+      <div style="display:flex;align-items:center;gap:10px;font-size:15px;font-weight:600;padding:0 4px 10px"><span style="font-family:var(--display);font-size:22px">Chat</span><span style="font-size:13px;font-weight:400;color:var(--onv)">2 windows</span></div>
+      <div style="display:flex;gap:10px">
+        <div style="width:150px;height:150px;border-radius:14px;background:var(--low);position:relative;overflow:hidden"><div style="position:absolute;left:12px;right:12px;bottom:46px;display:flex;flex-direction:column;gap:6px"><div style="width:90px;height:20px;border-radius:10px 10px 10px 4px;background:var(--hst)"></div><div style="align-self:flex-end;width:100px;height:20px;border-radius:10px 10px 4px 10px;background:var(--pc)"></div></div><div style="position:absolute;left:10px;right:10px;bottom:10px;height:26px;border-radius:13px;background:var(--hst)"></div></div>
+        <div style="flex:1;height:150px;border-radius:14px;background:#F9F9FF;position:relative;overflow:hidden"><div style="position:absolute;left:14px;right:14px;top:16px;display:flex;flex-direction:column;gap:12px"><div style="display:flex;gap:8px;align-items:center"><span style="width:22px;height:22px;border-radius:8px;background:#FFDBCE"></span><span style="flex:1;height:8px;border-radius:4px;background:#C4C6D0"></span></div><div style="display:flex;gap:8px;align-items:center"><span style="width:22px;height:22px;border-radius:8px;background:#D9E2FF"></span><span style="flex:1;height:8px;border-radius:4px;background:#C4C6D0"></span></div><div style="display:flex;gap:8px;align-items:center"><span style="width:22px;height:22px;border-radius:8px;background:#DBE2F9"></span><span style="flex:1;height:8px;border-radius:4px;background:#C4C6D0"></span></div></div></div>
+      </div>
+    </div>
+
+    <!-- tray overflow -->
+    <div class="t-glass" style="position:absolute;right:16px;top:76px;width:292px;box-sizing:border-box;border-radius:28px;padding:16px;z-index:2">
+      <div style="font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--onv);padding:0 4px 12px">Background apps</div>
+      <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px 8px">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;font-weight:500"><span style="width:56px;height:56px;border-radius:20px;background:rgb(255 255 255 / .12);display:flex;align-items:center;justify-content:center"><i class="t-ms">cloud_done</i></span>Backup</div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;font-weight:500"><span style="width:56px;height:56px;border-radius:20px;background:rgb(255 255 255 / .12);display:flex;align-items:center;justify-content:center"><i class="t-ms">vpn_key</i></span>VPN</div>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;font-weight:500"><span style="width:56px;height:56px;border-radius:20px;background:var(--sc);color:var(--osc);display:flex;align-items:center;justify-content:center"><i class="t-ms f">system_update</i></span>Updates</div>
+      </div>
+    </div>
+  </div>
+  <div class="cap"><b>Hover for a peek, click to open.</b> A workspace pill previews its windows. The ⋯ button holds background apps that would otherwise crowd the bar. Both are Glass, and the bar stays revealed while they are open.</div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1646,"height":2330}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

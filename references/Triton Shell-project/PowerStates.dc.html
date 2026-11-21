@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Triton Power States</title>
+<script src="./_runtime/react.js"></script>
+<script src="./_runtime/react-dom.js"></script>
+<script src="./_runtime/support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@400..700&family=Jost:wght@400..700&family=JetBrains+Mono:wght@400;500&family=Material+Symbols+Rounded:FILL,GRAD,opsz,wght@0..1,-25..200,20..48,100..700&display=block" rel="stylesheet">
+<style>
+/* triton:begin */
+/* Triton / Material 3 Futura: design tokens. Generated from tokens.json. Logical px at 1.75x. */
+:root{
+  --t-primary:#B0C6FF;
+  --t-on-primary:#002D6E;
+  --t-primary-container:#00429B;
+  --t-on-primary-container:#D9E2FF;
+  --t-secondary:#BFC6DC;
+  --t-on-secondary:#293041;
+  --t-secondary-container:#3F4759;
+  --t-on-secondary-container:#DBE2F9;
+  --t-tertiary:#FFB59B;
+  --t-on-tertiary:#5A1B00;
+  --t-tertiary-container:#7C3114;
+  --t-on-tertiary-container:#FFDBCE;
+  --t-error:#FFB4AB;
+  --t-on-error:#690005;
+  --t-error-container:#93000A;
+  --t-on-error-container:#FFDAD6;
+  --t-surface:#111318;
+  --t-surface-container-lowest:#0C0E13;
+  --t-surface-container-low:#191C20;
+  --t-surface-container:#1D2024;
+  --t-surface-container-high:#282A2F;
+  --t-surface-container-highest:#33353A;
+  --t-on-surface:#E2E2E9;
+  --t-on-surface-variant:#C4C6D0;
+  --t-outline:#8E9099;
+  --t-outline-variant:#44474F;
+  --t-signal-warn:#FFC857;
+  --t-signal-info:#6FE0F5;
+  --t-font:'Google Sans Flex','Roboto Flex',system-ui,sans-serif;--t-display:'Jost','Google Sans Flex',sans-serif;--t-mono:'JetBrains Mono',ui-monospace,monospace;
+  --t-r-xs:8px;--t-r-sm:12px;--t-r-md:16px;--t-r-lg:20px;--t-r-xl:28px;--t-r-full:9999px;--t-r-list-outer:24px;--t-r-list-inner:6px;
+  --t-sp-1:4px;--t-sp-2:8px;--t-sp-3:12px;--t-sp-4:16px;--t-sp-5:20px;--t-sp-6:24px;--t-sp-8:32px;--t-sp-10:40px;
+  --t-h-s:32px;--t-h-m:40px;--t-h-l:48px;--t-h-xl:56px;
+  --t-mica:rgb(25 28 32 / .72);--t-glass:rgb(40 42 47 / .70);--t-thick:rgb(40 42 47 / .88);
+  /* veil: the fill for controls that sit on Glass or a scrim (a solid container would read as a hole) */
+  --t-veil:rgb(255 255 255 / .10);--t-veil-hi:rgb(255 255 255 / .16);
+  /* adaptive Mica: the bar adds this much alpha when the wallpaper under it is bright (mean luminance over .6) */
+  --t-mica-adaptive:.08;
+  --t-mica-fx:blur(48px) saturate(1.4) brightness(.8);--t-glass-fx:blur(32px) saturate(1.5) brightness(.85);--t-thick-fx:blur(40px) saturate(1.4) brightness(.8);
+  --t-shadow-float:0 16px 40px rgb(0 0 0 / .45);--t-shadow-float-lg:0 30px 80px rgb(0 0 0 / .55);--t-highlight:inset 0 1px 0 rgb(255 255 255 / .14);
+  /* springs as CSS: approximate with linear() in your runtime, or use stiffness and damping directly */
+  --t-spring-spatial-fast:800 .6;--t-spring-spatial:380 .8;--t-spring-spatial-slow:200 .8;--t-spring-fx-fast:3800 1;--t-spring-fx:1600 1;--t-spring-fx-slow:800 1;
+}
+:root[data-scheme="light"]{
+  --t-primary:#2F5AC0;
+  --t-on-primary:#FFFFFF;
+  --t-primary-container:#D9E2FF;
+  --t-on-primary-container:#001945;
+  --t-secondary:#565E71;
+  --t-on-secondary:#FFFFFF;
+  --t-secondary-container:#DBE2F9;
+  --t-on-secondary-container:#131C2B;
+  --t-tertiary:#8C4A2B;
+  --t-on-tertiary:#FFFFFF;
+  --t-tertiary-container:#FFDBCE;
+  --t-on-tertiary-container:#380D00;
+  --t-error:#BA1A1A;
+  --t-on-error:#FFFFFF;
+  --t-error-container:#FFDAD6;
+  --t-on-error-container:#410002;
+  --t-surface:#F9F9FF;
+  --t-surface-container-lowest:#FFFFFF;
+  --t-surface-container-low:#F3F3FA;
+  --t-surface-container:#EDEDF4;
+  --t-surface-container-high:#E7E8EE;
+  --t-surface-container-highest:#E2E2E9;
+  --t-on-surface:#191B20;
+  --t-on-surface-variant:#44474F;
+  --t-outline:#74777F;
+  --t-outline-variant:#C4C6D0;
+  --t-signal-warn:#FFC857;
+  --t-signal-info:#6FE0F5;
+  --t-mica:rgb(243 243 250 / .78);--t-glass:rgb(231 232 238 / .82);--t-thick:rgb(231 232 238 / .90);
+  --t-veil:rgb(25 28 32 / .06);--t-veil-hi:rgb(25 28 32 / .10);--t-mica-adaptive:.06;
+  /* light: never dim the backdrop, it costs dark text its contrast */
+  --t-mica-fx:blur(48px) saturate(1.2) brightness(1.05);--t-glass-fx:blur(32px) saturate(1.3) brightness(1.05);--t-thick-fx:blur(40px) saturate(1.2) brightness(1.05);
+}
+
+/* Triton / Material 3 Futura: shell-wide components. Needs tokens.css and the Material Symbols Rounded font. Class prefix t-. */
+.t-ms{font-family:'Material Symbols Rounded';font-weight:400;font-style:normal;font-size:24px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;font-variation-settings:'FILL' 0,'wght' 500,'GRAD' 0,'opsz' 24;flex:none}
+.t-ms.f{font-variation-settings:'FILL' 1,'wght' 500,'GRAD' 0,'opsz' 24}
+/* materials */
+.t-solid{background:var(--t-surface-container-low)}
+.t-mica{background:var(--t-mica);backdrop-filter:var(--t-mica-fx)}
+.t-glass{background:var(--t-glass);backdrop-filter:var(--t-glass-fx);box-shadow:var(--t-highlight),var(--t-shadow-float)}
+.t-thick{background:var(--t-thick);backdrop-filter:var(--t-thick-fx);box-shadow:var(--t-highlight),var(--t-shadow-float-lg)}
+/* windows */
+.t-window-tiled{border-radius:0;gap:0}
+.t-window-floating{border-radius:var(--t-r-xl);overflow:hidden;box-shadow:0 0 0 1px rgb(255 255 255 / .12),var(--t-shadow-float-lg)}
+.t-island{height:56px;border-radius:var(--t-r-full);display:flex;align-items:center;color:var(--t-on-surface)}
+/* buttons */
+.t-btn{height:var(--t-h-m);padding:0 24px;border:0;border-radius:20px;display:inline-flex;align-items:center;justify-content:center;gap:8px;font:600 14px var(--t-font);box-sizing:border-box;white-space:nowrap;background:var(--t-primary);color:var(--t-on-primary)}
+.t-btn.tonal{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}
+.t-btn.outlined{background:transparent;color:var(--t-primary);box-shadow:inset 0 0 0 1px var(--t-outline)}
+.t-btn.text{background:transparent;color:var(--t-primary);padding:0 14px}
+.t-btn.s{height:var(--t-h-s);padding:0 16px;font-size:13px;border-radius:16px}.t-btn.l{height:var(--t-h-l);padding:0 28px;font-size:16px;border-radius:24px}.t-btn.xl{height:var(--t-h-xl);padding:0 32px;font-size:17px;border-radius:28px}
+.t-btn:active{border-radius:12px}
+.t-btn[disabled]{background:rgb(226 226 233 / .12);color:rgb(226 226 233 / .38)}
+/* on Glass or a scrim: the veil replaces the solid container */
+.t-btn.veil,.t-ibtn.veil{background:var(--t-veil);color:var(--t-on-surface)}
+/* a button that is itself a floating thing (greeter session, keyboard layout) */
+.t-btn.t-glass{background:var(--t-glass);color:var(--t-on-surface)}
+.t-ibtn{width:var(--t-h-m);height:var(--t-h-m);border-radius:20px;display:inline-flex;align-items:center;justify-content:center;border:0;padding:0;background:transparent;color:var(--t-on-surface-variant)}
+.t-ibtn.filled{background:var(--t-primary);color:var(--t-on-primary)}.t-ibtn.tonal{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}
+.t-ibtn.toggled{border-radius:12px}
+.t-ibtn.outlined{box-shadow:inset 0 0 0 1px var(--t-outline);color:var(--t-on-surface-variant)}
+/* unselected toggle: neutral fill, selection adds color and squares the corners (.toggled) */
+.t-ibtn.neutral{background:var(--t-surface-container-highest);color:var(--t-on-surface-variant)}
+.t-ibtn.l{width:var(--t-h-l);height:var(--t-h-l);border-radius:24px}.t-ibtn.l.toggled{border-radius:14px}
+.t-ibtn.s{width:var(--t-h-s);height:var(--t-h-s);border-radius:16px}
+/* connected group: container .t-seg, children are plain elements, .on marks the selection */
+.t-seg{display:flex;gap:3px}
+.t-seg>*{flex:1;height:44px;display:flex;align-items:center;justify-content:center;gap:8px;padding:0 20px;font-size:14px;font-weight:600;background:var(--t-surface-container-high);color:var(--t-on-surface);border-radius:8px;box-sizing:border-box}
+.t-seg>:first-child{border-radius:22px 8px 8px 22px}.t-seg>:last-child{border-radius:8px 22px 22px 8px}.t-seg>.on{background:var(--t-primary);color:var(--t-on-primary)}
+.t-seg .t-ms{font-size:20px}
+.t-seg.l>*{height:var(--t-h-l);font-size:15px}.t-seg.l>:first-child{border-radius:24px 8px 8px 24px}.t-seg.l>:last-child{border-radius:8px 24px 24px 8px}
+.t-seg.veil>:not(.on){background:var(--t-veil)}
+/* switch: <span class="t-switch on"><i><span class="t-ms f">check</span></i></span>; the <i> is the thumb and may hold the check */
+.t-switch{position:relative;width:52px;height:32px;border-radius:16px;box-sizing:border-box;background:var(--t-surface-container-highest);border:2px solid var(--t-outline);flex:none}
+.t-switch>i{position:absolute;left:6px;top:6px;width:16px;height:16px;border-radius:8px;background:var(--t-outline)}
+.t-switch.on{background:var(--t-primary);border-color:var(--t-primary)}
+.t-switch.on>i{left:22px;top:2px;width:24px;height:24px;border-radius:12px;background:var(--t-on-primary);display:flex;align-items:center;justify-content:center}
+.t-switch.on>i .t-ms{font-size:16px;color:var(--t-primary)}
+.t-slider{position:relative;height:44px}.t-slider .a{position:absolute;left:0;top:14px;height:16px;border-radius:8px 2px 2px 8px;background:var(--t-primary)}.t-slider .b{position:absolute;right:0;top:14px;height:16px;border-radius:2px 8px 8px 2px;background:var(--t-surface-container-highest)}.t-slider .h{position:absolute;top:0;width:4px;height:44px;border-radius:2px;background:var(--t-primary);margin-left:-2px}
+.t-chip{height:36px;border-radius:10px;padding:0 14px;display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;box-sizing:border-box;box-shadow:inset 0 0 0 1px var(--t-outline);color:var(--t-on-surface-variant)}
+.t-chip.on{background:var(--t-secondary-container);color:var(--t-on-secondary-container);box-shadow:none}
+.t-chip .t-ms{font-size:18px}
+.t-field{height:52px;border-radius:26px;background:rgb(255 255 255 / .1);display:flex;align-items:center;gap:12px;padding:0 18px;color:var(--t-on-surface-variant)}
+/* lists: .t-list > .t-li; inside a row .g is the growing text block, .t the title, .s the supporting line */
+.t-list{display:flex;flex-direction:column;gap:2px}
+.t-li{background:var(--t-surface-container);min-height:64px;box-sizing:border-box;padding:12px 20px;display:flex;align-items:center;gap:16px;border-radius:var(--t-r-list-inner)}
+.t-li:first-child{border-radius:24px 24px 6px 6px}.t-li:last-child{border-radius:6px 6px 24px 24px}.t-li:only-child{border-radius:24px}
+.t-li .t{font-size:16px;font-weight:500}.t-li .s{font-size:13px;color:var(--t-on-surface-variant);margin-top:1px}.t-li .g{flex:1;min-width:0}
+.t-ic{width:40px;height:40px;border-radius:20px;background:var(--t-secondary-container);color:var(--t-on-secondary-container);display:flex;align-items:center;justify-content:center;flex:none}
+.t-ic .t-ms{font-size:22px}
+/* selected row (pickers, file lists) */
+.t-li.on{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}.t-li.on .s{color:inherit;opacity:.8}
+/* navigation: sidebar items and their group labels */
+.t-nav-label{font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--t-on-surface-variant);opacity:.8;padding:18px 16px 6px}
+.t-nav{height:48px;border-radius:24px;display:flex;align-items:center;gap:16px;padding:0 16px;font-size:15px;font-weight:500;color:var(--t-on-surface)}
+.t-nav.on{background:var(--t-primary-container);color:var(--t-on-primary-container);font-weight:600}
+.t-nav .t-ms{font-size:22px;color:var(--t-on-surface-variant)}.t-nav.on .t-ms{color:var(--t-on-primary-container)}
+.t-card{background:var(--t-surface-container-low);border-radius:24px;padding:20px 22px}
+/* rows sit one tone above what is behind them: on a card they step up to container-high */
+.t-card .t-li:not(.on){background:var(--t-surface-container-high)}
+.t-tag{font-size:12px;font-weight:600;letter-spacing:.04em;padding:3px 10px;border-radius:10px;background:var(--t-tertiary-container);color:var(--t-on-tertiary-container)}
+/* floating label: window names in the overview, capture hints. Not interactive, so not a chip. Pair with .t-glass */
+.t-pill{height:36px;border-radius:18px;padding:0 14px 0 10px;display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600;box-sizing:border-box;white-space:nowrap;color:var(--t-on-surface)}
+.t-pill .t-ms{font-size:18px}
+.t-kbd{text-decoration:none;min-width:24px;height:24px;border-radius:7px;padding:0 6px;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;font:600 12px var(--t-mono);box-shadow:inset 0 0 0 1px rgb(255 255 255 / .35)}
+.t-eyebrow{font-size:13px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--t-primary)}
+/* wave: use the path in tokens.json (shape.wave.path, viewBox 0 0 100 100) as an SVG symbol or clip-path */
+.t-wave{display:inline-block}
+
+/* triton:end */
+
+
+
+
+
+body{margin:0}
+/* Layout: four stages in a 2 by 2 grid: the default menu, a focused action with a note, the shutdown countdown, and the unsaved work warning. */
+:root{--bg:#0C0E13;--on:#E2E2E9;--onv:#C4C6D0;--primary:#B0C6FF;--onp:#002D6E;--pc:#00429B;--opc:#D9E2FF;--sc:#3F4759;--osc:#DBE2F9;--tertiary:#FFB59B;--onT:#5A1B00;--tc:#7C3114;--otc:#FFDBCE;
+--font:'Google Sans Flex','Roboto Flex',system-ui,sans-serif;--display:'Jost','Google Sans Flex',sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace}
+.root{position:relative;width:1646px;height:1150px;overflow:hidden;background:var(--bg);color:var(--on);font-family:var(--font);font-size:15px;line-height:1.4}
+.cell{position:absolute;width:739px}
+.st{position:relative;height:370px;border-radius:28px;overflow:hidden;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px}
+.st>img{position:absolute;left:-30px;top:-30px;width:820px;height:430px;object-fit:cover;filter:blur(14px) brightness(.5) saturate(1.1)}
+.st>*:not(img){position:relative}
+.cap{margin-top:10px;font-size:14px;color:var(--onv)}
+.cap b{display:block;font-size:16px;font-weight:600;color:var(--on);margin-bottom:2px}
+.grp{display:flex;gap:5px}
+.b{height:96px;width:96px;box-sizing:border-box;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-size:13px;font-weight:600;flex:none}
+.b .t-ms{font-size:32px}
+.b.x{width:210px;flex-direction:row;gap:12px;border-radius:48px}
+.b.x .t-ms{font-size:36px}
+.b.x span{text-align:left}
+.b.x b{display:block;font-family:var(--display);font-size:24px;font-weight:600;line-height:1}
+.b.x small{display:block;font-size:12px;font-weight:500;margin-top:4px;opacity:.8}
+.pc{background:var(--pc);color:var(--opc)}
+.sc{background:var(--sc);color:var(--osc)}
+.tc{background:var(--tc);color:var(--otc)}
+.tt{background:var(--tertiary);color:var(--onT)}
+.btn{height:44px;border-radius:22px;padding:0 22px;display:inline-flex;align-items:center;font-size:14px;font-weight:600}
+</style>
+</helmet>
+
+<div class="root">
+
+<div style="position:absolute;left:64px;top:56px">
+  <div class="t-eyebrow">Triton · Shell</div>
+  <h1 style="margin:10px 0 0;font-family:var(--display);font-size:72px;line-height:1;font-weight:600;letter-spacing:-2.4px">Power states</h1>
+</div>
+
+<!-- 1 idle -->
+<div class="cell" style="left:64px;top:190px">
+  <div class="st"><img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" alt="" style="object-position:70% 50%">
+    <div style="font-family:var(--display);font-size:30px;font-weight:600">Good evening, Sid</div>
+    <div class="grp">
+      <div class="b pc x" style="border-radius:48px 12px 12px 48px"><i class="t-ms f">lock</i><span><b>Lock</b><small>Press Enter</small></span></div>
+      <div class="b sc" style="border-radius:12px"><i class="t-ms">bedtime</i>Sleep</div>
+      <div class="b sc" style="border-radius:12px"><i class="t-ms">logout</i>Log out</div>
+      <div class="b tc" style="border-radius:12px"><i class="t-ms">restart_alt</i>Restart</div>
+      <div class="b tc" style="border-radius:12px 48px 48px 12px"><i class="t-ms">power_settings_new</i>Shut down</div>
+    </div>
+  </div>
+  <div class="cap"><b>Opens on Lock</b>The safest action is focused first. Lock stays primary blue; the two actions that end your session are rust.</div>
+</div>
+
+<!-- 2 restart with note -->
+<div class="cell" style="left:843px;top:190px">
+  <div class="st"><img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" alt="" style="object-position:70% 50%">
+    <div style="font-family:var(--display);font-size:30px;font-weight:600">Good evening, Sid</div>
+    <div class="grp">
+      <div class="b pc" style="border-radius:48px 12px 12px 48px"><i class="t-ms">lock</i>Lock</div>
+      <div class="b sc" style="border-radius:12px"><i class="t-ms">bedtime</i>Sleep</div>
+      <div class="b sc" style="border-radius:12px"><i class="t-ms">logout</i>Log out</div>
+      <div class="b tt x" style="border-radius:48px"><i class="t-ms f">restart_alt</i><span><b>Restart</b><small>Press Enter</small></span></div>
+      <div class="b tc" style="border-radius:12px 48px 48px 12px"><i class="t-ms">power_settings_new</i>Off</div>
+    </div>
+    <div class="t-glass" style="height:40px;border-radius:20px;padding:0 18px 0 12px;display:flex;align-items:center;gap:8px;font-size:14px;font-weight:500"><i class="t-ms" style="font-size:20px;color:var(--primary)">system_update</i>3 updates install on restart · about 2 min</div>
+  </div>
+  <div class="cap"><b>Focus moves the pill</b>The focused action grows and gains its label. A Glass note appears only when it changes the outcome.</div>
+</div>
+
+<!-- 3 countdown -->
+<div class="cell" style="left:64px;top:660px">
+  <div class="st"><img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" alt="" style="object-position:70% 50%">
+    <div style="position:relative;width:132px;height:132px;display:flex;align-items:center;justify-content:center">
+      <svg width="132" height="132" viewBox="0 0 48 48" aria-hidden="true" style="position:absolute;inset:0"><path d="M7.09 22.22 A17 17 0 0 1 22.22 7.09" fill="none" stroke="#fff" stroke-opacity=".3" stroke-width="1.6" stroke-linecap="round"/><polyline fill="none" stroke="#FFB59B" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" points="24.00,7.00 24.61,6.67 25.23,6.40 25.87,6.21 26.51,6.13 27.14,6.17 27.75,6.35 28.33,6.64 28.86,7.04 29.36,7.51 29.81,8.03 30.24,8.55 30.65,9.06 31.06,9.52 31.49,9.91 31.95,10.23 32.45,10.47 33.01,10.64 33.61,10.77 34.26,10.87 34.93,10.98 35.60,11.11 36.26,11.31 36.87,11.57 37.41,11.92 37.87,12.37 38.22,12.89 38.47,13.48 38.63,14.13 38.71,14.81 38.72,15.50 38.71,16.18 38.70,16.83 38.72,17.45 38.79,18.02 38.94,18.56 39.17,19.07 39.49,19.56 39.87,20.04 40.30,20.54 40.74,21.05 41.17,21.59 41.55,22.16 41.85,22.75 42.04,23.37 42.10,24.00 42.04,24.63 41.85,25.25 41.55,25.84 41.17,26.41 40.74,26.95 40.30,27.46 39.87,27.96 39.49,28.44 39.17,28.93 38.94,29.44 38.79,29.98 38.72,30.55 38.70,31.17 38.71,31.82 38.72,32.50 38.71,33.19 38.63,33.87 38.47,34.52 38.22,35.11 37.87,35.63 37.41,36.08 36.87,36.43 36.26,36.69 35.60,36.89 34.93,37.02 34.26,37.13 33.61,37.23 33.01,37.36 32.45,37.53 31.95,37.77 31.49,38.09 31.06,38.48 30.65,38.94 30.24,39.45 29.81,39.97 29.36,40.49 28.86,40.96 28.33,41.36 27.75,41.65 27.14,41.83 26.51,41.87 25.87,41.79 25.23,41.60 24.61,41.33 24.00,41.00 23.42,40.65 22.86,40.31 22.32,40.02 21.78,39.80 21.24,39.66 20.68,39.61 20.10,39.63 19.49,39.72 18.85,39.84 18.19,39.97 17.50,40.08 16.82,40.12 16.16,40.08 15.53,39.93 14.95,39.68 14.44,39.30 14.00,38.83 13.63,38.28 13.32,37.66 13.07,37.02 12.85,36.38 12.64,35.76 12.41,35.19 12.14,34.68 11.82,34.22 11.43,33.82 10.97,33.47 10.44,33.14 9.87,32.83 9.28,32.50 8.69,32.14 8.14,31.74 7.66,31.28 7.27,30.76 6.99,30.19 6.84,29.58 6.80,28.93 6.88,28.27 7.04,27.61 7.26,26.95 7.50,26.32 7.74,25.71 7.93,25.12 8.06,24.56 8.10,24.00"/></svg>
+      <span style="font-family:var(--display);font-size:64px;font-weight:600;line-height:1">5</span>
+    </div>
+    <div style="font-family:var(--display);font-size:28px;font-weight:600">Shutting down</div>
+    <div style="display:flex;align-items:center;gap:14px"><span class="btn sc">Cancel</span><span style="font-size:13px;color:var(--onv)">or press any key</span></div>
+  </div>
+  <div class="cap"><b>Countdown</b>Five seconds after confirming. The wavy ring drains; any key or click cancels. Lock and sleep skip this.</div>
+</div>
+
+<!-- 4 unsaved -->
+<div class="cell" style="left:843px;top:660px">
+  <div class="st"><img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" alt="" style="object-position:70% 50%"><div style="position:absolute;inset:0;background:rgb(0 0 0 / .35)"></div>
+    <div class="t-thick" style="position:relative;width:520px;box-sizing:border-box;border-radius:28px;padding:22px 24px 18px;display:flex;flex-direction:column;gap:12px">
+      <div style="display:flex;align-items:center;gap:14px"><i class="t-ms f" style="color:var(--tertiary);font-size:32px">warning</i><div style="font-family:var(--display);font-size:26px;font-weight:600;line-height:1.1">2 apps have unsaved changes</div></div>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <div style="height:44px;border-radius:16px;display:flex;align-items:center;gap:12px;padding:0 12px;background:rgb(255 255 255 / .08)"><i class="t-ms" style="font-size:22px;color:var(--onv)">edit_note</i><span style="flex:1;font-size:15px;font-weight:500">Text Editor<span style="color:var(--onv);font-weight:400"> · Bar.qml</span></span><span style="font-size:12px;color:var(--onv)">Work</span></div>
+        <div style="height:44px;border-radius:16px;display:flex;align-items:center;gap:12px;padding:0 12px;background:rgb(255 255 255 / .08)"><i class="t-ms" style="font-size:22px;color:var(--onv)">terminal</i><span style="flex:1;font-size:15px;font-weight:500">Console<span style="color:var(--onv);font-weight:400"> · a process is running</span></span><span style="font-size:12px;color:var(--onv)">Work</span></div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:4px"><span class="btn" style="color:var(--primary);padding:0 16px">Cancel</span><span class="btn sc">Review</span><span class="btn tt">Shut down anyway</span></div>
+    </div>
+  </div>
+  <div class="cap"><b>Unsaved work</b>Replaces the countdown. Lists what would be lost and where it is. Review jumps to the first window.</div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1646,"height":1150}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

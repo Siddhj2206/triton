@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Futura Desktop</title>
+<script src="./_runtime/react.js"></script>
+<script src="./_runtime/react-dom.js"></script>
+<script src="./_runtime/support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@400..700&amp;family=Jost:wght@400..700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+/* triton:begin */
+/* Triton / Material 3 Futura: design tokens. Generated from tokens.json. Logical px at 1.75x. */
+:root{
+  --t-primary:#B0C6FF;
+  --t-on-primary:#002D6E;
+  --t-primary-container:#00429B;
+  --t-on-primary-container:#D9E2FF;
+  --t-secondary:#BFC6DC;
+  --t-on-secondary:#293041;
+  --t-secondary-container:#3F4759;
+  --t-on-secondary-container:#DBE2F9;
+  --t-tertiary:#FFB59B;
+  --t-on-tertiary:#5A1B00;
+  --t-tertiary-container:#7C3114;
+  --t-on-tertiary-container:#FFDBCE;
+  --t-error:#FFB4AB;
+  --t-on-error:#690005;
+  --t-error-container:#93000A;
+  --t-on-error-container:#FFDAD6;
+  --t-surface:#111318;
+  --t-surface-container-lowest:#0C0E13;
+  --t-surface-container-low:#191C20;
+  --t-surface-container:#1D2024;
+  --t-surface-container-high:#282A2F;
+  --t-surface-container-highest:#33353A;
+  --t-on-surface:#E2E2E9;
+  --t-on-surface-variant:#C4C6D0;
+  --t-outline:#8E9099;
+  --t-outline-variant:#44474F;
+  --t-signal-warn:#FFC857;
+  --t-signal-info:#6FE0F5;
+  --t-font:'Google Sans Flex','Roboto Flex',system-ui,sans-serif;--t-display:'Jost','Google Sans Flex',sans-serif;--t-mono:'JetBrains Mono',ui-monospace,monospace;
+  --t-r-xs:8px;--t-r-sm:12px;--t-r-md:16px;--t-r-lg:20px;--t-r-xl:28px;--t-r-full:9999px;--t-r-list-outer:24px;--t-r-list-inner:6px;
+  --t-sp-1:4px;--t-sp-2:8px;--t-sp-3:12px;--t-sp-4:16px;--t-sp-5:20px;--t-sp-6:24px;--t-sp-8:32px;--t-sp-10:40px;
+  --t-h-s:32px;--t-h-m:40px;--t-h-l:48px;--t-h-xl:56px;
+  --t-mica:rgb(25 28 32 / .72);--t-glass:rgb(40 42 47 / .70);--t-thick:rgb(40 42 47 / .88);
+  /* veil: the fill for controls that sit on Glass or a scrim (a solid container would read as a hole) */
+  --t-veil:rgb(255 255 255 / .10);--t-veil-hi:rgb(255 255 255 / .16);
+  /* adaptive Mica: the bar adds this much alpha when the wallpaper under it is bright (mean luminance over .6) */
+  --t-mica-adaptive:.08;
+  --t-mica-fx:blur(48px) saturate(1.4) brightness(.8);--t-glass-fx:blur(32px) saturate(1.5) brightness(.85);--t-thick-fx:blur(40px) saturate(1.4) brightness(.8);
+  --t-shadow-float:0 16px 40px rgb(0 0 0 / .45);--t-shadow-float-lg:0 30px 80px rgb(0 0 0 / .55);--t-highlight:inset 0 1px 0 rgb(255 255 255 / .14);
+  /* springs as CSS: approximate with linear() in your runtime, or use stiffness and damping directly */
+  --t-spring-spatial-fast:800 .6;--t-spring-spatial:380 .8;--t-spring-spatial-slow:200 .8;--t-spring-fx-fast:3800 1;--t-spring-fx:1600 1;--t-spring-fx-slow:800 1;
+}
+:root[data-scheme="light"]{
+  --t-primary:#2F5AC0;
+  --t-on-primary:#FFFFFF;
+  --t-primary-container:#D9E2FF;
+  --t-on-primary-container:#001945;
+  --t-secondary:#565E71;
+  --t-on-secondary:#FFFFFF;
+  --t-secondary-container:#DBE2F9;
+  --t-on-secondary-container:#131C2B;
+  --t-tertiary:#8C4A2B;
+  --t-on-tertiary:#FFFFFF;
+  --t-tertiary-container:#FFDBCE;
+  --t-on-tertiary-container:#380D00;
+  --t-error:#BA1A1A;
+  --t-on-error:#FFFFFF;
+  --t-error-container:#FFDAD6;
+  --t-on-error-container:#410002;
+  --t-surface:#F9F9FF;
+  --t-surface-container-lowest:#FFFFFF;
+  --t-surface-container-low:#F3F3FA;
+  --t-surface-container:#EDEDF4;
+  --t-surface-container-high:#E7E8EE;
+  --t-surface-container-highest:#E2E2E9;
+  --t-on-surface:#191B20;
+  --t-on-surface-variant:#44474F;
+  --t-outline:#74777F;
+  --t-outline-variant:#C4C6D0;
+  --t-signal-warn:#FFC857;
+  --t-signal-info:#6FE0F5;
+  --t-mica:rgb(243 243 250 / .78);--t-glass:rgb(231 232 238 / .82);--t-thick:rgb(231 232 238 / .90);
+  --t-veil:rgb(25 28 32 / .06);--t-veil-hi:rgb(25 28 32 / .10);--t-mica-adaptive:.06;
+  /* light: never dim the backdrop, it costs dark text its contrast */
+  --t-mica-fx:blur(48px) saturate(1.2) brightness(1.05);--t-glass-fx:blur(32px) saturate(1.3) brightness(1.05);--t-thick-fx:blur(40px) saturate(1.2) brightness(1.05);
+}
+
+/* Triton / Material 3 Futura: shell-wide components. Needs tokens.css and the Material Symbols Rounded font. Class prefix t-. */
+.t-ms{font-family:'Material Symbols Rounded';font-weight:400;font-style:normal;font-size:24px;line-height:1;letter-spacing:normal;text-transform:none;display:inline-block;white-space:nowrap;font-variation-settings:'FILL' 0,'wght' 500,'GRAD' 0,'opsz' 24;flex:none}
+.t-ms.f{font-variation-settings:'FILL' 1,'wght' 500,'GRAD' 0,'opsz' 24}
+/* materials */
+.t-solid{background:var(--t-surface-container-low)}
+.t-mica{background:var(--t-mica);backdrop-filter:var(--t-mica-fx)}
+.t-glass{background:var(--t-glass);backdrop-filter:var(--t-glass-fx);box-shadow:var(--t-highlight),var(--t-shadow-float)}
+.t-thick{background:var(--t-thick);backdrop-filter:var(--t-thick-fx);box-shadow:var(--t-highlight),var(--t-shadow-float-lg)}
+/* windows */
+.t-window-tiled{border-radius:0;gap:0}
+.t-window-floating{border-radius:var(--t-r-xl);overflow:hidden;box-shadow:0 0 0 1px rgb(255 255 255 / .12),var(--t-shadow-float-lg)}
+.t-island{height:56px;border-radius:var(--t-r-full);display:flex;align-items:center;color:var(--t-on-surface)}
+/* buttons */
+.t-btn{height:var(--t-h-m);padding:0 24px;border:0;border-radius:20px;display:inline-flex;align-items:center;justify-content:center;gap:8px;font:600 14px var(--t-font);box-sizing:border-box;white-space:nowrap;background:var(--t-primary);color:var(--t-on-primary)}
+.t-btn.tonal{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}
+.t-btn.outlined{background:transparent;color:var(--t-primary);box-shadow:inset 0 0 0 1px var(--t-outline)}
+.t-btn.text{background:transparent;color:var(--t-primary);padding:0 14px}
+.t-btn.s{height:var(--t-h-s);padding:0 16px;font-size:13px;border-radius:16px}.t-btn.l{height:var(--t-h-l);padding:0 28px;font-size:16px;border-radius:24px}.t-btn.xl{height:var(--t-h-xl);padding:0 32px;font-size:17px;border-radius:28px}
+.t-btn:active{border-radius:12px}
+.t-btn[disabled]{background:rgb(226 226 233 / .12);color:rgb(226 226 233 / .38)}
+/* on Glass or a scrim: the veil replaces the solid container */
+.t-btn.veil,.t-ibtn.veil{background:var(--t-veil);color:var(--t-on-surface)}
+/* a button that is itself a floating thing (greeter session, keyboard layout) */
+.t-btn.t-glass{background:var(--t-glass);color:var(--t-on-surface)}
+.t-ibtn{width:var(--t-h-m);height:var(--t-h-m);border-radius:20px;display:inline-flex;align-items:center;justify-content:center;border:0;padding:0;background:transparent;color:var(--t-on-surface-variant)}
+.t-ibtn.filled{background:var(--t-primary);color:var(--t-on-primary)}.t-ibtn.tonal{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}
+.t-ibtn.toggled{border-radius:12px}
+.t-ibtn.outlined{box-shadow:inset 0 0 0 1px var(--t-outline);color:var(--t-on-surface-variant)}
+/* unselected toggle: neutral fill, selection adds color and squares the corners (.toggled) */
+.t-ibtn.neutral{background:var(--t-surface-container-highest);color:var(--t-on-surface-variant)}
+.t-ibtn.l{width:var(--t-h-l);height:var(--t-h-l);border-radius:24px}.t-ibtn.l.toggled{border-radius:14px}
+.t-ibtn.s{width:var(--t-h-s);height:var(--t-h-s);border-radius:16px}
+/* connected group: container .t-seg, children are plain elements, .on marks the selection */
+.t-seg{display:flex;gap:3px}
+.t-seg>*{flex:1;height:44px;display:flex;align-items:center;justify-content:center;gap:8px;padding:0 20px;font-size:14px;font-weight:600;background:var(--t-surface-container-high);color:var(--t-on-surface);border-radius:8px;box-sizing:border-box}
+.t-seg>:first-child{border-radius:22px 8px 8px 22px}.t-seg>:last-child{border-radius:8px 22px 22px 8px}.t-seg>.on{background:var(--t-primary);color:var(--t-on-primary)}
+.t-seg .t-ms{font-size:20px}
+.t-seg.l>*{height:var(--t-h-l);font-size:15px}.t-seg.l>:first-child{border-radius:24px 8px 8px 24px}.t-seg.l>:last-child{border-radius:8px 24px 24px 8px}
+.t-seg.veil>:not(.on){background:var(--t-veil)}
+/* switch: <span class="t-switch on"><i><span class="t-ms f">check</span></i></span>; the <i> is the thumb and may hold the check */
+.t-switch{position:relative;width:52px;height:32px;border-radius:16px;box-sizing:border-box;background:var(--t-surface-container-highest);border:2px solid var(--t-outline);flex:none}
+.t-switch>i{position:absolute;left:6px;top:6px;width:16px;height:16px;border-radius:8px;background:var(--t-outline)}
+.t-switch.on{background:var(--t-primary);border-color:var(--t-primary)}
+.t-switch.on>i{left:22px;top:2px;width:24px;height:24px;border-radius:12px;background:var(--t-on-primary);display:flex;align-items:center;justify-content:center}
+.t-switch.on>i .t-ms{font-size:16px;color:var(--t-primary)}
+.t-slider{position:relative;height:44px}.t-slider .a{position:absolute;left:0;top:14px;height:16px;border-radius:8px 2px 2px 8px;background:var(--t-primary)}.t-slider .b{position:absolute;right:0;top:14px;height:16px;border-radius:2px 8px 8px 2px;background:var(--t-surface-container-highest)}.t-slider .h{position:absolute;top:0;width:4px;height:44px;border-radius:2px;background:var(--t-primary);margin-left:-2px}
+.t-chip{height:36px;border-radius:10px;padding:0 14px;display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;box-sizing:border-box;box-shadow:inset 0 0 0 1px var(--t-outline);color:var(--t-on-surface-variant)}
+.t-chip.on{background:var(--t-secondary-container);color:var(--t-on-secondary-container);box-shadow:none}
+.t-chip .t-ms{font-size:18px}
+.t-field{height:52px;border-radius:26px;background:rgb(255 255 255 / .1);display:flex;align-items:center;gap:12px;padding:0 18px;color:var(--t-on-surface-variant)}
+/* lists: .t-list > .t-li; inside a row .g is the growing text block, .t the title, .s the supporting line */
+.t-list{display:flex;flex-direction:column;gap:2px}
+.t-li{background:var(--t-surface-container);min-height:64px;box-sizing:border-box;padding:12px 20px;display:flex;align-items:center;gap:16px;border-radius:var(--t-r-list-inner)}
+.t-li:first-child{border-radius:24px 24px 6px 6px}.t-li:last-child{border-radius:6px 6px 24px 24px}.t-li:only-child{border-radius:24px}
+.t-li .t{font-size:16px;font-weight:500}.t-li .s{font-size:13px;color:var(--t-on-surface-variant);margin-top:1px}.t-li .g{flex:1;min-width:0}
+.t-ic{width:40px;height:40px;border-radius:20px;background:var(--t-secondary-container);color:var(--t-on-secondary-container);display:flex;align-items:center;justify-content:center;flex:none}
+.t-ic .t-ms{font-size:22px}
+/* selected row (pickers, file lists) */
+.t-li.on{background:var(--t-secondary-container);color:var(--t-on-secondary-container)}.t-li.on .s{color:inherit;opacity:.8}
+/* navigation: sidebar items and their group labels */
+.t-nav-label{font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--t-on-surface-variant);opacity:.8;padding:18px 16px 6px}
+.t-nav{height:48px;border-radius:24px;display:flex;align-items:center;gap:16px;padding:0 16px;font-size:15px;font-weight:500;color:var(--t-on-surface)}
+.t-nav.on{background:var(--t-primary-container);color:var(--t-on-primary-container);font-weight:600}
+.t-nav .t-ms{font-size:22px;color:var(--t-on-surface-variant)}.t-nav.on .t-ms{color:var(--t-on-primary-container)}
+.t-card{background:var(--t-surface-container-low);border-radius:24px;padding:20px 22px}
+/* rows sit one tone above what is behind them: on a card they step up to container-high */
+.t-card .t-li:not(.on){background:var(--t-surface-container-high)}
+.t-tag{font-size:12px;font-weight:600;letter-spacing:.04em;padding:3px 10px;border-radius:10px;background:var(--t-tertiary-container);color:var(--t-on-tertiary-container)}
+/* floating label: window names in the overview, capture hints. Not interactive, so not a chip. Pair with .t-glass */
+.t-pill{height:36px;border-radius:18px;padding:0 14px 0 10px;display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600;box-sizing:border-box;white-space:nowrap;color:var(--t-on-surface)}
+.t-pill .t-ms{font-size:18px}
+.t-kbd{text-decoration:none;min-width:24px;height:24px;border-radius:7px;padding:0 6px;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;font:600 12px var(--t-mono);box-shadow:inset 0 0 0 1px rgb(255 255 255 / .35)}
+.t-eyebrow{font-size:13px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--t-primary)}
+/* wave: use the path in tokens.json (shape.wave.path, viewBox 0 0 100 100) as an SVG symbol or clip-path */
+.t-wave{display:inline-block}
+
+/* triton:end */
+
+
+
+
+
+body{margin:0}
+/* Futura: space-age livery. Cobalt from the sky, hull-white neutrals, rust from the cargo crates, soft wave from the ship's panel curves.
+   Shapes: 12 / 16 / 20 / 28 / full + wave. Display face Jost (Futura lineage), UI face Google Sans Flex. */
+:root{
+--primary:#B0C6FF;--on-primary:#002D6E;--primary-container:#00429B;--on-primary-container:#D9E2FF;
+--secondary:#BFC6DC;--secondary-container:#3F4759;--on-secondary-container:#DBE2F9;
+--tertiary:#FFB59B;--on-tertiary:#5A1B00;--tertiary-container:#7C3114;--on-tertiary-container:#FFDBCE;
+--error:#FFB4AB;
+--surface:#111318;--on-surface:#E2E2E9;--on-surface-variant:#C4C6D0;--outline:#8E9099;--outline-variant:#44474F;
+--sc-lowest:#0C0E13;--sc-low:#191C20;--sc:#1D2024;--sc-high:#282A2F;--sc-highest:#33353A;
+--font:'Google Sans Flex','Roboto Flex',system-ui,sans-serif;--display:'Jost','Google Sans Flex',sans-serif;--mono:'JetBrains Mono',ui-monospace,monospace;
+}
+.root{position:relative;width:1646px;height:1029px;overflow:hidden;background:#1b3f86;color:var(--on-surface);font-family:var(--font);font-size:15px;line-height:1.35}
+.d{font-family:var(--display)}
+.i{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.f{fill:currentColor;stroke:none}
+.win{position:absolute;top:0;height:1029px;border-radius:0;overflow:hidden}
+.island{position:absolute;top:8px;height:56px;border-radius:28px;display:flex;align-items:center;padding:0 6px;gap:4px;z-index:5}
+.ws{height:40px;min-width:40px;border-radius:20px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:600;color:var(--on-surface-variant)}
+.ws.on{min-width:56px;background:var(--primary);color:var(--on-primary)}
+.nav{height:48px;border-radius:24px;display:flex;align-items:center;gap:14px;padding:0 18px;font-size:15px;font-weight:500;color:var(--on-surface)}
+.nav.on{background:var(--secondary-container);color:var(--on-secondary-container);font-weight:600}
+.row{height:60px;border-radius:20px;display:flex;align-items:center;gap:14px;padding:0 14px 0 10px}
+.row.sel{background:var(--secondary-container)}
+.row .ico{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex:none}
+.row .nm{flex:1;min-width:0;font-size:16px;font-weight:500}
+.row .mt{width:84px;text-align:right;font-size:14px;color:var(--on-surface-variant)}
+.row.sel .mt{color:var(--on-secondary-container)}
+.tile{height:72px;border-radius:36px;background:rgb(255 255 255 / .1);display:flex;align-items:center;gap:12px;padding:0 20px}
+.tile.on{border-radius:20px;background:var(--primary);color:var(--on-primary)}
+.tile b{display:block;font-size:15px;font-weight:600}
+.tile span{display:block;font-size:13px;color:var(--on-surface-variant)}
+.tile.on span{color:var(--on-primary);opacity:.8}
+.code{margin:0;font-family:var(--mono);font-size:14px;line-height:24px}
+.k{color:var(--primary)}
+.s{color:var(--tertiary)}
+.key{height:60px;border-radius:30px;background:rgb(255 255 255 / .1);color:var(--on-surface);display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:500;border:0;font-family:var(--display)}
+.key.op{background:var(--secondary-container);color:var(--on-secondary-container);border-radius:18px}
+.key.fn{color:var(--primary)}
+.key.eq{background:var(--primary);color:var(--on-primary);border-radius:18px}
+.lbl{font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--on-surface-variant)}
+</style>
+</helmet>
+
+<div class="root">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="blob" viewBox="0 0 100 100"><path d="M50.00,9.80 L51.40,9.98 L52.76,10.51 L54.06,11.33 L55.29,12.38 L56.42,13.56 L57.49,14.78 L58.50,15.92 L59.48,16.92 L60.49,17.71 L61.56,18.24 L62.72,18.52 L64.00,18.56 L65.40,18.44 L66.91,18.20 L68.50,17.96 L70.13,17.78 L71.74,17.77 L73.27,17.97 L74.65,18.45 L75.84,19.21 L76.79,20.24 L77.50,21.52 L77.97,22.99 L78.23,24.58 L78.34,26.22 L78.38,27.83 L78.41,29.36 L78.53,30.76 L78.80,32.01 L79.27,33.10 L79.98,34.06 L80.93,34.92 L82.08,35.72 L83.39,36.51 L84.77,37.35 L86.13,38.26 L87.37,39.28 L88.41,40.42 L89.17,41.67 L89.59,43.02 L89.65,44.43 L89.37,45.86 L88.79,47.29 L87.97,48.67 L87.00,50.00 L85.99,51.26 L85.03,52.45 L84.22,53.60 L83.63,54.73 L83.29,55.87 L83.21,57.06 L83.39,58.32 L83.76,59.68 L84.25,61.13 L84.77,62.65 L85.22,64.23 L85.52,65.81 L85.58,67.35 L85.36,68.80 L84.81,70.10 L83.96,71.22 L82.82,72.14 L81.46,72.85 L79.94,73.39 L78.34,73.78 L76.76,74.10 L75.26,74.40 L73.90,74.75 L72.72,75.23 L71.73,75.89 L70.91,76.76 L70.23,77.84 L69.64,79.12 L69.08,80.54 L68.50,82.04 L67.83,83.54 L67.04,84.95 L66.10,86.17 L65.00,87.13 L63.75,87.78 L62.37,88.08 L60.91,88.06 L59.41,87.73 L57.90,87.16 L56.42,86.44 L55.01,85.66 L53.67,84.93 L52.40,84.33 L51.19,83.94 L50.00,83.80 L48.81,83.94 L47.60,84.33 L46.33,84.93 L44.99,85.66 L43.58,86.44 L42.10,87.16 L40.59,87.73 L39.09,88.06 L37.63,88.08 L36.25,87.78 L35.00,87.13 L33.90,86.17 L32.96,84.95 L32.17,83.54 L31.50,82.04 L30.92,80.54 L30.36,79.12 L29.77,77.84 L29.09,76.76 L28.27,75.89 L27.28,75.23 L26.10,74.75 L24.74,74.40 L23.24,74.10 L21.66,73.78 L20.06,73.39 L18.54,72.85 L17.18,72.14 L16.04,71.22 L15.19,70.10 L14.64,68.80 L14.42,67.35 L14.48,65.81 L14.78,64.23 L15.23,62.65 L15.75,61.13 L16.24,59.68 L16.61,58.32 L16.79,57.06 L16.71,55.87 L16.37,54.73 L15.78,53.60 L14.97,52.45 L14.01,51.26 L13.00,50.00 L12.03,48.67 L11.21,47.29 L10.63,45.86 L10.35,44.43 L10.41,43.02 L10.83,41.67 L11.59,40.42 L12.63,39.28 L13.87,38.26 L15.23,37.35 L16.61,36.51 L17.92,35.72 L19.07,34.92 L20.02,34.06 L20.73,33.10 L21.20,32.01 L21.47,30.76 L21.59,29.36 L21.62,27.83 L21.66,26.22 L21.77,24.58 L22.03,22.99 L22.50,21.52 L23.21,20.24 L24.16,19.21 L25.35,18.45 L26.73,17.97 L28.26,17.77 L29.87,17.78 L31.50,17.96 L33.09,18.20 L34.60,18.44 L36.00,18.56 L37.28,18.52 L38.44,18.24 L39.51,17.71 L40.52,16.92 L41.50,15.92 L42.51,14.78 L43.58,13.56 L44.71,12.38 L45.94,11.33 L47.24,10.51 L48.60,9.98Z"></path></symbol><clipPath id="waveclip" clipPathUnits="objectBoundingBox"><path d="M0.5000,0.0980 L0.5140,0.0998 L0.5276,0.1051 L0.5406,0.1133 L0.5529,0.1238 L0.5642,0.1356 L0.5749,0.1478 L0.5850,0.1592 L0.5948,0.1692 L0.6049,0.1771 L0.6156,0.1824 L0.6272,0.1852 L0.6400,0.1856 L0.6540,0.1844 L0.6691,0.1820 L0.6850,0.1796 L0.7013,0.1778 L0.7174,0.1777 L0.7327,0.1797 L0.7465,0.1845 L0.7584,0.1921 L0.7679,0.2024 L0.7750,0.2152 L0.7797,0.2299 L0.7823,0.2458 L0.7834,0.2622 L0.7838,0.2783 L0.7841,0.2936 L0.7853,0.3076 L0.7880,0.3201 L0.7927,0.3310 L0.7998,0.3406 L0.8093,0.3492 L0.8208,0.3572 L0.8339,0.3651 L0.8477,0.3735 L0.8613,0.3826 L0.8737,0.3928 L0.8841,0.4042 L0.8917,0.4167 L0.8959,0.4302 L0.8965,0.4443 L0.8937,0.4586 L0.8879,0.4729 L0.8797,0.4867 L0.8700,0.5000 L0.8599,0.5126 L0.8503,0.5245 L0.8422,0.5360 L0.8363,0.5473 L0.8329,0.5587 L0.8321,0.5706 L0.8339,0.5832 L0.8376,0.5968 L0.8425,0.6113 L0.8477,0.6265 L0.8522,0.6423 L0.8552,0.6581 L0.8558,0.6735 L0.8536,0.6880 L0.8481,0.7010 L0.8396,0.7122 L0.8282,0.7214 L0.8146,0.7285 L0.7994,0.7339 L0.7834,0.7378 L0.7676,0.7410 L0.7526,0.7440 L0.7390,0.7475 L0.7272,0.7523 L0.7173,0.7589 L0.7091,0.7676 L0.7023,0.7784 L0.6964,0.7912 L0.6908,0.8054 L0.6850,0.8204 L0.6783,0.8354 L0.6704,0.8495 L0.6610,0.8617 L0.6500,0.8713 L0.6375,0.8778 L0.6237,0.8808 L0.6091,0.8806 L0.5941,0.8773 L0.5790,0.8716 L0.5642,0.8644 L0.5501,0.8566 L0.5367,0.8493 L0.5240,0.8433 L0.5119,0.8394 L0.5000,0.8380 L0.4881,0.8394 L0.4760,0.8433 L0.4633,0.8493 L0.4499,0.8566 L0.4358,0.8644 L0.4210,0.8716 L0.4059,0.8773 L0.3909,0.8806 L0.3763,0.8808 L0.3625,0.8778 L0.3500,0.8713 L0.3390,0.8617 L0.3296,0.8495 L0.3217,0.8354 L0.3150,0.8204 L0.3092,0.8054 L0.3036,0.7912 L0.2977,0.7784 L0.2909,0.7676 L0.2827,0.7589 L0.2728,0.7523 L0.2610,0.7475 L0.2474,0.7440 L0.2324,0.7410 L0.2166,0.7378 L0.2006,0.7339 L0.1854,0.7285 L0.1718,0.7214 L0.1604,0.7122 L0.1519,0.7010 L0.1464,0.6880 L0.1442,0.6735 L0.1448,0.6581 L0.1478,0.6423 L0.1523,0.6265 L0.1575,0.6113 L0.1624,0.5968 L0.1661,0.5832 L0.1679,0.5706 L0.1671,0.5587 L0.1637,0.5473 L0.1578,0.5360 L0.1497,0.5245 L0.1401,0.5126 L0.1300,0.5000 L0.1203,0.4867 L0.1121,0.4729 L0.1063,0.4586 L0.1035,0.4443 L0.1041,0.4302 L0.1083,0.4167 L0.1159,0.4042 L0.1263,0.3928 L0.1387,0.3826 L0.1523,0.3735 L0.1661,0.3651 L0.1792,0.3572 L0.1907,0.3492 L0.2002,0.3406 L0.2073,0.3310 L0.2120,0.3201 L0.2147,0.3076 L0.2159,0.2936 L0.2162,0.2783 L0.2166,0.2622 L0.2177,0.2458 L0.2203,0.2299 L0.2250,0.2152 L0.2321,0.2024 L0.2416,0.1921 L0.2535,0.1845 L0.2673,0.1797 L0.2826,0.1777 L0.2987,0.1778 L0.3150,0.1796 L0.3309,0.1820 L0.3460,0.1844 L0.3600,0.1856 L0.3728,0.1852 L0.3844,0.1824 L0.3951,0.1771 L0.4052,0.1692 L0.4150,0.1592 L0.4251,0.1478 L0.4358,0.1356 L0.4471,0.1238 L0.4594,0.1133 L0.4724,0.1051 L0.4860,0.0998Z"></path></clipPath></svg>
+
+<img src="./assets/78c3677ed5868bc238f3c39df7b47bb6.jpg" alt="" style="position:absolute;left:0;top:0;width:1646px;height:1029px;object-fit:cover;object-position:center">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<symbol id="wifi" viewBox="0 0 24 24"><path d="M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 19.5h.01"></path></symbol>
+<symbol id="bt" viewBox="0 0 24 24"><path d="M7 7l10 10-5 4V3l5 4L7 17"></path></symbol>
+<symbol id="moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"></path></symbol>
+<symbol id="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"></path></symbol>
+<symbol id="leaf" viewBox="0 0 24 24"><path d="M5 19c0-9 5-14 15-14 0 10-5 15-14 15M5 19l8-8"></path></symbol>
+<symbol id="contrast" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 3v18"></path></symbol>
+<symbol id="vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4zM16.5 8.5a5 5 0 0 1 0 7"></path></symbol>
+<symbol id="tune" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"></path><circle cx="15" cy="7" r="2"></circle><circle cx="9" cy="17" r="2"></circle></symbol>
+<symbol id="lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></symbol>
+<symbol id="power" viewBox="0 0 24 24"><path d="M12 3v8M6.5 6.5a7 7 0 1 0 11 0"></path></symbol>
+<symbol id="bell" viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20.5h4"></path></symbol>
+<symbol id="batt" viewBox="0 0 24 24"><rect x="3" y="7" width="15" height="10" rx="3"></rect><path d="M21 11v2"></path></symbol>
+<symbol id="back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"></path></symbol>
+<symbol id="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"></circle><path d="M16 16l4 4"></path></symbol>
+<symbol id="list" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"></path></symbol>
+<symbol id="grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.5"></rect><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"></rect><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"></rect><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"></rect></symbol>
+<symbol id="folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></symbol>
+<symbol id="file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v4h4"></path></symbol>
+<symbol id="code" viewBox="0 0 24 24"><path d="M9 8l-4 4 4 4M15 8l4 4-4 4"></path></symbol>
+<symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"></path></symbol>
+<symbol id="prev" viewBox="0 0 24 24"><path d="M6 5v14M18 5l-9 7 9 7z"></path></symbol>
+<symbol id="next" viewBox="0 0 24 24"><path d="M18 5v14M6 5l9 7-9 7z"></path></symbol>
+<symbol id="play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path></symbol>
+<symbol id="close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"></path></symbol>
+<symbol id="apps" viewBox="0 0 24 24"><path d="M5 5h4v4H5zM15 5h4v4h-4zM5 15h4v4H5zM15 15h4v4h-4z"></path></symbol>
+<symbol id="star" viewBox="0 0 24 24"><path d="M12 4l2.4 5 5.6.7-4.1 3.8 1.1 5.5L12 16.4 7 19l1.1-5.5L4 9.7 9.6 9z"></path></symbol>
+<symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5V12l3 2"></path></symbol>
+<symbol id="trash" viewBox="0 0 24 24"><path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13"></path></symbol>
+<symbol id="home" viewBox="0 0 24 24"><path d="M4 11l8-7 8 7v9h-5v-6H9v6H4z"></path></symbol>
+</svg>
+
+<!-- ================= BAR (revealed; autohides) ================= -->
+<div class="island t-glass" style="left:16px">
+  <button aria-label="Open launcher" style="width:44px;height:44px;border:0;padding:0;background:none;position:relative;cursor:pointer">
+    <svg width="44" height="44" viewBox="0 0 44 44" aria-hidden="true"><use href="#blob" fill="#B0C6FF"></use></svg>
+    <svg class="i" width="22" height="22" viewBox="0 0 24 24" style="position:absolute;left:11px;top:11px;color:#002D6E" aria-hidden="true"><use href="#apps"></use></svg>
+  </button>
+  <div style="width:8px"></div>
+  <div class="ws on d">1</div><div class="ws d">2</div><div class="ws d">3</div><div class="ws d">4</div>
+</div>
+
+<div class="island t-glass" style="right:16px">
+  <div style="display:flex;align-items:baseline;gap:12px;padding:0 18px 0 20px"><span class="d" style="font-size:26px;font-weight:600;letter-spacing:-.2px">21:41</span><span style="font-size:14px;font-weight:500;color:var(--on-surface-variant)">Sat 21 Nov</span></div>
+  <div style="height:44px;border-radius:22px;background:var(--primary-container);color:var(--on-primary-container);display:flex;align-items:center;gap:16px;padding:0 18px;font-weight:600">
+    <svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#wifi"></use></svg>
+    <svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#vol"></use></svg>
+    <span style="display:flex;align-items:center;gap:6px"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#batt"></use></svg>82%</span>
+  </div>
+  <button aria-label="Notifications" class="t-ibtn veil" style="width:44px;height:44px;border-radius:22px;position:relative">
+    <svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#bell"></use></svg>
+    <span style="position:absolute;top:9px;right:10px;width:10px;height:10px;border-radius:5px;background:var(--tertiary);box-shadow:0 0 0 2px #3a3c41"></span>
+  </button>
+</div>
+
+<!-- ================= FILES (focused column) ================= -->
+<div class="win t-mica" style="left:0;width:780px;outline:2px solid var(--primary);outline-offset:-2px;display:flex">
+  <div style="width:272px;flex:none;padding:80px 12px 0;display:flex;flex-direction:column;gap:2px">
+    <div class="nav"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#clock"></use></svg>Recent</div>
+    <div class="nav"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#star"></use></svg>Starred</div>
+    <div class="nav on"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#home"></use></svg>Home</div>
+    <div class="nav"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#file"></use></svg>Documents</div>
+    <div class="nav"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#folder"></use></svg>Downloads</div>
+    <div class="nav"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#trash"></use></svg>Trash</div>
+  </div>
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <div style="height:72px;flex:none;display:flex;align-items:center;gap:10px;padding:0 16px">
+      <span class="t-ibtn veil"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#back"></use></svg></span>
+      <div style="flex:1;min-width:0;height:44px;border-radius:22px;background:rgb(255 255 255 / .1);display:flex;align-items:center;gap:8px;padding:0 18px;font-size:15px;font-weight:500;color:var(--on-surface-variant);white-space:nowrap">Home<span style="opacity:.5">/</span><span style="color:var(--on-surface);font-weight:600">niri-shell</span></div>
+      <div style="display:flex;gap:2px">
+        <span style="width:48px;height:44px;border-radius:22px;background:var(--secondary-container);color:var(--on-secondary-container);display:flex;align-items:center;justify-content:center"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#list"></use></svg></span>
+        <span style="width:48px;height:44px;border-radius:8px 22px 22px 8px;background:rgb(255 255 255 / .1);color:var(--on-surface-variant);display:flex;align-items:center;justify-content:center"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#grid"></use></svg></span>
+      </div>
+    </div>
+    <div style="flex:1;position:relative;background:var(--sc-low);padding:12px 16px 0">
+      <div style="padding:8px 10px 14px"><div class="d" style="font-size:40px;font-weight:600;letter-spacing:-.8px;line-height:1.1">niri-shell</div><div style="font-size:14px;color:var(--on-surface-variant);margin-top:2px">10 items</div></div>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <div class="row"><span class="ico" style="background:var(--primary-container);color:var(--on-primary-container)"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#folder"></use></svg></span><span class="nm">quickshell</span><span class="mt">Today</span></div>
+        <div class="row sel"><span class="ico" style="background:var(--primary);color:var(--on-primary)"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#folder"></use></svg></span><span class="nm" style="font-weight:600">matugen</span><span class="mt">Yesterday</span></div>
+        <div class="row"><span class="ico" style="background:var(--primary-container);color:var(--on-primary-container)"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#folder"></use></svg></span><span class="nm">niri</span><span class="mt">Nov 18</span></div>
+        <div class="row"><span class="ico" style="background:var(--tertiary-container);color:var(--on-tertiary-container)"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#code"></use></svg></span><span class="nm">shell.qml</span><span class="mt">Today</span></div>
+        <div class="row"><span class="ico" style="background:var(--tertiary-container);color:var(--on-tertiary-container)"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#code"></use></svg></span><span class="nm">Bar.qml</span><span class="mt">Today</span></div>
+        <div class="row"><span class="ico" style="background:var(--tertiary-container);color:var(--on-tertiary-container)"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#code"></use></svg></span><span class="nm">Launcher.qml</span><span class="mt">Nov 19</span></div>
+        <div class="row"><span class="ico" style="background:var(--sc-highest);color:var(--on-surface-variant)"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#file"></use></svg></span><span class="nm">colors.json</span><span class="mt">Today</span></div>
+        <div class="row"><span class="ico" style="background:var(--sc-highest);color:var(--on-surface-variant)"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#file"></use></svg></span><span class="nm">config.kdl</span><span class="mt">Nov 17</span></div>
+        <div class="row"><span class="ico" style="background:var(--sc-highest);color:var(--on-surface-variant)"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#file"></use></svg></span><span class="nm">README.md</span><span class="mt">Nov 12</span></div>
+      </div>
+      <button style="position:absolute;right:24px;bottom:24px;height:56px;border-radius:16px;border:0;background:var(--primary-container);color:var(--on-primary-container);display:flex;align-items:center;gap:12px;padding:0 24px 0 20px;font:600 16px var(--font);box-shadow:0 6px 18px rgb(0 0 0 / .4)"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#plus"></use></svg>New</button>
+    </div>
+  </div>
+</div>
+
+<!-- ================= CONSOLE (Mica terminal) ================= -->
+<div class="win t-mica" style="left:780px;width:420px">
+  <div style="height:72px;display:flex;align-items:center;justify-content:space-between;padding:0 12px 0 24px;font-size:16px;font-weight:600"><span>Console</span><span class="t-ibtn"><svg class="i" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><use href="#close"></use></svg></span></div>
+  <pre class="code" style="padding:4px 24px;color:var(--on-surface-variant)"><span class="k">~/niri-shell</span> $ matugen image \
+    ~/Pictures/whippet.jpg
+  scheme    tonal-spot
+  primary   <span class="s">#B0C6FF</span>
+  tertiary  <span class="s">#FFB59B</span>
+<span class="k">✓</span> gtk4  <span class="k">✓</span> niri  <span class="k">✓</span> quickshell
+<span class="k">~/niri-shell</span> $ <span style="background:var(--primary);color:var(--on-primary)"> </span></pre>
+</div>
+
+<!-- ================= FLOATING: Calculator (Glass) ================= -->
+<div class="t-glass" style="position:absolute;left:330px;top:440px;width:360px;box-sizing:border-box;border-radius:28px;padding:12px 16px 16px;z-index:4">
+  <div style="height:40px;display:flex;align-items:center;justify-content:space-between;padding-left:8px;font-size:14px;font-weight:600;color:var(--on-surface-variant)">Calculator<span class="t-ibtn" style="width:32px;height:32px"><svg class="i" width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><use href="#close"></use></svg></span></div>
+  <div style="padding:8px 8px 16px;text-align:right;font-variant-numeric:tabular-nums"><div style="font-size:16px;color:var(--on-surface-variant)">1,248 ÷ 4</div><div class="d" style="font-size:64px;font-weight:500;letter-spacing:-1px;line-height:1.05">312</div></div>
+  <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px">
+    <button class="key fn">C</button><button class="key fn">⌫</button><button class="key fn">%</button><button class="key op">÷</button>
+    <button class="key">7</button><button class="key">8</button><button class="key">9</button><button class="key op">×</button>
+    <button class="key">4</button><button class="key">5</button><button class="key">6</button><button class="key op">−</button>
+    <button class="key">1</button><button class="key">2</button><button class="key">3</button><button class="key op">+</button>
+    <button class="key">±</button><button class="key">0</button><button class="key">.</button><button class="key eq">=</button>
+  </div>
+</div>
+
+<!-- ================= QUICK SETTINGS (Glass) ================= -->
+<div class="t-glass" style="position:absolute;right:16px;top:72px;width:432px;box-sizing:border-box;border-radius:28px;padding:16px;display:flex;flex-direction:column;gap:12px;z-index:6">
+
+  <div style="display:flex;align-items:center;justify-content:space-between;padding-left:8px">
+    <div style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:500;color:var(--on-surface-variant)"><svg class="i" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><use href="#batt"></use></svg>82% · 6 h 10 min left</div>
+    <div style="display:flex;gap:8px">
+      <button class="t-ibtn veil" aria-label="Settings"><svg class="i" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><use href="#tune"></use></svg></button>
+      <button class="t-ibtn veil" aria-label="Lock screen"><svg class="i" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><use href="#lock"></use></svg></button>
+      <button class="t-ibtn veil" aria-label="Power" style="background:var(--tertiary-container);color:var(--on-tertiary-container)"><svg class="i" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><use href="#power"></use></svg></button>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+    <div class="tile on"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#wifi"></use></svg><div><b>Wi-Fi</b><span>Home 5G</span></div></div>
+    <div class="tile on"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#bt"></use></svg><div><b>Bluetooth</b><span>WH-1000XM5</span></div></div>
+    <div class="tile"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#moon"></use></svg><div><b>Do not disturb</b><span>Off</span></div></div>
+    <div class="tile"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#sun"></use></svg><div><b>Night light</b><span>Off</span></div></div>
+    <div class="tile"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#leaf"></use></svg><div><b>Power saver</b><span>Off</span></div></div>
+    <div class="tile on"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#contrast"></use></svg><div><b>Dark style</b><span>Auto</span></div></div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+    <div style="position:relative;height:52px;border-radius:26px;background:rgb(255 255 255 / .12)">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:262px;border-radius:26px 4px 4px 26px;background:var(--primary);color:var(--on-primary);display:flex;align-items:center;padding-left:16px"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#sun"></use></svg></div>
+      <div style="position:absolute;left:270px;top:-4px;width:4px;height:60px;border-radius:2px;background:var(--primary)"></div>
+    </div>
+    <div style="position:relative;height:52px;border-radius:26px;background:rgb(255 255 255 / .12)">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:206px;border-radius:26px 4px 4px 26px;background:var(--primary);color:var(--on-primary);display:flex;align-items:center;padding-left:16px"><svg class="i" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#vol"></use></svg></div>
+      <div style="position:absolute;left:214px;top:-4px;width:4px;height:60px;border-radius:2px;background:var(--primary)"></div>
+    </div>
+  </div>
+
+  <div style="border-radius:24px;background:rgb(255 255 255 / .1);padding:16px;display:flex;flex-direction:column;gap:12px;margin-top:4px">
+    <div style="display:flex;align-items:center;gap:12px">
+      <svg width="56" height="56" viewBox="0 0 56 56" aria-hidden="true" style="flex:none"><use href="#blob" fill="#FFB59B"></use><circle cx="28" cy="28" r="9" fill="#7C3114"></circle></svg>
+      <div style="flex:1;min-width:0"><div class="lbl" style="font-size:11px;margin-bottom:2px">Now playing</div><div class="d" style="font-size:19px;font-weight:600;line-height:1.2">Lofi Windows</div><div style="font-size:13px;color:var(--on-surface-variant)">Tomppabeats</div></div>
+      <button class="t-ibtn" aria-label="Previous track"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#prev"></use></svg></button>
+      <button aria-label="Pause" style="width:56px;height:48px;border-radius:16px;border:0;background:var(--primary);color:var(--on-primary);display:flex;align-items:center;justify-content:center"><svg class="i f" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><use href="#play"></use></svg></button>
+      <button class="t-ibtn" aria-label="Next track"><svg class="i" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><use href="#next"></use></svg></button>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;font-size:12px;color:var(--on-surface-variant);font-variant-numeric:tabular-nums">
+      <span>1:12</span>
+      <svg width="100%" height="14" viewBox="0 0 280 14" preserveAspectRatio="none" style="flex:1;min-width:0" aria-hidden="true"><path d="M2 7 q4 -5 8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0" fill="none" stroke="#B0C6FF" stroke-width="4" stroke-linecap="round" vector-effect="non-scaling-stroke"></path><path d="M148 7H278" stroke="#3F4759" stroke-width="4" stroke-linecap="round" vector-effect="non-scaling-stroke"></path></svg>
+      <span>2:48</span>
+    </div>
+  </div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1646,"height":1029}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
