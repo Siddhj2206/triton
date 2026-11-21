@@ -46,9 +46,8 @@ pub fn launch_app(index: &Index, app: usize, action: Option<usize>) -> io::Resul
     // `setsid <cmd>` puts the child in its own session, detaching it from us.
     let mut command = Command::new("setsid");
     if app.terminal {
-        let terminal = terminal_argv().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "no terminal emulator found")
-        })?;
+        let terminal = terminal_argv()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no terminal emulator found"))?;
         command.args(terminal);
     }
     debug!(app = %app.id, terminal = app.terminal, "launching");
@@ -73,7 +72,11 @@ fn terminal_argv() -> Option<Vec<String>> {
             let known = TERMINALS
                 .iter()
                 .any(|t| Path::new(program).file_name() == Some(OsStr::new(t)));
-            argv.push(if known { "--".to_owned() } else { "-e".to_owned() });
+            argv.push(if known {
+                "--".to_owned()
+            } else {
+                "-e".to_owned()
+            });
             return Some(argv);
         }
     }

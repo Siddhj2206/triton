@@ -32,7 +32,7 @@ pub fn current() -> User {
     reason = "getpwuid_r's out-params are the stable POSIX ABI"
 )]
 fn lookup() -> Option<User> {
-    let size = libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX);
+    let size = unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) };
     let mut buf = vec![0_u8; usize::try_from(size.max(1024)).unwrap_or(16384)];
     unsafe {
         loop {
@@ -40,16 +40,16 @@ fn lookup() -> Option<User> {
             let mut result: *mut libc::passwd = std::ptr::null_mut();
             let status = libc::getpwuid_r(
                 libc::getuid(),
-                &mut pwd,
+                &raw mut pwd,
                 buf.as_mut_ptr().cast(),
                 buf.len(),
-                &mut result,
+                &raw mut result,
             );
             if status == libc::ERANGE && buf.len() < (1 << 20) {
                 buf.resize(buf.len() * 4, 0);
                 continue;
             }
-            if status != 0 || result.is_null() {
+            if status != 0 || result.is_null() || pwd.pw_name.is_null() {
                 return None;
             }
             let name = CStr::from_ptr(pwd.pw_name).to_string_lossy().into_owned();

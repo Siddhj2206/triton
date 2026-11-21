@@ -14,6 +14,7 @@
 // wiring and the Phase 2 picker; they have tests but no caller yet.
 #![allow(dead_code)]
 
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{fs, io};
@@ -130,9 +131,8 @@ fn is_image(path: &Path) -> bool {
 
 /// Persist a wallpaper choice: `$XDG_CONFIG_HOME/triton/wallpaper` gets one path.
 pub fn set_wallpaper(path: &Path) -> io::Result<()> {
-    let root = config_root().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotFound, "no HOME or XDG_CONFIG_HOME")
-    })?;
+    let root = config_root()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no HOME or XDG_CONFIG_HOME"))?;
     set_wallpaper_in(&root, path)
 }
 
@@ -194,8 +194,14 @@ pub fn schemes(image: &RgbaImage) -> (Scheme, Scheme) {
         Hct::new(extract_color(&pixels))
     };
     (
-        scheme_of(&SchemeTonalSpot::new(source, true, None).scheme, Variant::Dark),
-        scheme_of(&SchemeTonalSpot::new(source, false, None).scheme, Variant::Light),
+        scheme_of(
+            &SchemeTonalSpot::new(source, true, None).scheme,
+            Variant::Dark,
+        ),
+        scheme_of(
+            &SchemeTonalSpot::new(source, false, None).scheme,
+            Variant::Light,
+        ),
     )
 }
 
@@ -325,7 +331,12 @@ pub fn run(path: &Path, variant: Variant) -> PipelineDone {
 /// The targets behind [`apply`], with the config root injected and the
 /// `gsettings` spawn behind a flag — tests pass a tempdir and `false`, and
 /// never touch D-Bus.
-fn apply_to(scheme: &Scheme, variant: Variant, config: &Path, gsettings: bool) -> Vec<&'static str> {
+fn apply_to(
+    scheme: &Scheme,
+    variant: Variant,
+    config: &Path,
+    gsettings: bool,
+) -> Vec<&'static str> {
     let mut done = Vec::new();
     let css = gtk_css(scheme, variant);
     for (name, dir) in [
@@ -438,10 +449,10 @@ fn gtk_css(s: &Scheme, variant: Variant) -> String {
         "/* Written by triton. Changes here are overwritten; pick a new wallpaper\n   or scheme in the settings app instead. */\n\n",
     );
     for (name, color) in colors {
-        css.push_str(&format!("@define-color {name} {};\n", hex(color)));
+        let _ = writeln!(css, "@define-color {name} {};", hex(color));
     }
     for (name, value) in literals {
-        css.push_str(&format!("@define-color {name} {value};\n"));
+        let _ = writeln!(css, "@define-color {name} {value};");
     }
     css
 }

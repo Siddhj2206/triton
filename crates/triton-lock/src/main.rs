@@ -3,7 +3,7 @@
 //! down with it (spike 3 proved niri keeps the lock up).
 //!
 //! `ext-session-lock-v1` over `iced_sessionlock`, PAM auth via dlopened
-//! libpam (pam.rs), the Lock board on every output.
+//! libpam (`pam`), the Lock board on every output.
 
 mod app;
 mod pam;
@@ -67,23 +67,27 @@ fn main() -> iced_sessionlock::Result {
         tracing::warn!("--demo: PAM is skipped; any non-empty password unlocks");
     }
     let base = triton_ui::settings();
-    iced_sessionlock::application(move || app::Lock::new(demo), app::Lock::update, app::Lock::view)
-        .subscription(app::Lock::subscription)
-        .theme(app::Lock::theme)
-        .style(app::Lock::style)
-        .settings(Settings {
-            id: Some("triton-lock".to_owned()),
-            fonts: base.fonts,
-            default_font: base.default_font,
-            default_text_size: base.default_text_size,
-            // wgpu antialiases paths (the avatar wave) only with MSAA.
-            antialiasing: true,
-            ..Settings::default()
-        })
-        .run()
-        .inspect_err(|e| {
-            // Protocol missing or the session already locked: log and exit
-            // nonzero; niri/systemd sees the failure.
-            tracing::error!("cannot start the session lock: {e}");
-        })
+    iced_sessionlock::application(
+        move || app::Lock::new(demo),
+        app::Lock::update,
+        app::Lock::view,
+    )
+    .subscription(app::Lock::subscription)
+    .theme(app::Lock::theme)
+    .style(app::Lock::style)
+    .settings(Settings {
+        id: Some("triton-lock".to_owned()),
+        fonts: base.fonts,
+        default_font: base.default_font,
+        default_text_size: base.default_text_size,
+        // wgpu antialiases paths (the avatar wave) only with MSAA.
+        antialiasing: true,
+        ..Settings::default()
+    })
+    .run()
+    .inspect_err(|e| {
+        // Protocol missing or the session already locked: log and exit
+        // nonzero; niri/systemd sees the failure.
+        tracing::error!("cannot start the session lock: {e}");
+    })
 }

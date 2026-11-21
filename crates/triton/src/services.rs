@@ -118,6 +118,8 @@ pub struct Device {
     pub address: String,
     pub connected: bool,
     pub paired: bool,
+    /// Battery level when the device reports one; the QS row shows it later.
+    #[allow(dead_code)]
     pub battery: Option<u8>,
 }
 
@@ -126,8 +128,10 @@ pub struct Audio {
     /// 0..=150; over-amplification is allowed, like gnome-control-center.
     pub volume: u8,
     pub muted: bool,
-    /// Friendly output name, e.g. "Speakers".
+    /// Friendly output name, e.g. "Speakers" (the QS tile's supporting line).
+    #[allow(dead_code)]
     pub sink: Option<String>,
+    #[allow(dead_code)]
     pub mic_present: bool,
     pub mic_muted: bool,
 }
@@ -368,6 +372,7 @@ fn net_from(objects: &fdo::ManagedObjects) -> (Net, Option<Connectivity>) {
     const NM: &str = "org.freedesktop.NetworkManager";
     const DEVICE: &str = "org.freedesktop.NetworkManager.Device";
     const WIRELESS: &str = "org.freedesktop.NetworkManager.Device.Wireless";
+    #[allow(dead_code)]
     const AP: &str = "org.freedesktop.NetworkManager.AccessPoint";
     const ACTIVE: &str = "org.freedesktop.NetworkManager.Connection.Active";
     let mut net = Net::default();
@@ -414,7 +419,9 @@ fn net_from(objects: &fdo::ManagedObjects) -> (Net, Option<Connectivity>) {
 
 /// An AP path's SSID; `None` for hidden networks (they carry no name).
 fn ssid(objects: &fdo::ManagedObjects, path: &OwnedObjectPath) -> Option<String> {
-    let ap = objects.get(path)?.get("org.freedesktop.NetworkManager.AccessPoint")?;
+    let ap = objects
+        .get(path)?
+        .get("org.freedesktop.NetworkManager.AccessPoint")?;
     let bytes: Vec<u8> = prop(ap.get("Ssid"))?;
     let ssid = String::from_utf8_lossy(&bytes).into_owned();
     (!ssid.is_empty()).then_some(ssid)
@@ -453,17 +460,16 @@ fn finish_aps(aps: Vec<AccessPoint>) -> Vec<AccessPoint> {
         if ap.ssid.is_empty() {
             continue;
         }
-        by_ssid
-            .entry(ap.ssid.clone())
-            .and_modify(|keep| {
-                keep.strength = keep.strength.max(ap.strength);
-                keep.connected |= ap.connected;
-                keep.secured |= ap.secured;
-            })
-            .or_insert(ap);
+        if let Some(keep) = by_ssid.get_mut(&ap.ssid) {
+            keep.strength = keep.strength.max(ap.strength);
+            keep.connected |= ap.connected;
+            keep.secured |= ap.secured;
+        } else {
+            by_ssid.insert(ap.ssid.clone(), ap);
+        }
     }
     let mut aps: Vec<_> = by_ssid.into_values().collect();
-    aps.sort_by(|a, b| b.strength.cmp(&a.strength));
+    aps.sort_by_key(|ap| std::cmp::Reverse(ap.strength));
     aps.truncate(8);
     aps
 }
@@ -558,8 +564,8 @@ fn bt_from(objects: &fdo::ManagedObjects) -> Bluetooth {
         !adapters.is_empty() && adapters.iter().all(|&p| p)
     };
     let mut devices: Vec<Device> = objects
-        .iter()
-        .filter_map(|(_, ifaces)| {
+        .values()
+        .filter_map(|ifaces| {
             let dev = ifaces.get(DEVICE)?;
             let address = prop::<String>(dev.get("Address")).unwrap_or_default();
             Some(Device {
@@ -733,15 +739,13 @@ fn sink_name() -> Option<String> {
 /// `mic_present = false` — the UI hides the control. Monitors of outputs are
 /// not mics, so names ending `.monitor` don't count.
 fn mic() -> (bool, bool) {
-    let present = run("pactl", &["list", "short", "sources"])
-        .map(|out| {
-            out.lines().any(|line| {
-                line.split_whitespace()
-                    .nth(1)
-                    .is_some_and(|name| !name.ends_with(".monitor"))
-            })
+    let present = run("pactl", &["list", "short", "sources"]).is_some_and(|out| {
+        out.lines().any(|line| {
+            line.split_whitespace()
+                .nth(1)
+                .is_some_and(|name| !name.ends_with(".monitor"))
         })
-        .unwrap_or_default();
+    });
     let muted = present && volume("@DEFAULT_AUDIO_SOURCE@").is_some_and(|(_, m)| m);
     (present, muted)
 }
@@ -1024,8 +1028,8 @@ fn nm_rescan() {
                     return;
                 }
             };
-            let Some(objects) = managed(&conn, "org.freedesktop.NetworkManager", "/org/freedesktop")
-                .await
+            let Some(objects) =
+                managed(&conn, "org.freedesktop.NetworkManager", "/org/freedesktop").await
             else {
                 return;
             };
@@ -1173,7 +1177,7 @@ fn fake() -> &'static Mutex<State> {
 }
 
 fn fake_state() -> State {
-    fake().lock().map(|s| s.clone()).unwrap_or_default()
+    fake().lock().map_or_default(|s| s.clone())
 }
 
 /// Mutate the fake snapshot and wake the follower.
@@ -1308,8 +1312,6 @@ fn fake_set_brightness(state: &mut State, percent: f32) {
 /// pill's tones on a slow demo cadence. Command mutations take priority —
 /// the cycle only touches `statuses`, so toggles stay put.
 fn follow_fake(tx: &mpsc::UnboundedSender<Arc<State>>) {
-    let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel::<()>(4);
-    let _ = WAKE.set(wake_tx);
     // The same pill cycle the old statuses() fake ran: every tone shows up.
     const PILL: [Statuses; 4] = [
         Statuses {
@@ -1346,6 +1348,8 @@ fn follow_fake(tx: &mpsc::UnboundedSender<Arc<State>>) {
             connectivity: Some(Connectivity::Offline),
         },
     ];
+    let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel::<()>(4);
+    let _ = WAKE.set(wake_tx);
     let mut i = 0;
     loop {
         if tx.unbounded_send(Arc::new(fake_state())).is_err() {
@@ -1575,8 +1579,7 @@ mod tests {
         assert_eq!(aps.len(), 8);
         assert!(aps.iter().all(|a| !a.ssid.is_empty()));
         assert!(
-            aps.windows(2)
-                .all(|w| w[0].strength >= w[1].strength),
+            aps.windows(2).all(|w| w[0].strength >= w[1].strength),
             "strongest first"
         );
         let net3 = aps.iter().find(|a| a.ssid == "net3").unwrap();
@@ -1604,6 +1607,8 @@ mod tests {
         assert_eq!(description("nothing useful"), None);
     }
 
+    /// One sequential pass: the fake store is process-wide, so bt mutations
+    /// can't be asserted from two parallel tests.
     #[test]
     fn fake_commands_update_state() {
         // REAL is false in tests: the public commands hit the fake store.
@@ -1616,17 +1621,14 @@ mod tests {
         assert!(!s.net.wifi_enabled);
         assert_eq!(s.net.wifi, None);
         assert_eq!(s.statuses.connectivity, Some(Connectivity::Offline));
-        bt_power(false);
-        assert!(fake_state().bt.devices.iter().all(|d| !d.connected));
-    }
-
-    #[test]
-    fn fake_device_connect() {
         let addr = fake_state().bt.devices[1].address.clone();
         bt_connect(&addr);
-        let s = fake_state();
-        assert!(s.bt.devices[1].connected);
+        assert!(fake_state().bt.devices[1].connected);
         bt_disconnect(&addr);
         assert!(!fake_state().bt.devices[1].connected);
+        bt_power(false);
+        assert!(fake_state().bt.devices.iter().all(|d| !d.connected));
+        set_profile(Profile::PowerSaver);
+        assert_eq!(fake_state().profile, Profile::PowerSaver);
     }
 }

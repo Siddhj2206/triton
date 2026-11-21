@@ -133,7 +133,7 @@ const COMMAND_CAP: usize = 4;
 pub fn search(
     index: &Index,
     windows: &[WindowRef],
-    commands: &[CommandRef],
+    commands: &[CommandRef<'_>],
     query: &str,
 ) -> Results {
     let mut groups = Vec::new();
@@ -192,7 +192,11 @@ fn score(needle: &str, hay: &str) -> Option<Score> {
         });
     }
     if h.starts_with(&n) {
-        return Some(Score { tier: 0, pos: 0, len });
+        return Some(Score {
+            tier: 0,
+            pos: 0,
+            len,
+        });
     }
     // Word-start: a contiguous match right after a non-alphanumeric boundary.
     for (i, w) in h.windows(n.len()).enumerate().skip(1) {
@@ -318,7 +322,7 @@ fn window_hits(windows: &[WindowRef], needle: &str) -> Vec<Hit> {
     hits.into_iter().map(|(_, _, hit)| hit).collect()
 }
 
-fn command_hits(commands: &[CommandRef], needle: &str) -> Vec<Hit> {
+fn command_hits(commands: &[CommandRef<'_>], needle: &str) -> Vec<Hit> {
     let mut hits: Vec<(Score, usize, Hit)> = commands
         .iter()
         .enumerate()
@@ -345,7 +349,7 @@ fn command_hits(commands: &[CommandRef], needle: &str) -> Vec<Hit> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::launch::{App, Exec};
+    use crate::launch::index::{App, AppAction, Exec};
 
     fn app(name: &str, keywords: &[&str]) -> App {
         App {
@@ -459,7 +463,7 @@ mod tests {
     #[test]
     fn action_hits_launch_the_action() {
         let mut index = index(&["Browser"]);
-        index.apps[0].actions = vec![crate::launch::AppAction {
+        index.apps[0].actions = vec![AppAction {
             id: "new-window".to_owned(),
             name: "New window".to_owned(),
             exec: Exec(vec!["browser".to_owned(), "--new-window".to_owned()]),

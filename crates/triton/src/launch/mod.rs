@@ -20,7 +20,7 @@ mod math;
 mod search;
 mod spawn;
 
-pub use index::{App, AppAction, Exec, Index};
+pub use index::Index;
 pub use math::math;
 pub use search::{CommandRef, Group, Hit, HitKind, Results, Scope, WindowRef, scope, search};
 pub use spawn::launch_app;

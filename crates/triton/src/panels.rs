@@ -11,7 +11,7 @@ use triton_design::{Icon, IconStyle, TypeStyle};
 use triton_ui::button::{self, Kind, Size};
 use triton_ui::field::{self, Field};
 use triton_ui::surface::{self, Surface};
-use triton_ui::{Element, Theme, Tone, text};
+use triton_ui::{Element, Tone, text};
 
 use crate::app::Message;
 
@@ -82,13 +82,16 @@ pub fn osd(osd: &Osd) -> Element<'_, Message> {
     let row = match osd {
         Osd::Volume { percent, muted } => osd_meter(
             osd_level_icon(*percent, *muted),
-            (*percent).min(100) as f32 / 100.0,
+            f32::from((*percent).min(100)) / 100.0,
             percent.to_string(),
             *muted,
         ),
-        Osd::Brightness { percent } => {
-            osd_meter(Icon::BrightnessHigh, *percent as f32 / 100.0, percent.to_string(), false)
-        }
+        Osd::Brightness { percent } => osd_meter(
+            Icon::BrightnessHigh,
+            f32::from(*percent) / 100.0,
+            percent.to_string(),
+            false,
+        ),
         Osd::MicMuted => osd_meter(Icon::MicOff, 0.0, "Microphone off".to_owned(), true),
         Osd::Layout { code, name } => Row::new()
             .spacing(14)
@@ -97,7 +100,9 @@ pub fn osd(osd: &Osd) -> Element<'_, Message> {
             .push(
                 Column::new()
                     .push(text::text(code.clone(), TypeStyle::TITLE_M))
-                    .push(text::text(name.clone(), TypeStyle::BODY_S).class(Tone::OnSurfaceVariant)),
+                    .push(
+                        text::text(name.clone(), TypeStyle::BODY_S).class(Tone::OnSurfaceVariant),
+                    ),
             )
             .padding(Padding::from([14.0, 8.0]))
             .into(),
@@ -107,13 +112,16 @@ pub fn osd(osd: &Osd) -> Element<'_, Message> {
             .push(surface::icon_disc(Icon::BatteryAlert))
             .push(
                 Column::new()
-                    .push(text::text(format!("Battery {percent}%"), TypeStyle::TITLE_M))
-                    .push(text::text(left.clone(), TypeStyle::BODY_S).class(Tone::OnSurfaceVariant)),
+                    .push(text::text(
+                        format!("Battery {percent}%"),
+                        TypeStyle::TITLE_M,
+                    ))
+                    .push(
+                        text::text(left.clone(), TypeStyle::BODY_S).class(Tone::OnSurfaceVariant),
+                    ),
             )
             .push(Space::new().width(16))
-            .push(
-                button::button("Saver", None, Kind::Filled, Size::S).on_press(Message::OsdSaver),
-            )
+            .push(button::button("Saver", None, Kind::Filled, Size::S).on_press(Message::OsdSaver))
             .padding(Padding::from([14.0, 8.0]))
             .into(),
     };
@@ -189,15 +197,10 @@ pub fn power_menu<'a>(
         )
         .on_press(Message::PowerPick(action));
         if on {
-            row = row.push(
-                Column::new()
-                    .align_x(Horizontal::Center)
-                    .push(tile)
-                    .push(
-                        text::text("Press Enter", TypeStyle::LABEL_S)
-                            .class(Tone::OnSurfaceVariant),
-                    ),
-            );
+            row =
+                row.push(Column::new().align_x(Horizontal::Center).push(tile).push(
+                    text::text("Press Enter", TypeStyle::LABEL_S).class(Tone::OnSurfaceVariant),
+                ));
         } else {
             row = row.push(tile);
         }
@@ -211,35 +214,34 @@ pub fn power_menu<'a>(
     if let Some(note) = note {
         col = col.push(surface::pill(Icon::Warning, note));
     }
-    col = col.push(
-        Row::new()
-            .spacing(18)
-            .push(
-                Row::new()
-                    .spacing(6)
-                    .push(surface::kbd("←"))
-                    .push(surface::kbd("→"))
-                    .push(text::text("move", TypeStyle::LABEL_S).class(Tone::OnSurfaceVariant)),
-            )
-            .push(
-                Row::new()
-                    .spacing(6)
-                    .push(surface::kbd("Enter"))
-                    .push(text::text("confirm", TypeStyle::LABEL_S).class(Tone::OnSurfaceVariant)),
-            )
-            .push(
-                Row::new()
-                    .spacing(6)
-                    .push(surface::kbd("1 – 5"))
-                    .push(text::text("jump", TypeStyle::LABEL_S).class(Tone::OnSurfaceVariant)),
-            )
-            .push(
-                Row::new()
-                    .spacing(6)
-                    .push(surface::kbd("Esc"))
-                    .push(text::text("cancel", TypeStyle::LABEL_S).class(Tone::OnSurfaceVariant)),
-            ),
-    );
+    col =
+        col.push(
+            Row::new()
+                .spacing(18)
+                .push(
+                    Row::new()
+                        .spacing(6)
+                        .push(surface::kbd("←"))
+                        .push(surface::kbd("→"))
+                        .push(text::text("move", TypeStyle::LABEL_S).class(Tone::OnSurfaceVariant)),
+                )
+                .push(
+                    Row::new().spacing(6).push(surface::kbd("Enter")).push(
+                        text::text("confirm", TypeStyle::LABEL_S).class(Tone::OnSurfaceVariant),
+                    ),
+                )
+                .push(
+                    Row::new()
+                        .spacing(6)
+                        .push(surface::kbd("1 – 5"))
+                        .push(text::text("jump", TypeStyle::LABEL_S).class(Tone::OnSurfaceVariant)),
+                )
+                .push(
+                    Row::new().spacing(6).push(surface::kbd("Esc")).push(
+                        text::text("cancel", TypeStyle::LABEL_S).class(Tone::OnSurfaceVariant),
+                    ),
+                ),
+        );
     surface::surface(col, Surface::LayerPanel(Material::Glass))
         .padding(Padding::from([28.0, 32.0]))
         .into()
@@ -259,6 +261,8 @@ pub enum QsPage {
 
 /// The board's 2×2 tile grid, then the two sliders, then the footer.
 /// Inputs arrive already shaped by `app` from `services::State`.
+/// Six tiles, six bools — the shape mirrors the board.
+#[expect(clippy::struct_excessive_bools)]
 pub struct Qs<'a> {
     pub page: QsPage,
     pub wifi_on: bool,
@@ -275,8 +279,8 @@ pub struct Qs<'a> {
     pub saver: bool,
     /// (ssid, supporting, secured, connected) for the Wi-Fi page.
     pub aps: &'a [(String, String, bool, bool)],
-    /// (name, supporting, connected) for the Bluetooth page.
-    pub bt_devices: &'a [(String, String, bool)],
+    /// (name, supporting, address, connected) for the Bluetooth page.
+    pub bt_devices: &'a [(String, String, String, bool)],
 }
 
 fn tile<'a>(
@@ -320,7 +324,16 @@ fn tile<'a>(
     t.into()
 }
 
-pub fn quick_settings<'a>(qs: Qs<'a>) -> Element<'a, Message> {
+/// `qs` is owned so its `&'a` fields keep the `Element<'a>` valid.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "fields borrow self-lived data; moving is required"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "four small pages share one layout pass"
+)]
+pub fn quick_settings(qs: Qs<'_>) -> Element<'_, Message> {
     let content: Element<'_, Message> = match qs.page {
         QsPage::Root => {
             let grid = Column::new()
@@ -373,12 +386,10 @@ pub fn quick_settings<'a>(qs: Qs<'a>) -> Element<'a, Message> {
                         .align_y(Vertical::Center)
                         .push(text::icon(Icon::BrightnessHigh, IconStyle::Outlined, 20.0))
                         .push(
-                            triton_ui::slider::slider(qs.brightness, |v| {
-                                Message::QsBrightness(v)
-                            })
-                            .on_glass(true)
-                            .on_release(Message::QsBrightnessCommit),
-                    ),
+                            triton_ui::slider::slider(qs.brightness, Message::QsBrightness)
+                                .on_glass(true)
+                                .on_release(Message::QsBrightnessCommit),
+                        ),
                 )
                 .push(
                     Row::new()
@@ -386,7 +397,7 @@ pub fn quick_settings<'a>(qs: Qs<'a>) -> Element<'a, Message> {
                         .align_y(Vertical::Center)
                         .push(text::icon(Icon::VolumeUp, IconStyle::Outlined, 20.0))
                         .push(
-                            triton_ui::slider::slider(qs.volume, |v| Message::QsVolume(v))
+                            triton_ui::slider::slider(qs.volume, Message::QsVolume)
                                 .on_glass(true)
                                 .on_release(Message::QsVolumeCommit),
                         ),
@@ -394,22 +405,12 @@ pub fn quick_settings<'a>(qs: Qs<'a>) -> Element<'a, Message> {
             let toggles = Row::new()
                 .spacing(8)
                 .push(
-                    button::icon_button(
-                        Icon::DarkMode,
-                        button::IconKind::Veil,
-                        Size::M,
-                        qs.dnd,
-                    )
-                    .on_press(Message::Dnd),
+                    button::icon_button(Icon::DarkMode, button::IconKind::Veil, Size::M, qs.dnd)
+                        .on_press(Message::Dnd),
                 )
                 .push(
-                    button::icon_button(
-                        Icon::Contrast,
-                        button::IconKind::Veil,
-                        Size::M,
-                        qs.dark,
-                    )
-                    .on_press(Message::QsToggleDark),
+                    button::icon_button(Icon::Contrast, button::IconKind::Veil, Size::M, qs.dark)
+                        .on_press(Message::QsToggleDark),
                 )
                 .push(
                     button::icon_button(
@@ -485,7 +486,7 @@ pub fn quick_settings<'a>(qs: Qs<'a>) -> Element<'a, Message> {
             let items: Vec<surface::ListItem<'_, Message>> = qs
                 .bt_devices
                 .iter()
-                .map(|(name, sub, connected)| surface::ListItem {
+                .map(|(name, sub, addr, connected)| surface::ListItem {
                     leading: Some(surface::icon_disc(Icon::Bluetooth).into()),
                     title: name.as_str(),
                     supporting: Some(sub.as_str()),
@@ -493,7 +494,10 @@ pub fn quick_settings<'a>(qs: Qs<'a>) -> Element<'a, Message> {
                         text::icon(Icon::BluetoothConnected, IconStyle::Outlined, 20.0).into()
                     }),
                     selected: *connected,
-                    on_press: None,
+                    on_press: Some(Message::BtDevice {
+                        address: addr.clone(),
+                        connected: *connected,
+                    }),
                 })
                 .collect();
             Column::new()
@@ -518,7 +522,7 @@ pub fn quick_settings<'a>(qs: Qs<'a>) -> Element<'a, Message> {
                     .align_y(Vertical::Center)
                     .push(text::icon(Icon::VolumeUp, IconStyle::Outlined, 20.0))
                     .push(
-                        triton_ui::slider::slider(qs.volume, |v| Message::QsVolume(v))
+                        triton_ui::slider::slider(qs.volume, Message::QsVolume)
                             .on_glass(true)
                             .on_release(Message::QsVolumeCommit),
                     ),
@@ -536,8 +540,13 @@ pub fn quick_settings<'a>(qs: Qs<'a>) -> Element<'a, Message> {
                     ),
             )
             .push(
-                button::button("All sound settings", Some(Icon::Tune), Kind::Filled, Size::M)
-                    .on_press(Message::QsAllSettings),
+                button::button(
+                    "All sound settings",
+                    Some(Icon::Tune),
+                    Kind::Filled,
+                    Size::M,
+                )
+                .on_press(Message::QsAllSettings),
             )
             .into(),
     };
@@ -593,10 +602,10 @@ pub struct NotifView {
 }
 
 fn notif_card(n: &NotifView, toast: bool) -> Element<'static, Message> {
-    let glyph: Element<'static, Message> = n
-        .icon
-        .map(|i| surface::icon_disc(i).into())
-        .unwrap_or_else(|| surface::icon_disc(Icon::Notifications).into());
+    let glyph: Element<'static, Message> = n.icon.map_or_else(
+        || surface::icon_disc(Icon::Notifications).into(),
+        |i| surface::icon_disc(i).into(),
+    );
     let row = Row::new()
         .spacing(12)
         .align_y(Vertical::Center)
@@ -614,9 +623,7 @@ fn notif_card(n: &NotifView, toast: bool) -> Element<'static, Message> {
                         ),
                 )
                 .push(text::text(n.title.clone(), TypeStyle::BODY_M))
-                .push(
-                    text::text(n.body.clone(), TypeStyle::BODY_S).class(Tone::OnSurfaceVariant),
-                ),
+                .push(text::text(n.body.clone(), TypeStyle::BODY_S).class(Tone::OnSurfaceVariant)),
         );
     let card = mouse_area(
         surface::surface(
@@ -637,7 +644,7 @@ fn notif_card(n: &NotifView, toast: bool) -> Element<'static, Message> {
 }
 
 /// The toast stack: up to four cards plus the overflow chip ("2 more").
-/// `hover` pauses timers — handled by mouse_area in app.
+/// `hover` pauses timers — handled by `mouse_area` in app.
 pub fn toasts(list: Vec<NotifView>, overflow: usize) -> Element<'static, Message> {
     let mut col = Column::new().spacing(10);
     for n in list.into_iter().take(4) {
@@ -656,7 +663,7 @@ pub fn toasts(list: Vec<NotifView>, overflow: usize) -> Element<'static, Message
 /// The notification center: header (title, DND), then app groups — each a
 /// header row (app, count, expand, Clear) and its cards (or "Show N more").
 pub fn notification_center(
-    groups: Vec<(String, Vec<NotifView>)>,
+    groups: &[(String, Vec<NotifView>)],
     expanded: impl Fn(&str) -> bool,
     dnd: bool,
 ) -> Element<'static, Message> {
@@ -681,7 +688,7 @@ pub fn notification_center(
                 .push(text::text("Nothing new", TypeStyle::BODY_M).class(Tone::OnSurfaceVariant)),
         );
     }
-    for (app, items) in &groups {
+    for (app, items) in groups {
         let is_open = expanded(app.as_str());
         let group_header = Row::new()
             .spacing(8)
@@ -695,7 +702,11 @@ pub fn notification_center(
             .push(Space::new().width(Length::Fill))
             .push(
                 button::icon_button(
-                    if is_open { Icon::ExpandLess } else { Icon::ExpandMore },
+                    if is_open {
+                        Icon::ExpandLess
+                    } else {
+                        Icon::ExpandMore
+                    },
                     button::IconKind::Veil,
                     Size::S,
                     false,
@@ -738,10 +749,14 @@ pub fn notification_center(
 
 /// The solid authentication dialog: message, the shared field, confirm/cancel.
 pub fn polkit_dialog<'a>(message: &'a str, user: &'a str, value: &'a str) -> Element<'a, Message> {
-    let field = field::search("Password", value, Field::Nested {
-        outer: triton_design::shape::RADII.floating_window,
-        inset: 14.0,
-    })
+    let field = field::search(
+        "Password",
+        value,
+        Field::Nested {
+            outer: triton_design::shape::RADII.floating_window,
+            inset: 14.0,
+        },
+    )
     .secure(true)
     .id(crate::app::polkit_field())
     .on_input(Message::PolkitInput)

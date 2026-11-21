@@ -260,7 +260,12 @@ mod tests {
         // (docs/research/niri-layer-blur-alpha.md); blur is client-requested.
         // `xray false` keeps that blur seeing windows, not just wallpaper.
         let rules = &render(&triton_design::Scheme::DARK)[1].1;
-        for namespace in ["triton-bar", "triton-launcher", "triton-notifications", "triton-osd"] {
+        for namespace in [
+            "triton-bar",
+            "triton-launcher",
+            "triton-notifications",
+            "triton-osd",
+        ] {
             assert!(
                 rules.contains(&format!("namespace=\"^{namespace}$\"")),
                 "{namespace}"

@@ -10,14 +10,13 @@ use std::time::Duration;
 use iced_core::alignment::{Horizontal, Vertical};
 use iced_core::widget::{self, operation::focusable};
 use iced_core::window::{self, Id};
-use iced_core::{Background, ContentFit, Event, Length, Padding, image};
+use iced_core::{ContentFit, Event, Length, Padding, image};
+use iced_futures::Subscription;
 use iced_futures::futures::Stream;
 use iced_futures::futures::channel::{mpsc, oneshot};
-use iced_futures::Subscription;
 use iced_runtime::Task;
 use iced_sessionlock::to_session_message;
 use iced_widget::{Space, column, row, stack};
-use triton_design::color::with_alpha;
 use triton_design::{Icon, IconStyle, TypeStyle};
 use triton_ui::button::{self, IconKind, Size};
 use triton_ui::field::Field;
@@ -52,15 +51,14 @@ const INITIALS: TypeStyle = TypeStyle {
 const CARD_WIDTH: f32 = 400.0;
 /// The dark veil over the wallpaper (scheme.surface at ~0.55) so the card
 /// reads; real blur is niri's job later.
-const VEIL_ALPHA: f32 = 0.55;
 
 #[to_session_message]
 #[derive(Debug, Clone)]
-enum Message {
+pub enum Message {
     /// The minute tick, for the clock.
     Minute,
     /// A lock surface mapped on an output: put the caret in the field.
-    Opened(Id),
+    Opened,
     PasswordChanged(String),
     /// Enter or the arrow button.
     Submit,
@@ -108,11 +106,12 @@ impl Lock {
         )
     }
 
+    #[expect(clippy::unused_self, reason = "iced needs the fn shape")]
     pub fn subscription(&self) -> Subscription<Message> {
         Subscription::batch([
             minutes().map(|()| Message::Minute),
-            iced_futures::event::listen_with(|event, _status, id| match event {
-                Event::Window(window::Event::Opened { .. }) => Some(Message::Opened(id)),
+            iced_futures::event::listen_with(|event, _status, _id| match event {
+                Event::Window(window::Event::Opened { .. }) => Some(Message::Opened),
                 _ => None,
             }),
         ])
@@ -124,7 +123,7 @@ impl Lock {
                 self.now = chrono::Local::now();
                 Task::none()
             }
-            Message::Opened(_) => iced_runtime::task::widget(focusable::focus(field_id())),
+            Message::Opened => iced_runtime::task::widget(focusable::focus(field_id())),
             Message::PasswordChanged(password) => {
                 self.password = password;
                 self.error = None;
@@ -169,28 +168,31 @@ impl Lock {
         Task::perform(
             async move {
                 let (tx, rx) = oneshot::channel();
-                thread::Builder::new()
+                if let Err(e) = thread::Builder::new()
                     .name("pam-auth".into())
                     .spawn(move || {
                         let ok = pam::authenticate(service, &user, &password);
                         let _ = tx.send(ok);
                     })
-                    .map_err(|e| tracing::error!(%e, "pam: cannot start the auth thread"))
-                    .ok();
-                // A failed spawn drops `tx`, which reads as a failed attempt.
+                {
+                    tracing::error!(%e, "pam: cannot start the auth thread");
+                    // `tx` is dropped, which reads as a failed attempt.
+                }
                 rx.await.unwrap_or(false)
             },
             Message::AuthDone,
         )
     }
 
-    fn theme(&self) -> Theme {
+    #[expect(clippy::unused_self, reason = "iced needs the fn shape")]
+    pub fn theme(&self) -> Theme {
         Theme::dark()
     }
 
     /// The lock surface fills its output; the scheme's surface shows where
     /// the wallpaper is missing and behind the veil.
-    fn style(&self, theme: &Theme) -> iced_core::theme::Style {
+    #[expect(clippy::unused_self, reason = "iced needs the fn shape")]
+    pub fn style(&self, theme: &Theme) -> iced_core::theme::Style {
         iced_core::theme::Style {
             background_color: theme.scheme.surface,
             text_color: theme.scheme.on_surface,
@@ -210,28 +212,22 @@ impl Lock {
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .into(),
-            None => Space::new()
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .into(),
+            None => Space::new().width(Length::Fill).height(Length::Fill).into(),
         }
     }
 
     /// The translucent dark veil over the wallpaper, so the card reads on a
     /// bright image. Not a `Surface` class: it's a full-bleed fill unique to
-    /// the lock screen.
+    /// the lock screen — a Glass surface would paint its floating shadow and
+    /// top highlight around the whole output.
     fn veil() -> Element<'static, Message> {
-        iced_widget::container(Space::new().width(Length::Fill).height(Length::Fill))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(|theme: &Theme| iced_widget::container::Style {
-                background: Some(Background::Color(with_alpha(
-                    theme.scheme.surface,
-                    VEIL_ALPHA,
-                ))),
-                ..iced_widget::container::Style::default()
-            })
-            .into()
+        triton_ui::surface::surface(
+            Space::new().width(Length::Fill).height(Length::Fill),
+            triton_ui::surface::Surface::Material(triton_design::material::Material::Glass),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
     }
 
     /// Date and the huge Jost clock over the card, centered on the output.
@@ -273,7 +269,7 @@ impl Lock {
             .align_x(Horizontal::Center),
             Surface::Dialog,
         )
-        .padding(24.0)
+        .padding(24)
         .width(Length::Fixed(CARD_WIDTH))
         .into()
     }
@@ -296,12 +292,12 @@ impl Lock {
     fn password_row(&self) -> Element<'_, Message> {
         let input = iced_widget::text_input("Password", &self.password)
             .id(field_id())
-            .icon(text_input::Icon {
+            .icon(iced_widget::text_input::Icon {
                 font: Icon::font(IconStyle::Outlined),
                 code_point: Icon::Lock.codepoint(),
                 size: Some(20.0.into()),
                 spacing: 8.0,
-                side: text_input::Side::Left,
+                side: iced_widget::text_input::Side::Left,
             })
             .secure(!self.show_password)
             .size(16)
@@ -324,9 +320,7 @@ impl Lock {
         )
         .on_press(Message::ToggleVisible);
         let go = button::icon_button(Icon::ArrowForward, IconKind::Filled, Size::M, false)
-            .on_press_maybe(
-                (!self.busy && !self.password.is_empty()).then_some(Message::Submit),
-            );
+            .on_press_maybe((!self.busy && !self.password.is_empty()).then_some(Message::Submit));
         row![input, eye, go]
             .spacing(8)
             .align_y(Vertical::Center)

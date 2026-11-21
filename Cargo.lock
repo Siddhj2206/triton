@@ -2917,6 +2917,7 @@ dependencies = [
  "chrono",
  "iced_core",
  "iced_futures",
+ "iced_renderer",
  "iced_runtime",
  "iced_sessionlock",
  "iced_widget",

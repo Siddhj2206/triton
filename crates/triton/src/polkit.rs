@@ -55,11 +55,15 @@ const AGENT_PATH: &str = "/org/freedesktop/PolicyKit1/AuthenticationAgent";
 pub struct Prompt {
     /// Identifies the pending session; [`respond`] and [`cancel`] take it.
     pub cookie: String,
-    /// The action being authorized (`org.example.app.do-thing`).
+    /// The action being authorized (`org.example.app.do-thing`); the dialog
+    /// shows `message` today, this stays for its future title row.
+    #[allow(dead_code)]
     pub action_id: String,
     /// The message to show, e.g. "Authentication is required to …".
     pub message: String,
-    /// A themed icon name, when the action provides one.
+    /// A themed icon name, when the action provides one; wired to the dialog
+    /// once it grows an icon slot.
+    #[allow(dead_code)]
     pub icon: Option<String>,
     /// Display name of the identity we picked (the gecos name, else login).
     pub user: String,
@@ -99,7 +103,9 @@ static SESSIONS: Mutex<BTreeMap<String, Session>> = Mutex::new(BTreeMap::new());
 
 /// A poisoned map must not break an auth flow: recover the guard.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Forward an event to the app; gone is fine, the prompt just times out.
@@ -146,6 +152,10 @@ impl Listener {
     /// polkitd starts an interactive authorization for one cookie. The call
     /// returns at once; the session completes when we answer the authority
     /// or it times out.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "zbus maps the wire signature"
+    )]
     fn begin_authentication(
         &self,
         action_id: &str,
@@ -194,11 +204,7 @@ async fn run(tx: mpsc::UnboundedSender<Event>) {
             return;
         }
     };
-    if let Err(e) = conn
-        .object_server()
-        .at(AGENT_PATH, Listener { tx })
-        .await
-    {
+    if let Err(e) = conn.object_server().at(AGENT_PATH, Listener { tx }).await {
         tracing::warn!(%e, "polkit: cannot serve the agent object");
         return;
     }
@@ -251,10 +257,10 @@ fn agent_subject() -> Option<SvMap> {
 /// The locale argument of `RegisterAuthenticationAgent`.
 fn locale() -> String {
     for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Ok(value) = std::env::var(var) {
-            if !value.is_empty() {
-                return value;
-            }
+        if let Ok(value) = std::env::var(var)
+            && !value.is_empty()
+        {
+            return value;
         }
     }
     "C".to_owned()
@@ -394,7 +400,10 @@ fn passwd_user(contents: &str, uid: u32) -> Option<String> {
 enum HelperLine<'a> {
     /// `PAM_PROMPT_ECHO_*`: answer on stdin. `echo` says whether the reply
     /// may echo; we send the secret regardless.
-    Prompt { echo: bool, text: &'a str },
+    Prompt {
+        echo: bool,
+        text: &'a str,
+    },
     /// `PAM_ERROR_MSG`: a PAM module's complaint, for the log.
     Error(&'a str),
     /// `PAM_TEXT_INFO`: a PAM module's note, for the log.
@@ -534,6 +543,10 @@ fn kill_helper(cookie: &str) {
 /// The worker side of [`respond`]: spawn the helper, run the conversation,
 /// answer the authority on `SUCCESS`, and tell the app the prompt is over.
 /// Every failure path logs and just lets the polkit request time out.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "moved into the spawned worker"
+)]
 fn run_session(cookie: String, identity: String, password: String) {
     {
         let mut sessions = lock(&SESSIONS);
@@ -780,10 +793,7 @@ mod tests {
             ("gid", OwnedVariant::from(10u32)),
         ]);
         assert_eq!(identity_string(&group).as_deref(), Some("unix-group:10"));
-        let named = sv(&[
-            ("kind", ov_str("unix-user")),
-            ("name", ov_str("root")),
-        ]);
+        let named = sv(&[("kind", ov_str("unix-user")), ("name", ov_str("root"))]);
         assert_eq!(identity_string(&named).as_deref(), Some("unix-user:root"));
         let empty = sv(&[]);
         assert!(identity_string(&empty).is_none());
@@ -815,10 +825,10 @@ mod tests {
 
     #[test]
     fn stat_start_time_is_field_22() {
-        let stat = "1 (comm) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 987654";
+        let stat = "1 (comm) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 987654";
         assert_eq!(stat_start_time(stat), Some(987_654));
         // `comm` with spaces and parens: the last ')' still bounds it.
-        let stat = "1 (a (b) c) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 42";
+        let stat = "1 (a (b) c) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 42";
         assert_eq!(stat_start_time(stat), Some(42));
         assert_eq!(stat_start_time("garbage"), None);
     }

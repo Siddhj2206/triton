@@ -51,6 +51,9 @@ struct Parser<'a> {
     pos: usize,
 }
 
+/// A binary operator: the `Node` ctor and the byte width of its glyph.
+type BinOp = (fn(Box<Node>, Box<Node>) -> Node, usize);
+
 impl<'a> Parser<'a> {
     fn new(s: &'a str) -> Self {
         Self {
@@ -98,7 +101,7 @@ impl<'a> Parser<'a> {
         loop {
             self.skip_ws();
             // `×` (U+00D7) and `÷` (U+00F7) share the 0xC3 lead byte.
-            let op: Option<(fn(Box<Node>, Box<Node>) -> Node, usize)> = match self.peek() {
+            let op: Option<BinOp> = match self.peek() {
                 Some(b'*') => Some((Node::Mul, 1)),
                 Some(b'/') => Some((Node::Div, 1)),
                 Some(b'%') => Some((Node::Mod, 1)),
@@ -364,7 +367,9 @@ mod tests {
 
     #[test]
     fn non_math_is_none() {
-        for q in ["", "=", "con", "1 +", "(1 + 2", "1 / 0", "5 % 0", "abc(", "1 2 ("] {
+        for q in [
+            "", "=", "con", "1 +", "(1 + 2", "1 / 0", "5 % 0", "abc(", "1 2 (",
+        ] {
             assert_eq!(math(q), None, "{q}");
         }
     }

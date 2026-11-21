@@ -59,8 +59,7 @@ fn copy_text(text: String) {
 /// Ids for the shell's own synthesized notifications, above the D-Bus
 /// server's range so they cannot collide.
 fn notif_gen() -> u32 {
-    static NEXT: std::sync::atomic::AtomicU32 =
-        std::sync::atomic::AtomicU32::new(1 << 30);
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1 << 30);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
@@ -110,9 +109,7 @@ const LAUNCH_COMMANDS: &[crate::launch::CommandRef<'static>] = &[
 const LAUNCHER_PAD: f32 = 14.0;
 
 /// An empty results set for the launcher's pre-search frame.
-static EMPTY_RESULTS: crate::launch::Results = crate::launch::Results {
-    groups: Vec::new(),
-};
+static EMPTY_RESULTS: crate::launch::Results = crate::launch::Results { groups: Vec::new() };
 
 /// `BarStates` timings: 120 ms on the top edge wakes the bar, 600 ms of no
 /// pointer over bar chrome puts it away. (The fullscreen 300 ms dwell waits on
@@ -121,7 +118,7 @@ const REVEAL_DELAY: Duration = Duration::from_millis(120);
 const HIDE_DELAY: Duration = Duration::from_millis(600);
 
 /// The result groups, as list sections under eyebrow labels.
-fn launcher_results<'a>(results: &'a crate::launch::Results) -> Column<'a, Message, Theme, Renderer> {
+fn launcher_results(results: &crate::launch::Results) -> Column<'_, Message, Theme, Renderer> {
     let mut col = Column::new().spacing(6);
     for (group, hits) in &results.groups {
         let label = match group {
@@ -129,20 +126,20 @@ fn launcher_results<'a>(results: &'a crate::launch::Results) -> Column<'a, Messa
             crate::launch::Group::Windows => "Windows",
             crate::launch::Group::Commands => "Commands",
         };
-        let items: Vec<surface::ListItem<'_, Message>> = hits
-            .iter()
-            .map(|h| hit_row(h))
-            .collect();
-        col = col.push(text::eyebrow(label)).push(surface::list(items, false));
+        let items: Vec<surface::ListItem<'_, Message>> = hits.iter().map(|h| hit_row(h)).collect();
+        col = col
+            .push(text::eyebrow(label))
+            .push(surface::list(items, false));
     }
     col
 }
 
-fn hit_row<'a>(h: &'a crate::launch::Hit) -> surface::ListItem<'a, Message> {
+fn hit_row(h: &crate::launch::Hit) -> surface::ListItem<'_, Message> {
     let icon = match h.kind {
         crate::launch::HitKind::App { .. } => Icon::Apps,
-        crate::launch::HitKind::Window { .. } => Icon::Terminal,
-        crate::launch::HitKind::Command(_) => Icon::Terminal,
+        crate::launch::HitKind::Window { .. } | crate::launch::HitKind::Command(_) => {
+            Icon::Terminal
+        }
         crate::launch::HitKind::Math { .. } => Icon::Calculate,
     };
     surface::ListItem {
@@ -249,6 +246,11 @@ pub enum Message {
     QsVolumeCommit,
     QsMicMute,
     QsAllSettings,
+    /// A Bluetooth device row: connect it, or disconnect the connected one.
+    BtDevice {
+        address: String,
+        connected: bool,
+    },
     /// Notification center / toasts.
     NotifActivate(u32),
     NotifGroupToggle(String),
@@ -262,8 +264,8 @@ pub enum Message {
 /// Idle timeouts the shell registers (`wayl::idles`): stage 1 locks, 2 suspends.
 /// Stage 0 (dim) is reserved for a gamma dim that needs `wayl` first.
 const IDLE_TIMEOUTS: [std::time::Duration; 2] = [
-    std::time::Duration::from_secs(5 * 60),
-    std::time::Duration::from_secs(10 * 60),
+    std::time::Duration::from_mins(5),
+    std::time::Duration::from_mins(10),
 ];
 
 /// The `Power` board's time-of-day greeting.
@@ -282,7 +284,11 @@ fn greeting() -> String {
 fn uptime() -> String {
     let secs: u64 = std::fs::read_to_string("/proc/uptime")
         .ok()
-        .and_then(|s| s.split_whitespace().next().and_then(|n| n.parse::<f64>().ok()))
+        .and_then(|s| {
+            s.split_whitespace()
+                .next()
+                .and_then(|n| n.parse::<f64>().ok())
+        })
         .map_or(0, |n| n as u64);
     let (d, h) = (secs / 86400, secs % 86400 / 3600);
     match (d, h) {
@@ -301,6 +307,9 @@ fn ago(when: std::time::Instant) -> String {
     }
 }
 
+/// The shell's switches outnumber clippy's bool budget by design — each is a
+/// different surface's visibility or a user's toggle.
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Default)]
 pub struct Shell {
     niri: Arc<Snapshot>,
@@ -319,7 +328,7 @@ pub struct Shell {
     dnd: bool,
     /// The OSD showing right now, and its hold deadline.
     osd: Option<crate::panels::Osd>,
-    /// Centered power menu: the focused action's index into POWER_ACTIONS.
+    /// Centered power menu: the focused action's index into `POWER_ACTIONS`.
     power_focus: usize,
     /// The quick settings page showing.
     qs_page: crate::panels::QsPage,
@@ -353,7 +362,7 @@ pub struct Shell {
     brightness: f32,
     /// Wi-Fi networks and Bluetooth devices for the QS pages (service-fed).
     aps: Vec<(String, String, bool, bool)>,
-    bt_devices: Vec<(String, String, bool)>,
+    bt_devices: Vec<(String, String, String, bool)>,
     /// The last merged services snapshot (wifi/bt toggles read it).
     svc: Option<Arc<services::State>>,
     /// wlr-gamma-control handle; `night` toggles the temperature on it.
@@ -391,8 +400,7 @@ impl Shell {
         };
         shell.tick();
         let task = crate::pipeline::current_wallpaper()
-            .map(|path| shell.set_wallpaper(path))
-            .unwrap_or_else(Task::none);
+            .map_or_else(Task::none, |path| shell.set_wallpaper(path));
         (shell, task)
     }
 
@@ -404,6 +412,11 @@ impl Shell {
         self.uptime = uptime();
     }
 
+    /// The message enum is wide by design; each arm stays small.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per message; splitting hides the table"
+    )]
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Niri(snapshot) => {
@@ -426,7 +439,7 @@ impl Shell {
                 Task::none()
             }
             Message::Services(state) => {
-                self.statuses = state.statuses.clone();
+                self.statuses.clone_from(&state.statuses);
                 self.volume = f32::from(state.audio.volume).min(150.0) / 100.0;
                 if let Some(b) = state.brightness {
                     self.brightness = f32::from(b) / 100.0;
@@ -438,7 +451,11 @@ impl Shell {
                     .map(|ap| {
                         (
                             ap.ssid.clone(),
-                            format!("{}%{}", ap.strength, if ap.secured { " · secured" } else { "" }),
+                            format!(
+                                "{}%{}",
+                                ap.strength,
+                                if ap.secured { " · secured" } else { "" }
+                            ),
                             ap.secured,
                             ap.connected,
                         )
@@ -449,8 +466,19 @@ impl Shell {
                     .devices
                     .iter()
                     .map(|d| {
-                        let status = if d.connected { "Connected" } else if d.paired { "Paired" } else { "Available" };
-                        (d.name.clone(), status.to_owned(), d.connected)
+                        let status = if d.connected {
+                            "Connected"
+                        } else if d.paired {
+                            "Paired"
+                        } else {
+                            "Available"
+                        };
+                        (
+                            d.name.clone(),
+                            status.to_owned(),
+                            d.address.clone(),
+                            d.connected,
+                        )
                     })
                     .collect();
                 self.saver = state.profile == services::Profile::PowerSaver;
@@ -567,8 +595,7 @@ impl Shell {
             Message::PowerToggle => self.toggle_centered(CenteredRole::Power),
             Message::PowerMove(dir) => {
                 let n = crate::panels::POWER_ACTIONS.len() as i8;
-                self.power_focus =
-                    ((self.power_focus as i8 + dir).rem_euclid(n)) as usize;
+                self.power_focus = ((self.power_focus as i8 + dir).rem_euclid(n)) as usize;
                 Task::none()
             }
             Message::PowerPick(action) => {
@@ -581,7 +608,18 @@ impl Shell {
             Message::PowerConfirm => self.power_confirm(),
             Message::QsPage(page) => {
                 self.qs_page = page;
+                if page == crate::panels::QsPage::Wifi {
+                    services::wifi_rescan();
+                }
                 self.reconcile()
+            }
+            Message::BtDevice { address, connected } => {
+                if connected {
+                    services::bt_disconnect(&address);
+                } else {
+                    services::bt_connect(&address);
+                }
+                Task::none()
             }
             Message::QsToggleWifi => {
                 services::set_wifi(!self.svc_wifi());
@@ -636,9 +674,7 @@ impl Shell {
             Message::Polkit(event) => match event {
                 crate::polkit::Event::Prompt(prompt) => {
                     self.polkit_password.clear();
-                    let output = self
-                        .focused_output()
-                        .unwrap_or_else(|| String::new());
+                    let output = self.focused_output().unwrap_or_default();
                     self.polkit = Some(prompt);
                     self.centered = Some((CenteredRole::Polkit, output));
                     self.reconcile()
@@ -695,7 +731,7 @@ impl Shell {
                 }
             }
             Message::Pipeline(done) => {
-                self.wallpaper = done.wallpaper.clone();
+                self.wallpaper.clone_from(&done.wallpaper);
                 self.wallpaper_luminance = done.luminance;
                 self.scheme = Some(match self.variant {
                     triton_design::Variant::Dark => done.dark,
@@ -779,11 +815,11 @@ impl Shell {
 
     /// Flip `role` on/off on the focused output (centered modals only).
     fn toggle_centered(&mut self, role: CenteredRole) -> Task<Message> {
-        if let Some((r, _)) = self.centered {
-            if std::mem::discriminant(&r) == std::mem::discriminant(&role) {
-                self.centered = None;
-                return self.reconcile();
-            }
+        if let Some((r, _)) = self.centered
+            && std::mem::discriminant(&r) == std::mem::discriminant(&role)
+        {
+            self.centered = None;
+            return self.reconcile();
         }
         let Some(output) = self.focused_output() else {
             return Task::none();
@@ -805,7 +841,7 @@ impl Shell {
 
     /// Send `message` after `delay`; the bar's dwell timers and the OSD hold.
     fn after(delay: std::time::Duration, message: Message) -> Task<Message> {
-        Task::perform(tokio::time::sleep(delay), move |_| message)
+        Task::perform(tokio::time::sleep(delay), move |()| message)
     }
 
     /// Run the focused power action (`Power` board: Enter confirms).
@@ -949,10 +985,10 @@ impl Shell {
     fn activate_hit(&mut self, kind: &crate::launch::HitKind) -> Task<Message> {
         match kind {
             crate::launch::HitKind::App { app, action } => {
-                if let Some(index) = &self.index {
-                    if let Err(e) = crate::launch::launch_app(index, *app, *action) {
-                        tracing::warn!(%e, "launch failed");
-                    }
+                if let Some(index) = &self.index
+                    && let Err(e) = crate::launch::launch_app(index, *app, *action)
+                {
+                    tracing::warn!(%e, "launch failed");
                 }
             }
             crate::launch::HitKind::Window { id } => niri::focus_window(*id),
@@ -970,6 +1006,10 @@ impl Shell {
     }
 
     /// One `triton msg` line, on the focused output where no output is named.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the command table is flat and reads as one"
+    )]
     fn command(&mut self, line: &str) -> Task<Message> {
         let words: Vec<_> = line.split_whitespace().collect();
         let mut toggle = |message: fn(String) -> Message| match self.focused_output() {
@@ -1015,26 +1055,24 @@ impl Shell {
                         muted: true,
                     })
                 }
-                set => set
-                    .parse::<u8>()
-                    .ok()
-                    .map(|v| self.volume_set(v))
-                    .unwrap_or_else(|| {
+                set => set.parse::<u8>().ok().map_or_else(
+                    || {
                         tracing::warn!(?set, "msg: unknown volume arg");
                         Task::none()
-                    }),
+                    },
+                    |v| self.volume_set(v),
+                ),
             },
             ["brightness", arg] => match *arg {
                 "up" => self.brightness_step(0.05),
                 "down" => self.brightness_step(-0.05),
-                set => set
-                    .parse::<u8>()
-                    .ok()
-                    .map(|v| self.brightness_set(v))
-                    .unwrap_or_else(|| {
+                set => set.parse::<u8>().ok().map_or_else(
+                    || {
                         tracing::warn!(?set, "msg: unknown brightness arg");
                         Task::none()
-                    }),
+                    },
+                    |v| self.brightness_set(v),
+                ),
             },
             ["mic", "mute"] => {
                 services::set_mic_mute(true);
@@ -1114,7 +1152,7 @@ impl Shell {
     }
 
     fn volume_set(&mut self, percent: u8) -> Task<Message> {
-        self.volume = (percent as f32 / 100.0).clamp(0.0, 1.5);
+        self.volume = (f32::from(percent) / 100.0).clamp(0.0, 1.5);
         services::set_volume(self.volume * 100.0);
         self.show_osd(crate::panels::Osd::Volume {
             percent,
@@ -1131,7 +1169,7 @@ impl Shell {
     }
 
     fn brightness_set(&mut self, percent: u8) -> Task<Message> {
-        self.brightness = (percent.max(1) as f32) / 100.0;
+        self.brightness = f32::from(percent.max(1)) / 100.0;
         services::set_brightness(self.brightness * 100.0);
         self.show_osd(crate::panels::Osd::Brightness {
             percent: percent.max(1),
@@ -1206,18 +1244,20 @@ impl Shell {
                 .into();
             }
             Role::PowerMenu => {
-                return measure(measure_height(self.power_menu_view(), {
-                    let id = id;
-                    move |d, h| Message::Measured(id, d, h)
-                }), move |d, w| Message::Measured(id, d, w))
+                return measure(
+                    measure_height(self.power_menu_view(), {
+                        move |d, h| Message::Measured(id, d, h)
+                    }),
+                    move |d, w| Message::Measured(id, d, w),
+                )
                 .into();
             }
             Role::Polkit => {
                 return measure_height(
                     crate::panels::polkit_dialog(
-                        self.polkit.as_ref().map_or("Authentication required", |p| {
-                            p.message.as_str()
-                        }),
+                        self.polkit
+                            .as_ref()
+                            .map_or("Authentication required", |p| p.message.as_str()),
                         self.polkit.as_ref().map_or("", |p| p.user.as_str()),
                         &self.polkit_password,
                     ),
@@ -1226,16 +1266,12 @@ impl Shell {
                 .into();
             }
             Role::Toasts => {
-                return measure_height(self.toasts_view(), move |d, h| {
-                    Message::Measured(id, d, h)
-                })
-                .into();
+                return measure_height(self.toasts_view(), move |d, h| Message::Measured(id, d, h))
+                    .into();
             }
             Role::Osd => {
                 return measure(
-                    measure_height(self.osd_view(), move |d, h| {
-                        Message::Measured(id, d, h)
-                    }),
+                    measure_height(self.osd_view(), move |d, h| Message::Measured(id, d, h)),
                     move |d, w| Message::Measured(id, d, w),
                 )
                 .into();
@@ -1339,43 +1375,55 @@ impl Shell {
             .push(chip("Apps", None, false))
             .push(chip("Files", None, false))
             .push(chip("Windows", None, false));
-        let top_hit = surface::card(
-            Row::new()
-                .spacing(14)
-                .align_y(Vertical::Center)
-                .push(surface::icon_disc(Icon::Terminal))
-                .push(
-                    Column::new()
-                        .push(text::text("Console", TypeStyle::TITLE_M))
-                        .push(
-                            text::text("Terminal emulator · GNOME", TypeStyle::BODY_S)
-                                .class(Tone::OnSurfaceVariant),
-                        ),
-                )
-                .push(Space::new().width(Length::Fill))
-                .push(button::button(
-                    "Open",
-                    None,
-                    button::Kind::Filled,
-                    button::Size::S,
+        // `=` scope swaps the whole results list for the math card; the top
+        // hit is the first hit of the first group, with the app's actions.
+        let body: Element<'_, Message> =
+            if let crate::launch::Scope::Math(q) = crate::launch::scope(&self.query) {
+                match crate::launch::math(q) {
+                    Some((expr, result)) => surface::card(
+                        Row::new()
+                            .spacing(14)
+                            .align_y(Vertical::Center)
+                            .push(surface::icon_disc(Icon::Calculate))
+                            .push(
+                                Column::new()
+                                    .push(text::text(result.clone(), TypeStyle::TITLE_M))
+                                    .push(
+                                        text::text(expr.clone(), TypeStyle::BODY_S)
+                                            .class(Tone::OnSurfaceVariant),
+                                    ),
+                            ),
+                    )
+                    .padding(14)
+                    .width(Length::Fill)
+                    .into(),
+                    None => text::text("Not an expression", TypeStyle::BODY_M)
+                        .class(Tone::OnSurfaceVariant)
+                        .into(),
+                }
+            } else {
+                let first = self
+                    .results
+                    .as_ref()
+                    .and_then(|r| r.groups.first())
+                    .and_then(|(_, hits)| hits.first());
+                let mut col = Column::new().spacing(14);
+                if let Some(hit) = first {
+                    col = col
+                        .push(text::eyebrow("Top hit"))
+                        .push(self.top_hit_card(hit));
+                }
+                col.push(launcher_results(
+                    self.results.as_deref().unwrap_or(&EMPTY_RESULTS),
                 ))
-                .push(button::button(
-                    "New window",
-                    None,
-                    button::Kind::Text,
-                    button::Size::S,
-                )),
-        )
-        .padding(14)
-        .width(Length::Fill);
+                .into()
+            };
         surface::surface(
             Column::new()
                 .spacing(14)
                 .push(field)
                 .push(scopes)
-                .push(text::eyebrow("Top hit"))
-                .push(top_hit)
-                .push(launcher_results(self.results.as_deref().unwrap_or(&EMPTY_RESULTS)))
+                .push(body)
                 .push(launcher_hints()),
             Surface::LayerPanel(Material::Thick),
         )
@@ -1383,6 +1431,53 @@ impl Shell {
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+    }
+
+    /// The board's top-hit card: the first result blown up, with the app's
+    /// desktop actions as trailing buttons when it has any.
+    fn top_hit_card<'a>(&'a self, hit: &'a crate::launch::Hit) -> Element<'a, Message> {
+        let mut row = Row::new()
+            .spacing(14)
+            .align_y(Vertical::Center)
+            .push(surface::icon_disc(Icon::Apps))
+            .push(
+                Column::new()
+                    .push(text::text(hit.title.clone(), TypeStyle::TITLE_M))
+                    .push(
+                        text::text(
+                            hit.supporting.clone().unwrap_or_default(),
+                            TypeStyle::BODY_S,
+                        )
+                        .class(Tone::OnSurfaceVariant),
+                    ),
+            )
+            .push(Space::new().width(Length::Fill))
+            .push(
+                button::button("Open", None, button::Kind::Filled, button::Size::S)
+                    .on_press(Message::LaunchHit(hit.kind.clone())),
+            );
+        // Desktop actions ("New window", "Incognito") become Text buttons.
+        if let crate::launch::HitKind::App { app, .. } = hit.kind
+            && let Some(app_obj) = self.index.as_ref().and_then(|i| i.apps.get(app))
+        {
+            for (ai, action) in app_obj.actions.iter().enumerate() {
+                row = row.push(
+                    button::button(
+                        action.name.as_str(),
+                        None,
+                        button::Kind::Text,
+                        button::Size::S,
+                    )
+                    .on_press(Message::LaunchHit(
+                        crate::launch::HitKind::App {
+                            app,
+                            action: Some(ai),
+                        },
+                    )),
+                );
+            }
+        }
+        surface::card(row).padding(14).width(Length::Fill).into()
     }
 
     fn bar_start<'a>(&'a self, output: &'a str) -> Element<'a, Message> {
@@ -1412,14 +1507,19 @@ impl Shell {
             .notifs
             .groups()
             .into_iter()
-            .map(|g| (g.app.clone(), g.items.iter().map(|n| self.notif_view(n)).collect()))
+            .map(|g| {
+                (
+                    g.app.clone(),
+                    g.items.iter().map(|n| self.notif_view(n)).collect(),
+                )
+            })
             .collect();
         let expanded = self.notif_expanded.clone();
-        crate::panels::notification_center(groups, move |app| expanded.contains(app), self.dnd)
+        crate::panels::notification_center(&groups, move |app| expanded.contains(app), self.dnd)
     }
 
     /// Map a store row onto the card's plain inputs (icon hint → glyph fallback).
-    fn notif_view<'a>(&self, n: &'a crate::notify::Notification) -> crate::panels::NotifView {
+    fn notif_view(&self, n: &crate::notify::Notification) -> crate::panels::NotifView {
         let _ = self;
         crate::panels::NotifView {
             id: n.id,
@@ -1552,9 +1652,7 @@ impl Shell {
                         .and_then(|c| c.to_digit(10))
                         .and_then(|n| (n as usize).checked_sub(1))
                         .filter(|i| *i < crate::panels::POWER_ACTIONS.len())
-                        .map(|i| {
-                            Message::PowerPick(crate::panels::POWER_ACTIONS[i])
-                        }),
+                        .map(|i| Message::PowerPick(crate::panels::POWER_ACTIONS[i])),
                     _ => None,
                 },
                 _ => None,

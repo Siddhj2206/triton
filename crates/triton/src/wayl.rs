@@ -85,16 +85,17 @@ pub fn start() -> Option<Night> {
 pub fn idles(timeouts: &'static [Duration]) -> Subscription<IdleEvent> {
     fn stream(timeouts: &'static [Duration]) -> impl Stream<Item = IdleEvent> {
         let (tx, rx) = mpsc::unbounded();
-        match shared() {
-            Some(shared) => shared.send(Cmd::Watch {
+        if let Some(shared) = shared() {
+            shared.send(Cmd::Watch {
                 timeouts: timeouts.iter().map(|t| millis(*t)).collect(),
                 tx,
-            }),
-            None => tracing::warn!("wayl: no wayland connection; idle timeouts disabled"),
+            });
+        } else {
+            tracing::warn!("wayl: no wayland connection; idle timeouts disabled");
         }
         rx
     }
-    Subscription::run_with(timeouts, |t| stream(*t))
+    Subscription::run_with(timeouts, |t| stream(t))
 }
 
 /// The worker's shared handle: the command channel plus what a caller thread
@@ -138,7 +139,10 @@ enum Cmd {
     /// Apply this color temperature on every gamma-controlled output.
     Temperature(u16),
     /// Register one idle notification per timeout; events go to `tx`.
-    Watch { timeouts: Vec<u32>, tx: mpsc::UnboundedSender<IdleEvent> },
+    Watch {
+        timeouts: Vec<u32>,
+        tx: mpsc::UnboundedSender<IdleEvent>,
+    },
 }
 
 /// udata of an `ext_idle_notification_v1`: which of its subscription's
@@ -154,7 +158,7 @@ struct Output {
     /// find it again.
     name: u32,
     /// The bound object, kept for a gamma manager that may arrive later.
-    output: WlOutput,
+    wl: WlOutput,
     control: Option<ZwlrGammaControlV1>,
     /// From the control's `gamma_size` event; 0 until it arrives.
     ramp: usize,
@@ -178,18 +182,17 @@ struct Watch {
 impl Watch {
     /// (Re)create the notification objects — initial registration, and a new
     /// seat replacing a removed one.
-    fn register(
-        &mut self,
-        notifier: &ExtIdleNotifierV1,
-        seat: &WlSeat,
-        qh: &QueueHandle<State>,
-    ) {
+    fn register(&mut self, notifier: &ExtIdleNotifierV1, seat: &WlSeat, qh: &QueueHandle<State>) {
         for notification in self.notifications.drain(..) {
             notification.destroy();
         }
         for (index, &ms) in self.timeouts.iter().enumerate() {
-            let note = Note { index, tx: self.tx.clone() };
-            self.notifications.push(notifier.get_idle_notification(ms, seat, qh, note));
+            let note = Note {
+                index,
+                tx: self.tx.clone(),
+            };
+            self.notifications
+                .push(notifier.get_idle_notification(ms, seat, qh, note));
         }
     }
 }
@@ -224,7 +227,11 @@ impl State {
         match cmd {
             Cmd::Temperature(kelvin) => self.temperature(kelvin),
             Cmd::Watch { timeouts, tx } => {
-                let mut watch = Watch { timeouts, notifications: Vec::new(), tx };
+                let mut watch = Watch {
+                    timeouts,
+                    notifications: Vec::new(),
+                    tx,
+                };
                 if let (Some(notifier), Some(seat)) = (&self.notifier, &self.seat) {
                     watch.register(notifier, seat, qh);
                 } else {
@@ -242,7 +249,9 @@ impl State {
 
     fn temperature(&mut self, kelvin: u16) {
         for output in &mut self.outputs {
-            let Some(control) = &output.control else { continue };
+            let Some(control) = &output.control else {
+                continue;
+            };
             if output.ramp == 0 {
                 continue; // no gamma_size yet (or a failed control)
             }
@@ -289,7 +298,12 @@ impl State {
                 .gamma
                 .as_ref()
                 .map(|manager| manager.get_gamma_control(&output, qh, name));
-            self.outputs.push(Output { name, output, control, ramp: 0 });
+            self.outputs.push(Output {
+                name,
+                wl: output,
+                control,
+                ramp: 0,
+            });
         } else if interface == ExtIdleNotifierV1::interface().name {
             self.notifier = Some(registry.bind(name, 1, qh, ()));
             self.notifier_name = Some(name);
@@ -297,7 +311,7 @@ impl State {
             let manager: ZwlrGammaControlManagerV1 = registry.bind(name, 1, qh, ());
             // The manager may arrive after the outputs did.
             for output in &mut self.outputs {
-                let control = manager.get_gamma_control(&output.output, qh, output.name);
+                let control = manager.get_gamma_control(&output.wl, qh, output.name);
                 output.control = Some(control);
             }
             self.gamma = Some(manager);
@@ -330,12 +344,16 @@ impl Dispatch<WlRegistry, ()> for State {
         state: &mut Self,
         registry: &WlRegistry,
         event: wl_registry::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         qhandle: &QueueHandle<Self>,
     ) {
         match event {
-            wl_registry::Event::Global { name, interface, version } => {
+            wl_registry::Event::Global {
+                name,
+                interface,
+                version,
+            } => {
                 tracing::debug!(name, %interface, version, "wayl: global");
                 state.global(name, &interface, registry, qhandle);
             }
@@ -352,10 +370,11 @@ impl Dispatch<WlSeat, ()> for State {
         _: &mut Self,
         _: &WlSeat,
         _: wl_seat::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 /// Outputs are only handles for the gamma manager; their events are unused.
@@ -364,10 +383,11 @@ impl Dispatch<WlOutput, ()> for State {
         _: &mut Self,
         _: &WlOutput,
         _: wl_output::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 /// `done` replies exist only to wake the worker for queued commands; see
@@ -377,10 +397,11 @@ impl Dispatch<WlCallback, ()> for State {
         _: &mut Self,
         _: &WlCallback,
         _: wl_callback::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 /// The notifier and manager interfaces have no events.
@@ -389,10 +410,11 @@ impl Dispatch<ExtIdleNotifierV1, ()> for State {
         _: &mut Self,
         _: &ExtIdleNotifierV1,
         _: ext_idle_notifier_v1::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 impl Dispatch<ZwlrGammaControlManagerV1, ()> for State {
@@ -400,10 +422,11 @@ impl Dispatch<ZwlrGammaControlManagerV1, ()> for State {
         _: &mut Self,
         _: &ZwlrGammaControlManagerV1,
         _: zwlr_gamma_control_manager_v1::Event,
-        _: &(),
+        (): &(),
         _: &Connection,
         _: &QueueHandle<Self>,
-    ) {}
+    ) {
+    }
 }
 
 impl Dispatch<ExtIdleNotificationV1, Note> for State {
@@ -461,7 +484,7 @@ impl Dispatch<ZwlrGammaControlV1, u32> for State {
     }
 }
 
-/// `Duration` to protocol milliseconds, saturating at u32::MAX (~49 days).
+/// `Duration` to protocol milliseconds, saturating at `u32::MAX` (~49 days).
 fn millis(timeout: Duration) -> u32 {
     u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX)
 }
@@ -471,7 +494,11 @@ fn millis(timeout: Duration) -> u32 {
 /// and gammastep also use.
 fn whitepoint(kelvin: u16) -> [f64; 3] {
     let t = (f64::from(kelvin) / 100.0).clamp(10.0, 400.0);
-    let r = if t <= 66.0 { 1.0 } else { 1.292936 * (t - 60.0).powf(-0.1332047) };
+    let r = if t <= 66.0 {
+        1.0
+    } else {
+        1.292936 * (t - 60.0).powf(-0.1332047)
+    };
     let g = if t <= 66.0 {
         0.3900816 * t.ln() - 0.6318414
     } else {
@@ -497,7 +524,11 @@ fn gamma_table(kelvin: u16, size: usize) -> Vec<u16> {
     let mut table = vec![0; 3 * size];
     for (factor, ramp) in whitepoint(kelvin).into_iter().zip(table.chunks_mut(size)) {
         for (i, entry) in ramp.iter_mut().enumerate() {
-            let level = if size > 1 { i as f64 / (size - 1) as f64 } else { 1.0 };
+            let level = if size > 1 {
+                i as f64 / (size - 1) as f64
+            } else {
+                1.0
+            };
             *entry = (level * factor * 65535.0).round().min(65535.0) as u16;
         }
     }
@@ -513,7 +544,12 @@ fn ramp_file(table: &[u16]) -> Option<File> {
     for _ in 0..8 {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let path = dir.join(format!("triton-gamma-{}-{seq}", std::process::id()));
-        match OpenOptions::new().read(true).write(true).create_new(true).open(&path) {
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
             Ok(mut file) => {
                 let mut bytes = Vec::with_capacity(table.len() * 2);
                 for value in table {
@@ -527,7 +563,7 @@ fn ramp_file(table: &[u16]) -> Option<File> {
                 let _ = std::fs::remove_file(&path);
                 return Some(file);
             }
-            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
             Err(e) => {
                 tracing::warn!(%e, path = %path.display(), "wayl: cannot create a gamma table");
                 return None;
@@ -588,7 +624,13 @@ fn connect() -> Option<Shared> {
         tracing::error!(%e, "wayl: cannot start the worker thread");
         return None;
     }
-    Some(Shared { tx, conn, display, qh, gamma })
+    Some(Shared {
+        tx,
+        conn,
+        display,
+        qh,
+        gamma,
+    })
 }
 
 /// The worker loop: drain queued commands, flush (ramp fds stay open until

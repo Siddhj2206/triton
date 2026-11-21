@@ -25,7 +25,7 @@ use iced_futures::Subscription;
 use iced_futures::futures::channel::mpsc;
 use iced_futures::futures::{Stream, StreamExt};
 use zbus::object_server::SignalEmitter;
-use zbus::zvariant::Value;
+use zbus::zvariant::Variant as Value;
 use zbus::{Connection, interface};
 
 const NAME: &str = "org.freedesktop.Notifications";
@@ -161,7 +161,8 @@ struct Notifications {
 impl Notifications {
     /// `Notify`: the one that does the work. `replaces_id == 0` allocates.
     #[allow(
-        clippy::too_many_arguments, clippy::needless_pass_by_value,
+        clippy::too_many_arguments,
+        clippy::needless_pass_by_value,
         reason = "the Notify signature is fixed by the D-Bus spec"
     )]
     fn notify(
@@ -215,7 +216,7 @@ impl Notifications {
         ["actions", "body", "persistence"].map(String::from).into()
     }
 
-    /// `GetServerInformation` -> (name, vendor, version, spec_version).
+    /// `GetServerInformation` -> (name, vendor, version, `spec_version`).
     #[allow(clippy::unused_self, reason = "interface methods need a receiver")]
     fn get_server_information(&self) -> (String, String, String, String) {
         ("triton".into(), "Triton".into(), "0.1".into(), "1.2".into())
@@ -274,7 +275,9 @@ fn icon(app_icon: &str, hints: &HashMap<String, Value<'_>>) -> Option<String> {
 /// string is dropped.
 fn pair_actions(actions: &[String]) -> Vec<(String, String)> {
     actions
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| (pair[0].clone(), pair[1].clone()))
         .collect()
 }
@@ -283,7 +286,11 @@ fn pair_actions(actions: &[String]) -> Vec<(String, String)> {
 /// chat apps put `image-data` on every message.
 fn log_ignored_hints(hints: &HashMap<String, Value<'_>>) {
     const IGNORED: [&str; 5] = [
-        "image-data", "image_data", "sound-file", "sound-name", "suppress-sound",
+        "image-data",
+        "image_data",
+        "sound-file",
+        "sound-name",
+        "suppress-sound",
     ];
     static ONCE: Once = Once::new();
     if !hints.keys().any(|k| IGNORED.contains(&k.as_str())) {
@@ -345,7 +352,11 @@ fn serve(events: mpsc::UnboundedSender<Event>) {
             tracing::warn!(%e, "notify: org.freedesktop.Notifications is taken");
             return;
         }
-        let signals = match conn.object_server().interface::<_, Notifications>(PATH).await {
+        let signals = match conn
+            .object_server()
+            .interface::<_, Notifications>(PATH)
+            .await
+        {
             Ok(signals) => signals,
             Err(e) => {
                 tracing::warn!(%e, "notify: lost the served object");
@@ -383,7 +394,7 @@ fn stream() -> impl Stream<Item = Event> {
 /// `/org/freedesktop/Notifications` and forwards what it stores. A missing
 /// bus logs a warn and ends — never panics, never retries.
 pub fn server() -> Subscription<Event> {
-    Subscription::run_with((), |_| stream())
+    Subscription::run_with((), |()| stream())
 }
 
 #[cfg(test)]
@@ -458,7 +469,10 @@ mod tests {
         let groups = store.groups();
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].app, "chat");
-        assert_eq!(groups[0].items.iter().map(|n| n.id).collect::<Vec<_>>(), [3, 1]);
+        assert_eq!(
+            groups[0].items.iter().map(|n| n.id).collect::<Vec<_>>(),
+            [3, 1]
+        );
         assert_eq!(groups[1].app, "cal");
     }
 
@@ -466,17 +480,29 @@ mod tests {
     fn toasts_drop_expired_and_dnd_hides_non_critical() {
         let now = Instant::now();
         let mut store = Store::default();
-        store.upsert(note(1, "chat", Urgency::Normal, now, Duration::from_secs(6)));
+        store.upsert(note(
+            1,
+            "chat",
+            Urgency::Normal,
+            now,
+            Duration::from_secs(6),
+        ));
         // Arrived 10 s ago with a 6 s timeout: expired.
         store.upsert(note(
             2,
             "chat",
             Urgency::Normal,
-            now - Duration::from_secs(10),
+            now.checked_sub(Duration::from_secs(10)).unwrap(),
             Duration::from_secs(6),
         ));
         // Critical with `NEVER` outlives everything and ignores DND.
-        store.upsert(note(3, "cal", Urgency::Critical, now - Duration::from_secs(600), NEVER));
+        store.upsert(note(
+            3,
+            "cal",
+            Urgency::Critical,
+            now.checked_sub(Duration::from_secs(600)).unwrap(),
+            NEVER,
+        ));
         assert_eq!(ids(&store.toasts(now, false)), [3, 1]);
         assert_eq!(ids(&store.toasts(now, true)), [3]);
     }

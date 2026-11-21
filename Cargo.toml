@@ -20,8 +20,6 @@ image = { version = "0.25", default-features = false }
 libc = "0.2"
 libloading = "0.9"
 material-colors = { version = "0.5.0", default-features = false }
-thiserror = "2"
-iced = { version = "0.14.0", default-features = false }
 iced_core = { version = "0.14.0", default-features = false }
 iced_futures = { version = "0.14.0", default-features = false }
 iced_renderer = { version = "0.14.0", default-features = false }
@@ -37,7 +35,7 @@ niri-ipc = { version = "26.4.0", default-features = false }
 tokio = { version = "1.54.1", default-features = false }
 tracing = "0.1.44"
 wayland-client = { version = "0.31", default-features = false }
-wayland-protocols = { version = "0.32", default-features = false, features = ["client"] }
+wayland-protocols = { version = "0.32", default-features = false, features = ["client", "staging"] }
 wayland-protocols-wlr = { version = "0.3", default-features = false, features = ["client"] }
 tracing-subscriber = { version = "0.3.23", default-features = false }
 # Pinned: iced_layershell 0.19.1 (via iced_exdevtools) breaks on winit-core beta.4,

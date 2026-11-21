@@ -22,7 +22,10 @@ fn pick_service(exists: impl Fn(&str) -> bool) -> &'static str {
             ["/etc/pam.d/triton-lock", "/usr/lib/pam.d/triton-lock"].as_slice(),
             "triton-lock",
         ),
-        (["/etc/pam.d/login", "/usr/lib/pam.d/login"].as_slice(), "login"),
+        (
+            ["/etc/pam.d/login", "/usr/lib/pam.d/login"].as_slice(),
+            "login",
+        ),
         (["/etc/pam.d/su"].as_slice(), "su"),
     ] {
         if files.iter().any(|file| exists(file)) {
@@ -147,6 +150,7 @@ mod ffi {
                 if message.is_null() {
                     continue;
                 }
+                // The enclosing unsafe block covers the closure's derefs.
                 let text = || {
                     if (*message).msg.is_null() {
                         String::new()
@@ -194,12 +198,13 @@ mod ffi {
     /// One run of the PAM stack. Always `pam_end`s the handle it starts.
     pub fn authenticate(service: &str, user: &str, password: &str) -> anyhow::Result<()> {
         let lib = libpam()?;
-        let pam_start: Symbol<PamStart> = unsafe { lib.get(b"pam_start") }.context("pam_start")?;
-        let pam_authenticate: Symbol<PamAuthenticate> =
+        let pam_start: Symbol<'_, PamStart> =
+            unsafe { lib.get(b"pam_start") }.context("pam_start")?;
+        let pam_authenticate: Symbol<'_, PamAuthenticate> =
             unsafe { lib.get(b"pam_authenticate") }.context("pam_authenticate")?;
-        let pam_end: Symbol<PamEnd> = unsafe { lib.get(b"pam_end") }.context("pam_end")?;
+        let pam_end: Symbol<'_, PamEnd> = unsafe { lib.get(b"pam_end") }.context("pam_end")?;
         // Not every build needs account management; its absence is not fatal.
-        let pam_acct_mgmt: Option<Symbol<PamAcctMgmt>> =
+        let pam_acct_mgmt: Option<Symbol<'_, PamAcctMgmt>> =
             unsafe { lib.get(b"pam_acct_mgmt") }.ok();
 
         let service = CString::new(service).context("service name contains NUL")?;
@@ -210,7 +215,14 @@ mod ffi {
             appdata_ptr: password.as_ptr() as *mut c_void,
         };
         let mut handle: *mut PamHandle = ptr::null_mut();
-        let mut status = unsafe { pam_start(service.as_ptr(), user.as_ptr(), &conv, &mut handle) };
+        let mut status = unsafe {
+            pam_start(
+                service.as_ptr(),
+                user.as_ptr(),
+                &raw const conv,
+                &raw mut handle,
+            )
+        };
         if status != PAM_SUCCESS {
             bail!("pam_start failed (status {status})");
         }
@@ -221,7 +233,7 @@ mod ffi {
         if status == PAM_SUCCESS
             && let Some(acct) = &pam_acct_mgmt
         {
-            let acct_status = unsafe { acct(handle, 0) };
+            let acct_status = unsafe { (**acct)(handle, 0) };
             status = if acct_status == PAM_NEW_AUTHTOK_REQD {
                 tracing::info!("pam: password expired; unlocking anyway");
                 PAM_SUCCESS
@@ -244,15 +256,21 @@ mod ffi {
 mod tests {
     use super::*;
 
-    fn only(paths: &[&str]) -> impl Fn(&str) -> bool + '_ {
+    fn only<'a>(paths: &'a [&'a str]) -> impl Fn(&str) -> bool + 'a {
         move |p| paths.contains(&p)
     }
 
     #[test]
     fn service_prefers_triton_lock() {
         assert_eq!(pick_service(|_| false), "login");
-        assert_eq!(pick_service(only(&["/usr/lib/pam.d/triton-lock"])), "triton-lock");
-        assert_eq!(pick_service(only(&["/etc/pam.d/triton-lock", "/etc/pam.d/login"])), "triton-lock");
+        assert_eq!(
+            pick_service(only(&["/usr/lib/pam.d/triton-lock"])),
+            "triton-lock"
+        );
+        assert_eq!(
+            pick_service(only(&["/etc/pam.d/triton-lock", "/etc/pam.d/login"])),
+            "triton-lock"
+        );
         assert_eq!(pick_service(only(&["/usr/lib/pam.d/login"])), "login");
         assert_eq!(pick_service(only(&["/etc/pam.d/su"])), "su");
     }

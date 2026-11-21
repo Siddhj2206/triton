@@ -80,12 +80,13 @@ impl Index {
             if !seen.insert(entry.id().to_owned()) {
                 continue;
             }
-            match App::from_entry(&entry, &locales) {
-                Some(app) => apps.push(app),
-                None => debug!(id = %entry.id(), "skipped desktop entry"),
+            if let Some(app) = App::from_entry(&entry, &locales) {
+                apps.push(app);
+            } else {
+                debug!(id = %entry.id(), "skipped desktop entry");
             }
         }
-        apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        apps.sort_by_key(|a| a.name.to_lowercase());
         Self { apps }
     }
 }
@@ -99,7 +100,10 @@ impl App {
         if entry.hidden() || entry.no_display() {
             return None;
         }
-        if entry.desktop_entry("Type").is_some_and(|t| t != "Application") {
+        if entry
+            .desktop_entry("Type")
+            .is_some_and(|t| t != "Application")
+        {
             return None;
         }
         let exec = Exec(entry.parse_exec().ok()?);
@@ -129,7 +133,7 @@ impl App {
             generic: entry
                 .generic_name(locales)
                 .or_else(|| entry.comment(locales))
-                .map(|cow| cow.into_owned()),
+                .map(std::borrow::Cow::into_owned),
             exec,
             icon: entry.icon().map(str::to_owned),
             keywords: entry
@@ -228,11 +232,11 @@ mod tests {
     fn earlier_dir_shadows_and_hidden_masks() {
         let user = tempfile::tempdir().unwrap();
         let system = tempfile::tempdir().unwrap();
-        let body = |name: &str| {
-            format!("[Desktop Entry]\nType=Application\nName={name}\nExec=x\n")
-        };
-        let a = user.path().to_path_buf();
-        let b = system.path().to_path_buf();
+        let body = |name: &str| format!("[Desktop Entry]\nType=Application\nName={name}\nExec=x\n");
+        let a = user.path().join("applications");
+        let b = system.path().join("applications");
+        fs::create_dir(&a).unwrap();
+        fs::create_dir(&b).unwrap();
         write(&a, "app.desktop", &body("User App"));
         write(&b, "app.desktop", &body("System App"));
         write(
@@ -252,13 +256,15 @@ mod tests {
     #[test]
     fn exec_strips_field_codes_and_keeps_quoting() {
         let dir = tempfile::tempdir().unwrap();
+        let apps = dir.path().join("applications");
+        fs::create_dir(&apps).unwrap();
         write(
-            dir.path(),
+            &apps,
             "exec.desktop",
             "[Desktop Entry]\nType=Application\nName=E\n\
              Exec=run --name \"two words\" %f %u\n",
         );
-        let index = Index::scan_in(&[dir.path().to_path_buf()]);
+        let index = Index::scan_in(&[apps]);
         let exec = &index.apps[0].exec.0;
         // Quoting kept "two words" as one arg; the field codes went away.
         assert_eq!(exec[..], ["run", "--name", "two words"]);
@@ -267,14 +273,16 @@ mod tests {
     #[test]
     fn actions_are_parsed() {
         let dir = tempfile::tempdir().unwrap();
+        let apps = dir.path().join("applications");
+        fs::create_dir(&apps).unwrap();
         write(
-            dir.path(),
+            &apps,
             "act.desktop",
             "[Desktop Entry]\nType=Application\nName=Browser\nExec=browser %U\n\
              Actions=new-window;\n\n\
              [Desktop Action new-window]\nName=New window\nExec=browser --new-window\n",
         );
-        let index = Index::scan_in(&[dir.path().to_path_buf()]);
+        let index = Index::scan_in(&[apps]);
         let app = &index.apps[0];
         assert_eq!(app.actions.len(), 1);
         assert_eq!(app.actions[0].name, "New window");
@@ -284,13 +292,15 @@ mod tests {
     #[test]
     fn try_exec_missing_binary_drops_entry() {
         let dir = tempfile::tempdir().unwrap();
+        let apps = dir.path().join("applications");
+        fs::create_dir(&apps).unwrap();
         write(
-            dir.path(),
+            &apps,
             "gone.desktop",
             "[Desktop Entry]\nType=Application\nName=Gone\n\
              Exec=x\nTryExec=definitely-not-a-real-binary-triton\n",
         );
-        let index = Index::scan_in(&[dir.path().to_path_buf()]);
+        let index = Index::scan_in(&[apps]);
         assert!(index.apps.is_empty());
     }
 }
