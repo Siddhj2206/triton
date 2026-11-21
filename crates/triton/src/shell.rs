@@ -27,6 +27,18 @@ pub enum Role {
     Launcher,
     /// The notification center (`Notifications` board).
     Notifications,
+    /// The wallpaper image on the background layer (`Wallpaper` board).
+    Wallpaper,
+    /// The transient pill above the bottom edge (`OSD` board).
+    Osd,
+    /// The top-right toast stack (`Notifications` board).
+    Toasts,
+    /// The quick settings panel (`QuickSettings` board).
+    QuickSettings,
+    /// The centered power menu (`Power` board).
+    PowerMenu,
+    /// The polkit authentication dialog (solid, centered).
+    Polkit,
 }
 
 impl Role {
@@ -93,6 +105,9 @@ pub struct SurfaceSpec {
     /// Corner radius of the blur triton asks niri for (ext-background-effect),
     /// matching the surface's drawn shape. `None` is no background effect.
     pub blur_radius: Option<u32>,
+    /// Whether pointer events fall through to what is below (the OSD: "Focus:
+    /// never takes it. Pointer events pass through"). Create-time only.
+    pub input_passthrough: bool,
 }
 
 /// The bar islands' layer-shell namespace; niri's layer rule rounds and shadows
@@ -108,6 +123,18 @@ pub const SCRIM_NAMESPACE: &str = "triton-scrim";
 pub const LAUNCHER_NAMESPACE: &str = "triton-launcher";
 /// The notification center's namespace; a layer rule rounds and shadows it.
 pub const NOTIFICATIONS_NAMESPACE: &str = "triton-notifications";
+/// The wallpaper's namespace; background layer, no rule matches it.
+pub const WALLPAPER_NAMESPACE: &str = "triton-wallpaper";
+/// The OSD's namespace; a layer rule rounds and shadows it.
+pub const OSD_NAMESPACE: &str = "triton-osd";
+/// The toast stack's namespace; a layer rule rounds and shadows it.
+pub const TOASTS_NAMESPACE: &str = "triton-toasts";
+/// Quick settings' namespace; a layer rule rounds and shadows it.
+pub const QUICK_SETTINGS_NAMESPACE: &str = "triton-quicksettings";
+/// The power menu's namespace; a layer rule rounds and shadows it.
+pub const POWER_NAMESPACE: &str = "triton-power";
+/// The polkit dialog's namespace; a layer rule rounds and shadows it.
+pub const POLKIT_NAMESPACE: &str = "triton-polkit";
 
 /// The islands sit `BAR_TOP` below the output's top edge, `BAR_SIDE` in from its
 /// sides.
@@ -142,6 +169,7 @@ fn island(role: Role, width: u32) -> SurfaceSpec {
         ),
         keyboard: Keyboard::None,
         blur_radius: Some(SIZE.bar_height as u32 / 2),
+        input_passthrough: false,
     }
 }
 
@@ -168,6 +196,7 @@ fn strip() -> SurfaceSpec {
         keyboard: Keyboard::None,
         // Rectangle region: whole-surface blur suits a strip.
         blur_radius: Some(0),
+        input_passthrough: false,
     }
 }
 
@@ -191,6 +220,7 @@ fn reveal(role: Role, width: u32) -> SurfaceSpec {
         margin: (0, 0, 0, 0),
         keyboard: Keyboard::None,
         blur_radius: None,
+        input_passthrough: false,
     }
 }
 
@@ -213,6 +243,7 @@ fn scrim() -> SurfaceSpec {
         margin: (0, 0, 0, 0),
         keyboard: Keyboard::None,
         blur_radius: None,
+        input_passthrough: false,
     }
 }
 
@@ -228,6 +259,7 @@ fn launcher() -> SurfaceSpec {
         margin: (0, 0, 0, 0),
         keyboard: Keyboard::Exclusive,
         blur_radius: Some(triton_design::shape::RADII.floating_window as u32),
+        input_passthrough: false,
     }
 }
 
@@ -255,6 +287,117 @@ fn notifications(height: u32, bar_shown: bool) -> SurfaceSpec {
         margin: (top, 20, 0, 0),
         keyboard: Keyboard::Exclusive,
         blur_radius: Some(triton_design::shape::RADII.floating_window as u32),
+        input_passthrough: false,
+    }
+}
+
+/// The wallpaper: the whole output on the background layer. No blur, no input —
+/// it is the backdrop everything else floats over.
+fn wallpaper() -> SurfaceSpec {
+    SurfaceSpec {
+        namespace: WALLPAPER_NAMESPACE,
+        layer: Layer::Background,
+        anchors: Anchors {
+            top: true,
+            bottom: true,
+            left: true,
+            right: true,
+        },
+        size: (0, 0),
+        exclusive_zone: -1,
+        margin: (0, 0, 0, 0),
+        keyboard: Keyboard::None,
+        blur_radius: None,
+        input_passthrough: true,
+    }
+}
+
+/// The OSD (`OSD` board): a Glass pill centered 48 px above the bottom edge.
+/// Anchored only at the bottom so the compositor centers it horizontally.
+/// Pointer-transparent and never focused.
+fn osd(width: u32, height: u32) -> SurfaceSpec {
+    SurfaceSpec {
+        namespace: OSD_NAMESPACE,
+        layer: Layer::Overlay,
+        anchors: Anchors {
+            bottom: true,
+            ..Anchors::default()
+        },
+        size: (width.max(1), height.max(1)),
+        exclusive_zone: -1,
+        margin: (0, 0, 48, 0),
+        keyboard: Keyboard::None,
+        blur_radius: Some(32),
+        input_passthrough: true,
+    }
+}
+
+/// The toast stack (`Notifications` board): one top-right column holding up to
+/// four cards and the overflow chip. Its top edge clears the bar, like the
+/// notification center's.
+fn toasts(height: u32, bar_shown: bool) -> SurfaceSpec {
+    let top = if bar_shown {
+        (BAR_TOP + SIZE.bar_height + 12.0) as i32
+    } else {
+        20
+    };
+    SurfaceSpec {
+        namespace: TOASTS_NAMESPACE,
+        layer: Layer::Overlay,
+        anchors: Anchors {
+            top: true,
+            right: true,
+            bottom: false,
+            left: false,
+        },
+        size: (400, height.max(1)),
+        exclusive_zone: -1,
+        margin: (top, 20, 0, 0),
+        keyboard: Keyboard::None,
+        blur_radius: Some(triton_design::shape::RADII.floating_window as u32),
+        input_passthrough: false,
+    }
+}
+
+/// Quick settings (`QuickSettings` board): a top-right Glass panel, 420 wide,
+/// as tall as its page. Grabs the keyboard while open (Esc, drill-in nav).
+fn quick_settings(height: u32, bar_shown: bool) -> SurfaceSpec {
+    let top = if bar_shown {
+        (BAR_TOP + SIZE.bar_height + 12.0) as i32
+    } else {
+        20
+    };
+    SurfaceSpec {
+        namespace: QUICK_SETTINGS_NAMESPACE,
+        layer: Layer::Overlay,
+        anchors: Anchors {
+            top: true,
+            right: true,
+            bottom: false,
+            left: false,
+        },
+        size: (420, height.max(1)),
+        exclusive_zone: -1,
+        margin: (top, 20, 0, 0),
+        keyboard: Keyboard::Exclusive,
+        blur_radius: Some(triton_design::shape::RADII.floating_window as u32),
+        input_passthrough: false,
+    }
+}
+
+/// A centered modal of measured size: the power menu (`Power` board) and the
+/// polkit dialog. Anchored to no edge, so the compositor centers it.
+fn centered(namespace: &'static str, width: u32, height: u32) -> SurfaceSpec {
+    SurfaceSpec {
+        namespace,
+        layer: Layer::Overlay,
+        anchors: Anchors::default(),
+        size: (width.max(1), height.max(1)),
+        exclusive_zone: -1,
+        margin: (0, 0, 0, 0),
+        keyboard: Keyboard::Exclusive,
+        blur_radius: Some(triton_design::shape::RADII.floating_window as u32),
+        input_passthrough: false,
     }
 }
 
@@ -280,6 +423,25 @@ pub enum BarMode {
 pub struct Modals<'a> {
     pub launcher: Option<&'a str>,
     pub notifications: Option<&'a str>,
+    pub quick_settings: Option<&'a str>,
+    /// The centered power menu (`Power` board) and the polkit dialog share the
+    /// centered-modal slot: at most one is ever up.
+    pub centered: Option<Centered<'a>>,
+}
+
+/// Which centered modal is up, on which output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Centered<'a> {
+    Power(&'a str),
+    Polkit(&'a str),
+}
+
+impl<'a> Centered<'a> {
+    pub fn output(self) -> &'a str {
+        match self {
+            Self::Power(o) | Self::Polkit(o) => o,
+        }
+    }
 }
 
 /// The measured extents of content-sized surfaces: the islands by width, the
@@ -343,7 +505,11 @@ pub fn desired<'a>(
                 }
             }
         }
-        if modals.launcher == Some(output) || modals.notifications == Some(output) {
+        if modals.launcher == Some(output)
+            || modals.notifications == Some(output)
+            || modals.quick_settings == Some(output)
+            || modals.centered.is_some_and(|c| c.output() == output)
+        {
             out.insert(key(Role::Scrim), scrim());
         }
         if modals.launcher == Some(output) {
@@ -359,6 +525,68 @@ pub fn desired<'a>(
             // The panel sits top-right: it clears the right island's state.
             let up = mode == BarMode::Pinned || bar_shown(&key(Role::IslandEnd));
             out.insert(k, notifications(height, up));
+        }
+        if modals.quick_settings == Some(output) {
+            let k = key(Role::QuickSettings);
+            let height = sizes
+                .heights
+                .get(&k)
+                .copied()
+                .unwrap_or(UNMEASURED_PANEL_HEIGHT);
+            let up = mode == BarMode::Pinned || bar_shown(&key(Role::IslandEnd));
+            out.insert(k, quick_settings(height, up));
+        }
+        if modals.centered.is_some_and(|c| c.output() == output) {
+            let (role, namespace) = match modals.centered {
+                Some(Centered::Power(_)) => (Role::PowerMenu, POWER_NAMESPACE),
+                Some(Centered::Polkit(_)) => (Role::Polkit, POLKIT_NAMESPACE),
+                None => unreachable!("checked above"),
+            };
+            let k = key(role);
+            let height = sizes
+                .heights
+                .get(&k)
+                .copied()
+                .unwrap_or(UNMEASURED_PANEL_HEIGHT);
+            let width = sizes.widths.get(&k).copied().unwrap_or(640);
+            out.insert(k, centered(namespace, width, height));
+        }
+    }
+    out
+}
+
+/// The transient surfaces the shell wants beyond `desired`'s modals: the
+/// wallpaper on every output, plus the OSD and toast stack on `active`.
+/// They are not modals (no scrim, no focus) so they live in their own pass —
+/// the app merges the two maps.
+pub fn ambient<'a>(
+    outputs: impl IntoIterator<Item = &'a str>,
+    sizes: &Sizes,
+    active: Option<&'a str>,
+    has_osd: bool,
+    has_toasts: bool,
+    bar_shown: impl Fn(&SurfaceKey) -> bool,
+    pinned: bool,
+) -> BTreeMap<SurfaceKey, SurfaceSpec> {
+    let mut out = BTreeMap::new();
+    for output in outputs {
+        let key = |role| SurfaceKey {
+            role,
+            output: output.to_owned(),
+        };
+        out.insert(key(Role::Wallpaper), wallpaper());
+        let here = active == Some(output);
+        if here && has_osd {
+            let k = key(Role::Osd);
+            let w = sizes.widths.get(&k).copied().unwrap_or(320);
+            let h = sizes.heights.get(&k).copied().unwrap_or(64);
+            out.insert(k, osd(w, h));
+        }
+        if here && has_toasts {
+            let k = key(Role::Toasts);
+            let h = sizes.heights.get(&k).copied().unwrap_or(64);
+            let up = pinned || bar_shown(&key(Role::IslandEnd));
+            out.insert(k, toasts(h, up));
         }
     }
     out

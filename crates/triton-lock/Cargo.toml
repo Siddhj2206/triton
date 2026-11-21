@@ -1,0 +1,29 @@
+[package]
+name = "triton-lock"
+version = "0.1.0"
+description = "The Triton lock screen: an ext-session-lock client with PAM auth."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono = { workspace = true, features = ["clock"] }
+iced_core = { workspace = true, features = ["advanced"] }
+iced_futures = { workspace = true, features = ["tokio"] }
+iced_runtime.workspace = true
+iced_sessionlock.workspace = true
+iced_widget = { workspace = true, features = ["advanced", "canvas", "image"] }
+libc.workspace = true
+libloading.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi"] }
+triton-design.workspace = true
+triton-ui.workspace = true
+# Pins only (see the workspace manifest).
+winit-common.workspace = true
+winit-core.workspace = true

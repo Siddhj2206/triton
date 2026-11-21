@@ -27,7 +27,14 @@ use crate::host::SurfaceTable;
 use crate::msg;
 use crate::niri::{self, Snapshot};
 use crate::services::{self, Connectivity, Statuses};
-use crate::shell::{self, BarMode, Modals, Role, Sizes, SurfaceKey};
+use crate::shell::{self, BarMode, Centered, Modals, Role, Sizes, SurfaceKey};
+
+/// Which centered modal is up; maps to `shell::Centered` with its output.
+#[derive(Debug, Clone, Copy)]
+enum CenteredRole {
+    Power,
+    Polkit,
+}
 
 /// The launcher field's widget id, so it can be focused once its surface maps.
 fn launcher_field() -> widget::Id {
@@ -140,6 +147,10 @@ pub struct Shell {
     launcher: Option<String>,
     /// The output the notification center is open on, if any.
     notifications: Option<String>,
+    /// The output quick settings is open on, if any.
+    quick_settings: Option<String>,
+    /// The centered modal (power menu or polkit) and its output.
+    centered: Option<(CenteredRole, String)>,
     /// Do Not Disturb; the bell and the center's toggle show it.
     dnd: bool,
     /// How the bar presents (`BarStates`); `triton msg bar mode …` sets it.
@@ -375,6 +386,11 @@ impl Shell {
             &Modals {
                 launcher: self.launcher.as_deref(),
                 notifications: self.notifications.as_deref(),
+                quick_settings: self.quick_settings.as_deref(),
+                centered: self.centered.as_ref().map(|(r, o)| match r {
+                    CenteredRole::Power => Centered::Power(o.as_str()),
+                    CenteredRole::Polkit => Centered::Polkit(o.as_str()),
+                }),
             },
             self.bar_mode,
             |k| self.bar_shown.contains(k),
@@ -399,6 +415,15 @@ impl Shell {
                     Message::Measured(id, d, h)
                 })
                 .into();
+            }
+            Role::QuickSettings | Role::PowerMenu | Role::Polkit | Role::Toasts | Role::Osd => {
+                return measure_height(Space::new().width(1).height(1), move |d, h| {
+                    Message::Measured(id, d, h)
+                })
+                .into();
+            }
+            Role::Wallpaper => {
+                return Space::new().width(Length::Fill).height(Length::Fill).into();
             }
         };
         let island = measure(layer_island(content), move |d, w| {

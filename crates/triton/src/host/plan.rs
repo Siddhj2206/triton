@@ -26,7 +26,7 @@ pub enum SurfaceOp {
 /// The changes that turn `from` into `to`, or `None` if only a new surface can
 /// (layer shell cannot change a namespace).
 fn changes(from: &SurfaceSpec, to: &SurfaceSpec) -> Option<Vec<Change>> {
-    if from.namespace != to.namespace {
+    if from.namespace != to.namespace || from.input_passthrough != to.input_passthrough {
         return None;
     }
     let mut out = Vec::new();

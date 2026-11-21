@@ -4,11 +4,16 @@
 
 mod app;
 mod host;
+mod launch;
 mod msg;
 mod niri;
 mod niri_config;
+mod notify;
+mod pipeline;
+mod polkit;
 mod services;
 mod shell;
+mod wayl;
 
 use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 use tracing_subscriber::EnvFilter;
@@ -51,7 +56,7 @@ fn main() -> Result<(), iced_layershell::Error> {
     std::panic::set_hook(Box::new(|info| {
         tracing::error!(%info, "panic");
     }));
-    if let Err(e) = niri_config::install() {
+    if let Err(e) = niri_config::install(&triton_design::Scheme::DARK) {
         tracing::warn!(%e, "cannot write the niri include files");
     }
     // Dev and preview run `Services::fake`; this opts into the real read-only

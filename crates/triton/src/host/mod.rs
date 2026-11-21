@@ -59,7 +59,7 @@ fn settings(key: &SurfaceKey, spec: &SurfaceSpec) -> NewLayerShellSettings {
         margin: Some(spec.margin),
         keyboard_interactivity: keyboard(spec.keyboard),
         output_option: OutputOption::OutputName(key.output.clone()),
-        events_transparent: false,
+        events_transparent: spec.input_passthrough,
         namespace: Some(spec.namespace.to_owned()),
     }
 }

@@ -11,7 +11,10 @@ use std::{fs, io};
 use triton_design::SIZE;
 use triton_design::material::ShadowToken;
 
-use crate::shell::{BAR_NAMESPACE, LAUNCHER_NAMESPACE, NOTIFICATIONS_NAMESPACE};
+use crate::shell::{
+    BAR_NAMESPACE, LAUNCHER_NAMESPACE, NOTIFICATIONS_NAMESPACE, OSD_NAMESPACE, POLKIT_NAMESPACE,
+    POWER_NAMESPACE, QUICK_SETTINGS_NAMESPACE, TOASTS_NAMESPACE,
+};
 
 /// `#rrggbbaa`, as niri's config takes colors.
 fn hex(color: iced_core::Color) -> String {
@@ -54,28 +57,122 @@ fn rule(namespace: &str, radius: f32, shadow: ShadowToken) -> String {
     )
 }
 
-/// Every file triton owns, by name: `index.kdl` includes the rest.
-pub fn render() -> Vec<(&'static str, String)> {
+/// Every file triton owns, by name: `index.kdl` includes the rest. `scheme`
+/// feeds `colors.kdl` — the pipeline's wallpaper scheme, or the reference.
+pub fn render(scheme: &triton_design::Scheme) -> Vec<(&'static str, String)> {
     // Floating surfaces take their corner radius and shadow from a rule, since
     // iced cannot draw outside a surface's bounds. No rule `blur` here: rule
     // blur plus corner radius makes niri binarize the surface's alpha, so
     // surfaces request their own blur through ext-background-effect instead
     // (docs/research/niri-layer-blur-alpha.md). `xray` alone is safe.
+    let floating = triton_design::shape::RADII.floating_window;
     let layer_rules = format!(
         "{HEADER}{}{}",
         rule(BAR_NAMESPACE, SIZE.bar_height / 2.0, ShadowToken::FLOATING),
-        rule(
+        [
             LAUNCHER_NAMESPACE,
-            triton_design::shape::RADII.floating_window,
-            ShadowToken::FLOATING_LARGE,
-        ) + &rule(
             NOTIFICATIONS_NAMESPACE,
-            triton_design::shape::RADII.floating_window,
-            ShadowToken::FLOATING_LARGE,
-        ),
+            OSD_NAMESPACE,
+            TOASTS_NAMESPACE,
+            QUICK_SETTINGS_NAMESPACE,
+            POWER_NAMESPACE,
+            POLKIT_NAMESPACE,
+        ]
+        .iter()
+        .map(|ns| rule(ns, floating, ShadowToken::FLOATING_LARGE))
+        .collect::<String>(),
     );
-    let index = format!("{HEADER}include \"layer-rules.kdl\"\n");
-    vec![("index.kdl", index), ("layer-rules.kdl", layer_rules)]
+    let index = format!(
+        "{HEADER}include \"layer-rules.kdl\"\ninclude \"binds.kdl\"\ninclude \"colors.kdl\"\n"
+    );
+    vec![
+        ("index.kdl", index),
+        ("layer-rules.kdl", layer_rules),
+        ("binds.kdl", binds()),
+        ("colors.kdl", colors(scheme)),
+    ]
+}
+
+/// The binds niri calls straight into the shell (roadmap §3: binds stay plain
+/// `spawn` lines). Every one is a `triton msg`; the socket maps them to actions.
+/// Media keys land on the OSD; Mod keys on the panels. If a bind duplicates one
+/// in the user's own `config.kdl`, delete it here — this file is triton's.
+fn binds() -> String {
+    format!(
+        "{HEADER}binds {{
+    Mod+Space {{ spawn \"triton\" \"msg\" \"launcher toggle\"; }}
+    Mod+N {{ spawn \"triton\" \"msg\" \"notifications toggle\"; }}
+    Mod+Alt+Q {{ spawn \"triton\" \"msg\" \"quicksettings toggle\"; }}
+    Mod+B {{ spawn \"triton\" \"msg\" \"bar toggle\"; }}
+    Mod+Alt+L {{ spawn \"triton\" \"msg\" \"lock\"; }}
+    XF86PowerOff {{ spawn \"triton\" \"msg\" \"power toggle\"; }}
+    XF86AudioRaiseVolume {{ spawn \"triton\" \"msg\" \"volume up\"; }}
+    XF86AudioLowerVolume {{ spawn \"triton\" \"msg\" \"volume down\"; }}
+    XF86AudioMute {{ spawn \"triton\" \"msg\" \"volume mute\"; }}
+    XF86AudioMicMute {{ spawn \"triton\" \"msg\" \"mic mute\"; }}
+    XF86MonBrightnessUp {{ spawn \"triton\" \"msg\" \"brightness up\"; }}
+    XF86MonBrightnessDown {{ spawn \"triton\" \"msg\" \"brightness down\"; }}
+}}
+"
+    )
+}
+
+/// niri's own colors, from the active scheme: the focus ring takes primary,
+/// the backdrop a darkened surface (color pipeline → niri, roadmap §4).
+fn colors(scheme: &triton_design::Scheme) -> String {
+    let hex8 = |c: iced_core::Color| hex(c);
+    format!(
+        "{HEADER}layout {{
+    focus-ring {{
+        active-color \"{active}\"
+        inactive-color \"{inactive}\"
+    }}
+    backdrop-color \"{backdrop}\"
+}}
+",
+        active = hex8(scheme.primary),
+        inactive = hex8(scheme.outline),
+        backdrop = hex8(scheme.surface_container_lowest),
+    )
+}
+
+/// The systemd user unit: niri-session runs `graphical-session.target`, so a
+/// `WantedBy` on it starts the shell with the session (roadmap §2).
+const UNIT: &str = "# Written by triton. Changes here are overwritten.
+[Unit]
+Description=Triton shell (bar, panels, OSD, notifications)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=triton
+Restart=on-failure
+Slice=session.slice
+
+[Install]
+WantedBy=graphical-session.target
+";
+
+/// `~/.config/systemd/user`: the unit plus the wants link that enables it —
+/// the same "one owned file" pattern as the niri includes.
+fn install_unit() -> io::Result<()> {
+    let Some(base) = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".config")))
+    else {
+        return Ok(());
+    };
+    let dir = base.join("systemd/user");
+    fs::create_dir_all(&dir)?;
+    write_if_changed(&dir, "triton.service", UNIT)?;
+    let wants = dir.join("graphical-session.target.wants");
+    fs::create_dir_all(&wants)?;
+    let link = wants.join("triton.service");
+    if !link.exists() {
+        std::os::unix::fs::symlink("../triton.service", &link)?;
+        tracing::info!(path = %link.display(), "enabled triton.service");
+    }
+    Ok(())
 }
 
 fn niri_dir() -> Option<PathBuf> {
@@ -124,15 +221,18 @@ fn ensure_include_line(dir: &Path) -> io::Result<()> {
 
 /// Writes the files that differ from what is on disk, then makes sure the
 /// user's config includes them. niri watches included files and reloads by
-/// itself.
-pub fn install() -> io::Result<()> {
+/// itself. Also installs the systemd unit; its failure is logged, not fatal.
+pub fn install(scheme: &triton_design::Scheme) -> io::Result<()> {
+    if let Err(e) = install_unit() {
+        tracing::warn!(%e, "cannot install the systemd unit");
+    }
     let Some(niri) = niri_dir() else {
         return Ok(());
     };
     let dir = niri.join("triton");
     fs::create_dir_all(&dir)?;
     // Leaf files first, so the index never names a file that is not there yet.
-    for (name, text) in render().into_iter().rev() {
+    for (name, text) in render(scheme).into_iter().rev() {
         write_if_changed(&dir, name, &text)?;
     }
     ensure_include_line(&niri)
@@ -144,7 +244,7 @@ mod tests {
 
     #[test]
     fn index_includes_every_other_file() {
-        let files = render();
+        let files = render(&triton_design::Scheme::DARK);
         let (_, index) = files
             .iter()
             .find(|(n, _)| *n == "index.kdl")
@@ -159,15 +259,15 @@ mod tests {
         // Rule blur + corner radius binarizes the surface's alpha in niri
         // (docs/research/niri-layer-blur-alpha.md); blur is client-requested.
         // `xray false` keeps that blur seeing windows, not just wallpaper.
-        let rules = &render()[1].1;
-        for namespace in ["triton-bar", "triton-launcher", "triton-notifications"] {
+        let rules = &render(&triton_design::Scheme::DARK)[1].1;
+        for namespace in ["triton-bar", "triton-launcher", "triton-notifications", "triton-osd"] {
             assert!(
                 rules.contains(&format!("namespace=\"^{namespace}$\"")),
                 "{namespace}"
             );
         }
-        assert_eq!(rules.matches("geometry-corner-radius").count(), 3);
-        assert_eq!(rules.matches("xray false").count(), 3);
+        assert_eq!(rules.matches("geometry-corner-radius").count(), 8);
+        assert_eq!(rules.matches("xray false").count(), 8);
         assert!(!rules.contains("blur"));
     }
 
