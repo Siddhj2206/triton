@@ -1,16 +1,22 @@
 //! Text entry: the search field and the filled text field.
 
-use iced_core::text::LineHeight;
-use iced_core::{Background, Border, Color, Length, Padding};
-use iced_widget::text_input::{Catalog, Icon as InputIcon, Side, Status, Style};
+use iced_core::alignment::Vertical;
+use iced_core::layout::{self, Layout};
+use iced_core::text::Renderer as _;
+use iced_core::text::{self, LineHeight, Shaping, Wrapping};
+use iced_core::widget::{self, Tree, Widget};
+use iced_core::{
+    Background, Border, Color, Font, Length, Padding, Point, Rectangle, Size, mouse, renderer,
+};
+use iced_widget::text_input::{self, Catalog, Icon as InputIcon, Side, Status, Style};
 use iced_widget::{Column, TextInput};
 use triton_design::color::with_alpha;
 use triton_design::material::veil;
 use triton_design::shape::nested;
-use triton_design::{Icon, IconStyle, SIZE};
+use triton_design::{Family, Icon, IconStyle, SIZE};
 
 use crate::text::ui;
-use crate::{Renderer, Theme, Tone};
+use crate::{Element, Renderer, Theme, Tone};
 
 /// What a text input is.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -107,26 +113,18 @@ pub fn search<'a, M: Clone + 'a>(placeholder: &str, value: &str, class: Field) -
 
 /// A filled text field: the label sits inside the field above the value, and an
 /// optional error line goes under it. Build `input` with [`filled_input`] and add
-/// `.on_input(..)` to it first. (The label does not turn primary on focus: it cannot
-/// see the input's focus. That comes with a field widget of our own.)
+/// `.on_input(..)` to it first.
 pub fn text_field<'a, M: Clone + 'a>(
     label: &'a str,
     input: Input<'a, M>,
     error: Option<&'a str>,
 ) -> Column<'a, M, Theme, Renderer> {
-    let label = ui(label, 12.0, iced_core::font::Weight::Normal).class(if error.is_some() {
-        Tone::Error
-    } else {
-        Tone::OnSurfaceVariant
-    });
-    let field = iced_widget::stack![
-        input,
-        iced_widget::container(label).padding(Padding {
-            top: 8.0,
-            left: 16.0,
-            ..Padding::ZERO
-        }),
-    ];
+    let field: Element<'a, M> = FilledField {
+        inner: input,
+        label,
+        error: error.is_some(),
+    }
+    .into();
     let mut col = Column::new().push(field).spacing(6);
     if let Some(e) = error {
         col = col.push(
@@ -135,6 +133,179 @@ pub fn text_field<'a, M: Clone + 'a>(
         );
     }
     col
+}
+
+/// The label's inset inside the field.
+const LABEL_X: f32 = 16.0;
+const LABEL_Y: f32 = 8.0;
+
+/// The field surface: delegates everything to its input and paints the label
+/// itself, so the label turns primary while the input is focused — a sibling
+/// widget cannot see another's focus.
+pub struct FilledField<'a, M> {
+    inner: Input<'a, M>,
+    label: &'a str,
+    error: bool,
+}
+
+impl<M> std::fmt::Debug for FilledField<'_, M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FilledField")
+            .field("label", &self.label)
+            .field("error", &self.error)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<M: Clone> Widget<M, Theme, Renderer> for FilledField<'_, M> {
+    fn children(&self) -> Vec<Tree> {
+        vec![Tree::new(&self.inner as &dyn Widget<M, Theme, Renderer>)]
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        tree.diff_children(&[&self.inner as &dyn Widget<M, Theme, Renderer>]);
+    }
+
+    fn size(&self) -> Size<Length> {
+        Widget::size(&self.inner)
+    }
+
+    fn size_hint(&self) -> Size<Length> {
+        Widget::size_hint(&self.inner)
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        Widget::layout(&mut self.inner, &mut tree.children[0], renderer, limits)
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        self.inner
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &iced_core::Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn iced_core::Clipboard,
+        shell: &mut iced_core::Shell<'_, M>,
+        viewport: &Rectangle,
+    ) {
+        self.inner.update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.inner
+            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        Widget::draw(
+            &self.inner,
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
+        let focused = tree.children[0]
+            .state
+            .downcast_ref::<text_input::State<<Renderer as text::Renderer>::Paragraph>>()
+            .is_focused();
+        let s = &theme.scheme;
+        let color = if self.error {
+            s.error
+        } else if focused {
+            s.primary
+        } else {
+            s.on_surface_variant
+        };
+        let b = layout.bounds();
+        renderer.fill_text(
+            text::Text {
+                content: self.label.to_owned(),
+                bounds: Size::new(b.width - LABEL_X * 2.0, 12.0),
+                size: 12.0.into(),
+                line_height: LineHeight::Relative(1.3),
+                font: Font {
+                    family: iced_core::font::Family::Name(Family::Ui.name()),
+                    weight: iced_core::font::Weight::Normal,
+                    ..Font::DEFAULT
+                },
+                align_x: text::Alignment::Left,
+                align_y: Vertical::Top,
+                shaping: Shaping::Basic,
+                wrapping: Wrapping::None,
+            },
+            Point::new(b.x + LABEL_X, b.y + LABEL_Y),
+            color,
+            *viewport,
+        );
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: iced_core::Vector,
+    ) -> Option<iced_core::overlay::Element<'b, M, Theme, Renderer>> {
+        self.inner.overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+}
+
+impl<'a, M: Clone + 'a> From<FilledField<'a, M>> for Element<'a, M> {
+    fn from(field: FilledField<'a, M>) -> Self {
+        iced_core::Element::new(field)
+    }
 }
 
 /// The input inside a [`text_field`]: 56 high, the value set below the label.
