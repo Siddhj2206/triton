@@ -11,6 +11,7 @@ pub mod button;
 pub mod control;
 pub mod field;
 pub mod gallery;
+pub mod index;
 pub mod measure;
 pub mod menu;
 mod paint;

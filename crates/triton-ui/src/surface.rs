@@ -44,6 +44,10 @@ pub enum Surface {
     Pill,
     /// `.t-card`: Solid, 24 px corners.
     Card,
+    /// Flat `surface-container-lowest` fill: a board page's backdrop.
+    Canvas,
+    /// Flat `surface-container-low` fill at radius 14: a dense data row.
+    Row,
     /// A dialog: Solid, 28 px corners, over a scrim.
     Dialog,
     /// `.t-li`: row `index` of `count` in a grouped list.
@@ -162,6 +166,9 @@ impl Theme {
             Surface::RadioDot => (solid(s.primary, RADII.full), None),
             Surface::Status(tone) => self.status_paint(tone),
             Surface::Dot => (solid(s.tertiary, RADII.full), None),
+            // The board page's backdrop and its data rows.
+            Surface::Canvas => (solid(s.surface_container_lowest, 0.0), None),
+            Surface::Row => (solid(s.surface_container_low, 14.0), None),
             Surface::Card => (solid(s.surface_container_low, RADII.list_outer), None),
             Surface::Dialog => (
                 Paint {

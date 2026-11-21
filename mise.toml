@@ -102,6 +102,42 @@ run = "podman logs triton-preview"
 description = "Stop the preview session"
 run = "podman rm -f triton-preview"
 
+# ── board pixel gate ─────────────────────────────────────────────────────────
+# dev/boards/: headless Chromium renders a design board (.dc.html) at 2x — the
+# same physical pixels iced_test's Simulator produces — and Pillow diffs it
+# against the committed triton-ui snapshot. Font rasterization differs between
+# Skia and cosmic-text, so the metric is the share of pixels over a per-channel
+# tolerance, not equality. Isolation matches the preview: repo ro, writes only
+# under target/.
+
+[tasks."boards:image"]
+description = "Build the board-render container (headless Chromium + Pillow)"
+run = "podman build -t localhost/triton-boards:latest dev/boards"
+
+[tasks.pixel]
+description = "Pixel-diff a board: mise run pixel [-- board width height limit]"
+run = """
+set -eu
+board="${1:-ComponentIndex}"
+width="${2:-1646}"
+height="${3:-1620}"
+limit="${4:-5.0}"
+mkdir -p target/boards
+cargo test -p triton-ui --test index
+cp crates/triton-ui/tests/snapshots/index-dark-tiny-skia.png target/boards/index-triton.png
+podman run --rm --security-opt label=disable \
+  -v "$PWD:/work:ro" -v "$PWD/target/boards:/out" \
+  localhost/triton-boards:latest \
+  /work/dev/boards/shot.sh \
+    "/work/references/Triton%20Shell-project/$board.dc.html" \
+    "/out/$board.png" "$width" "$height"
+podman run --rm --security-opt label=disable \
+  -v "$PWD:/work:ro" -v "$PWD/target/boards:/out" \
+  localhost/triton-boards:latest \
+  python3 /work/dev/boards/diff.py \
+    "/out/$board.png" /out/index-triton.png /out/index-diff.png "$limit"
+"""
+
 # ── assets ───────────────────────────────────────────────────────────────────
 
 [tasks.fonts]
