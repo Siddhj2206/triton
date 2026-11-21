@@ -34,14 +34,6 @@ const TITLE: TypeStyle = TypeStyle {
     tracking: 0.0,
     uppercase: false,
 };
-const SUB: TypeStyle = TypeStyle {
-    size: 15.0,
-    line_height: 21.0,
-    weight: Weight::Normal,
-    family: Family::Ui,
-    tracking: 0.0,
-    uppercase: false,
-};
 const HEAD: TypeStyle = TypeStyle {
     size: 12.0,
     line_height: 17.0,
@@ -330,7 +322,7 @@ pub fn view<'a, M: 'a>() -> Element<'a, M> {
         text(
             "Every reusable piece, where it appears, and how it maps to iced. \
              Reference CSS lives in triton/components.css, tokens in triton/tokens.json.",
-            SUB,
+            TypeStyle::BODY_M,
         )
         .class(Tone::OnSurfaceVariant),
     ];

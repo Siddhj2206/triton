@@ -13,7 +13,6 @@ pub enum Change {
     Margin((i32, i32, i32, i32)),
     ExclusiveZone(i32),
     Keyboard(Keyboard),
-    InputHeight(Option<u32>),
     BlurRadius(Option<u32>),
 }
 
@@ -45,9 +44,6 @@ fn changes(from: &SurfaceSpec, to: &SurfaceSpec) -> Option<Vec<Change>> {
     }
     if from.keyboard != to.keyboard {
         out.push(Change::Keyboard(to.keyboard));
-    }
-    if from.input_height != to.input_height {
-        out.push(Change::InputHeight(to.input_height));
     }
     if from.blur_radius != to.blur_radius {
         out.push(Change::BlurRadius(to.blur_radius));

@@ -44,8 +44,13 @@ fn main() -> Result<(), iced_layershell::Error> {
     }
     prefer_vulkan();
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| "triton=info,warn".into()),
+        )
         .init();
+    std::panic::set_hook(Box::new(|info| {
+        tracing::error!(%info, "panic");
+    }));
     if let Err(e) = niri_config::install() {
         tracing::warn!(%e, "cannot write the niri include files");
     }

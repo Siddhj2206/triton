@@ -28,7 +28,10 @@ const HEADER: &str = "// Written by triton. Changes here are overwritten; use th
 const INCLUDE_LINE: &str = "include optional=true \"triton/index.kdl\"";
 
 /// One layer-rule per namespace: corner radius for the shadow shape, shadow
-/// from the tokens.
+/// from the tokens, and `xray false` — niri blurs client-requested regions as
+/// xray (wallpaper only) by default, but Glass and Thick see the windows
+/// below (`MaterialSpec::xray` in triton-design). The Mica strip has no rule:
+/// wallpaper-only is exactly what it wants.
 fn rule(namespace: &str, radius: f32, shadow: ShadowToken) -> String {
     let (x, y, softness, spread) = (shadow.x, shadow.y, shadow.blur, shadow.spread);
     let color = hex(shadow.color);
@@ -36,6 +39,9 @@ fn rule(namespace: &str, radius: f32, shadow: ShadowToken) -> String {
         "layer-rule {{
     match namespace=\"^{namespace}$\"
     geometry-corner-radius {radius}
+    background-effect {{
+        xray false
+    }}
     shadow {{
         on
         softness {softness}
@@ -51,10 +57,10 @@ fn rule(namespace: &str, radius: f32, shadow: ShadowToken) -> String {
 /// Every file triton owns, by name: `index.kdl` includes the rest.
 pub fn render() -> Vec<(&'static str, String)> {
     // Floating surfaces take their corner radius and shadow from a rule, since
-    // iced cannot draw outside a surface's bounds. No background-effect here:
-    // rule blur plus corner radius makes niri binarize the surface's alpha, so
+    // iced cannot draw outside a surface's bounds. No rule `blur` here: rule
+    // blur plus corner radius makes niri binarize the surface's alpha, so
     // surfaces request their own blur through ext-background-effect instead
-    // (docs/research/niri-layer-blur-alpha.md).
+    // (docs/research/niri-layer-blur-alpha.md). `xray` alone is safe.
     let layer_rules = format!(
         "{HEADER}{}{}",
         rule(BAR_NAMESPACE, SIZE.bar_height / 2.0, ShadowToken::FLOATING),
@@ -149,9 +155,10 @@ mod tests {
     }
 
     #[test]
-    fn floating_surfaces_are_rounded_and_shadowed_but_never_rule_blurred() {
+    fn floating_surfaces_are_rounded_shadowed_and_see_through() {
         // Rule blur + corner radius binarizes the surface's alpha in niri
         // (docs/research/niri-layer-blur-alpha.md); blur is client-requested.
+        // `xray false` keeps that blur seeing windows, not just wallpaper.
         let rules = &render()[1].1;
         for namespace in ["triton-bar", "triton-launcher", "triton-notifications"] {
             assert!(
@@ -160,7 +167,8 @@ mod tests {
             );
         }
         assert_eq!(rules.matches("geometry-corner-radius").count(), 3);
-        assert!(!rules.contains("background-effect"));
+        assert_eq!(rules.matches("xray false").count(), 3);
+        assert!(!rules.contains("blur"));
     }
 
     #[test]

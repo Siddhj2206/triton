@@ -15,14 +15,14 @@ use crate::{Element, Renderer, Theme};
 
 /// The axis `Measure` lets run free: width for the islands, height for panels.
 #[derive(Debug, Clone, Copy)]
-enum Dim {
+pub enum Dim {
     Width,
     Height,
 }
 
 pub struct Measure<'a, M> {
     content: Element<'a, M>,
-    on_extent: Box<dyn Fn(f32) -> M + 'a>,
+    on_extent: Box<dyn Fn(Dim, f32) -> M + 'a>,
     dim: Dim,
 }
 
@@ -32,27 +32,28 @@ impl<M> std::fmt::Debug for Measure<'_, M> {
     }
 }
 
-/// Wraps `content`; `on_width` gets its natural width whenever that changes.
+/// Wraps `content`; `on_extent` gets `Dim::Width` and its natural width
+/// whenever that changes.
 pub fn measure<'a, M>(
     content: impl Into<Element<'a, M>>,
-    on_width: impl Fn(f32) -> M + 'a,
+    on_extent: impl Fn(Dim, f32) -> M + 'a,
 ) -> Measure<'a, M> {
     Measure {
         content: content.into(),
-        on_extent: Box::new(on_width),
+        on_extent: Box::new(on_extent),
         dim: Dim::Width,
     }
 }
 
-/// Wraps `content`; `on_height` gets its natural height at the surface's width
-/// whenever that changes.
+/// Wraps `content`; `on_extent` gets `Dim::Height` and its natural height at
+/// the surface's width whenever that changes.
 pub fn measure_height<'a, M>(
     content: impl Into<Element<'a, M>>,
-    on_height: impl Fn(f32) -> M + 'a,
+    on_extent: impl Fn(Dim, f32) -> M + 'a,
 ) -> Measure<'a, M> {
     Measure {
         content: content.into(),
-        on_extent: Box::new(on_height),
+        on_extent: Box::new(on_extent),
         dim: Dim::Height,
     }
 }
@@ -144,7 +145,7 @@ impl<M> Widget<M, Theme, Renderer> for Measure<'_, M> {
         let extent = state.measured.get();
         if state.reported.is_none_or(|r| (r - extent).abs() >= 0.5) {
             state.reported = Some(extent);
-            shell.publish((self.on_extent)(extent));
+            shell.publish((self.on_extent)(self.dim, extent));
         }
     }
 

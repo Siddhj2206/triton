@@ -1,7 +1,6 @@
 //! Renders the Component index board reproduction (src/index.rs) on tiny-skia
-//! and compares it with the committed snapshot. The same PNG is what
-//! `mise run pixel` diffs against the browser render of the board, so it is
-//! written to target/boards/ as well.
+//! and compares it with the committed snapshot. `mise run pixel` copies that
+//! PNG to target/boards/ and diffs it against the browser render of the board.
 
 use iced_test::simulator::Simulator;
 use triton_ui::{Theme, index, settings};

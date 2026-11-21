@@ -231,7 +231,7 @@ fn follow(tx: &mpsc::UnboundedSender<Arc<Statuses>>) {
 /// The preview and dev backend: canned statuses on a slow cycle through every
 /// tone the status group can take, so states are checked without a real bus.
 fn follow_fake(tx: &mpsc::UnboundedSender<Arc<Statuses>>) {
-    const STATES: [Statuses; 3] = [
+    const STATES: [Statuses; 4] = [
         Statuses {
             battery: Some(Battery {
                 percent: 72,
@@ -248,10 +248,19 @@ fn follow_fake(tx: &mpsc::UnboundedSender<Arc<Statuses>>) {
             }),
             connectivity: Some(Connectivity::Online),
         },
+        // Charging alone already warms the pill.
         Statuses {
             battery: Some(Battery {
                 percent: 88,
                 charging: true,
+                low: false,
+            }),
+            connectivity: Some(Connectivity::Online),
+        },
+        Statuses {
+            battery: Some(Battery {
+                percent: 88,
+                charging: false,
                 low: false,
             }),
             connectivity: Some(Connectivity::Offline),

@@ -64,19 +64,6 @@ fn settings(key: &SurfaceKey, spec: &SurfaceSpec) -> NewLayerShellSettings {
     }
 }
 
-/// Limits pointer input to the top `height` px of the surface.
-fn input_region(id: Id, height: Option<u32>) -> Task<Message> {
-    let Some(height) = height else {
-        return Task::none();
-    };
-    let height = i32::try_from(height).unwrap_or(i32::MAX);
-    Task::done(Message::SetInputRegion {
-        id,
-        // Wider than any output; the compositor clips the region to the surface.
-        callback: ActionCallback::new(move |region| region.add(0, 0, i32::MAX / 2, height)),
-    })
-}
-
 /// Asks the compositor to blur behind the surface's drawn shape
 /// (ext-background-effect), banded into rectangles to follow its corners.
 /// Re-sent whenever the size or radius changes: the region is surface-local.
@@ -137,11 +124,10 @@ impl SurfaceTable {
                     settings: settings(&key, &spec),
                     id,
                 });
-                let input = input_region(id, spec.input_height);
                 let blur = blur_region(id, &spec);
                 self.ids.insert(id, key.clone());
                 self.surfaces.insert(key, (id, spec));
-                task.chain(input).chain(blur)
+                task.chain(blur)
             }
             SurfaceOp::Destroy(key) => {
                 tracing::info!(?key, "destroy surface");
@@ -159,10 +145,6 @@ impl SurfaceTable {
                 let mut resend_blur = false;
                 let task = Task::batch(changes.into_iter().map(|change| {
                     let message = match change {
-                        Change::InputHeight(h) => {
-                            spec.input_height = h;
-                            return input_region(id, h);
-                        }
                         Change::BlurRadius(r) => {
                             spec.blur_radius = r;
                             resend_blur = true;

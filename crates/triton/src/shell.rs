@@ -20,13 +20,20 @@ pub enum Role {
     RevealStart,
     /// The same for the right island.
     RevealEnd,
-    /// The dim behind a modal panel. Declared before the modal roles so the
-    /// scrim maps first and stacks below them within the overlay layer.
+    /// The transparent click-catcher behind a modal panel. Declared before the
+    /// modal roles so it maps first and stacks below them within the layer.
     Scrim,
     /// The launcher panel (`Launcher` board).
     Launcher,
     /// The notification center (`Notifications` board).
     Notifications,
+}
+
+impl Role {
+    /// Whether this surface hugs the output's right edge.
+    fn end(self) -> bool {
+        matches!(self, Self::IslandEnd | Self::RevealEnd)
+    }
 }
 
 /// One surface: a role on an output.
@@ -83,9 +90,6 @@ pub struct SurfaceSpec {
     /// Top, right, bottom, left.
     pub margin: (i32, i32, i32, i32),
     pub keyboard: Keyboard,
-    /// Only the top this many px take pointer input; `None` is the whole surface.
-    /// Lets a shadow draw below a surface without catching clicks there.
-    pub input_height: Option<u32>,
     /// Corner radius of the blur triton asks niri for (ext-background-effect),
     /// matching the surface's drawn shape. `None` is no background effect.
     pub blur_radius: Option<u32>,
@@ -115,7 +119,8 @@ const UNMEASURED: u32 = 56;
 
 /// One island, in a top corner, exactly its own size: niri clips and shadows a
 /// layer surface as a whole, so the surface must be the pill and nothing more.
-fn island(end: bool, width: u32) -> SurfaceSpec {
+fn island(role: Role, width: u32) -> SurfaceSpec {
+    let end = role.end();
     SurfaceSpec {
         namespace: BAR_NAMESPACE,
         layer: Layer::Top,
@@ -126,8 +131,8 @@ fn island(end: bool, width: u32) -> SurfaceSpec {
             bottom: false,
         },
         size: (width.max(1), SIZE.bar_height as u32),
-        // A corner-anchored surface cannot reserve space; the zone strip does.
-        // -1: sit at the edge regardless of that strip's zone.
+        // A corner-anchored surface cannot reserve space; the pinned strip's
+        // own zone does. -1: sit at the edge regardless of it.
         exclusive_zone: -1,
         margin: (
             BAR_TOP as i32,
@@ -136,7 +141,6 @@ fn island(end: bool, width: u32) -> SurfaceSpec {
             if end { 0 } else { BAR_SIDE as i32 },
         ),
         keyboard: Keyboard::None,
-        input_height: None,
         blur_radius: Some(SIZE.bar_height as u32 / 2),
     }
 }
@@ -162,7 +166,6 @@ fn strip() -> SurfaceSpec {
         exclusive_zone: SIZE.bar_height as i32,
         margin: (0, 0, 0, 0),
         keyboard: Keyboard::None,
-        input_height: None,
         // Rectangle region: whole-surface blur suits a strip.
         blur_radius: Some(0),
     }
@@ -172,7 +175,8 @@ fn strip() -> SurfaceSpec {
 /// (`BarStates`: "the only trace is an invisible 2 px strip"). One edge per
 /// island so they reveal independently. It reserves nothing and stays mapped
 /// while the island is up so hover state stays continuous.
-fn reveal(end: bool, width: u32) -> SurfaceSpec {
+fn reveal(role: Role, width: u32) -> SurfaceSpec {
+    let end = role.end();
     SurfaceSpec {
         namespace: BAR_REVEAL_NAMESPACE,
         layer: Layer::Top,
@@ -186,13 +190,12 @@ fn reveal(end: bool, width: u32) -> SurfaceSpec {
         exclusive_zone: 0,
         margin: (0, 0, 0, 0),
         keyboard: Keyboard::None,
-        input_height: None,
         blur_radius: None,
     }
 }
 
-/// The modal scrim behind the launcher: covers its output so a press anywhere
-/// outside the panel dismisses it (ADR-0003). Transparent — modal by input.
+/// The transparent click-catcher behind a modal panel: covers its output so a
+/// press anywhere outside the panel dismisses it (ADR-0003).
 fn scrim() -> SurfaceSpec {
     SurfaceSpec {
         namespace: SCRIM_NAMESPACE,
@@ -209,7 +212,6 @@ fn scrim() -> SurfaceSpec {
         exclusive_zone: -1,
         margin: (0, 0, 0, 0),
         keyboard: Keyboard::None,
-        input_height: None,
         blur_radius: None,
     }
 }
@@ -225,7 +227,6 @@ fn launcher() -> SurfaceSpec {
         exclusive_zone: -1,
         margin: (0, 0, 0, 0),
         keyboard: Keyboard::Exclusive,
-        input_height: None,
         blur_radius: Some(triton_design::shape::RADII.floating_window as u32),
     }
 }
@@ -253,7 +254,6 @@ fn notifications(height: u32, bar_shown: bool) -> SurfaceSpec {
         exclusive_zone: -1,
         margin: (top, 20, 0, 0),
         keyboard: Keyboard::Exclusive,
-        input_height: None,
         blur_radius: Some(triton_design::shape::RADII.floating_window as u32),
     }
 }
@@ -295,21 +295,24 @@ const UNMEASURED_PANEL_HEIGHT: u32 = 96;
 
 /// The island's reveal edge covers its side margin plus its own measured width,
 /// so the whole footprint wakes it.
-fn reveal_width(end: bool, sizes: &Sizes, key: impl Fn(Role) -> SurfaceKey) -> SurfaceSpec {
-    let k = key(if end {
+fn reveal_width(edge: Role, sizes: &Sizes, key: impl Fn(Role) -> SurfaceKey) -> SurfaceSpec {
+    let island = if edge.end() {
         Role::IslandEnd
     } else {
         Role::IslandStart
-    });
-    let island = sizes.widths.get(&k).copied().unwrap_or(UNMEASURED);
-    reveal(end, island + BAR_SIDE as u32)
+    };
+    let width = sizes
+        .widths
+        .get(&key(island))
+        .copied()
+        .unwrap_or(UNMEASURED);
+    reveal(edge, width + BAR_SIDE as u32)
 }
 
 /// Every surface the shell wants, for the outputs niri has reported. `sizes`
 /// holds the measured extents of content-sized surfaces. `modals` names the
 /// output each open panel lives on, if any. `mode` is the bar mode; `bar_shown`
-/// reports whether an island is up (ignored when pinned — it always is) and
-/// modals clear it where it floats.
+/// reports whether an island is up (ignored when pinned — the strip always is).
 pub fn desired<'a>(
     outputs: impl IntoIterator<Item = &'a str>,
     sizes: &Sizes,
@@ -326,19 +329,17 @@ pub fn desired<'a>(
         if mode == BarMode::Pinned {
             out.insert(key(Role::Strip), strip());
         } else {
-            for (role, end) in [(Role::IslandStart, false), (Role::IslandEnd, true)] {
+            for (island_role, edge) in [
+                (Role::IslandStart, Role::RevealStart),
+                (Role::IslandEnd, Role::RevealEnd),
+            ] {
                 if mode == BarMode::AutoHide {
-                    let edge = if end {
-                        Role::RevealEnd
-                    } else {
-                        Role::RevealStart
-                    };
-                    out.insert(key(edge), reveal_width(end, sizes, key));
+                    out.insert(key(edge), reveal_width(edge, sizes, key));
                 }
-                let k = key(role);
+                let k = key(island_role);
                 if bar_shown(&k) {
                     let width = sizes.widths.get(&k).copied().unwrap_or(UNMEASURED);
-                    out.insert(k, island(end, width));
+                    out.insert(k, island(island_role, width));
                 }
             }
         }

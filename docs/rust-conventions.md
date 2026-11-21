@@ -121,7 +121,7 @@ Why these lint choices: pedantic catches real mistakes but is noisy for UI code,
 
 ## 5. Feature flags
 
-**Features are additive and few.** Now: `fake` (compiles `Services::fake` and `Snapshot::fixture`; enabled by dev-dependencies and the `--fake` demo). Later: `tracy` for profiling. No feature per service until a service's dependency weight shows in `cargo build --timings`. Why: features multiply the test matrix, and Cargo unifies them across the workspace, so a non-additive feature breaks other crates. Source: [Cargo features](https://doc.rust-lang.org/cargo/reference/features.html).
+**Features are additive and few.** None today — dev-only backends are runtime flags, not features: the shell runs its fake services backend unless `--real-services` is passed, so the same binary serves preview and session. Later: `tracy` for profiling. No feature per service until a service's dependency weight shows in `cargo build --timings`. Why: features multiply the test matrix, and Cargo unifies them across the workspace, so a non-additive feature breaks other crates. Source: [Cargo features](https://doc.rust-lang.org/cargo/reference/features.html).
 
 ## 6. Error handling
 

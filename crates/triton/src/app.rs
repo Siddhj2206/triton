@@ -18,7 +18,7 @@ use triton_design::{Icon, TypeStyle};
 use triton_ui::bar::{self, Status};
 use triton_ui::button::{self, chip};
 use triton_ui::field::{self, Field};
-use triton_ui::measure::{measure, measure_height};
+use triton_ui::measure::{Dim, measure, measure_height};
 use triton_ui::surface::{self, layer_island};
 use triton_ui::text;
 use triton_ui::{Element, Renderer, StatusTone, Surface, Theme, Tone};
@@ -100,10 +100,8 @@ pub enum Message {
     Closed(Id),
     /// A surface's first configure (its UI exists from here).
     Opened(Id),
-    /// An island's natural width, so its surface can fit it.
-    Measured(Id, f32),
-    /// The notification center's natural height at its fixed width.
-    MeasuredHeight(Id, f32),
+    /// A surface's natural extent on one axis, so the surface can fit it.
+    Measured(Id, Dim, f32),
     FocusWorkspace(u64),
     /// The wave was pressed on this output: toggle the launcher there.
     Launcher(String),
@@ -183,18 +181,15 @@ impl Shell {
                 self.niri = snapshot;
                 self.reconcile()
             }
-            Message::Measured(id, width) => {
+            Message::Measured(id, dim, extent) => {
                 let Some(key) = self.surfaces.key(id).cloned() else {
                     return Task::none();
                 };
-                self.sizes.widths.insert(key, width.ceil() as u32);
-                self.reconcile()
-            }
-            Message::MeasuredHeight(id, height) => {
-                let Some(key) = self.surfaces.key(id).cloned() else {
-                    return Task::none();
+                let map = match dim {
+                    Dim::Width => &mut self.sizes.widths,
+                    Dim::Height => &mut self.sizes.heights,
                 };
-                self.sizes.heights.insert(key, height.ceil() as u32);
+                map.insert(key, extent.ceil() as u32);
                 self.reconcile()
             }
             Message::Minute => {
@@ -207,7 +202,8 @@ impl Shell {
             }
             Message::Closed(id) => {
                 self.surfaces.forget(id);
-                Task::none()
+                // Reconciled again (ADR-0003): recreates it if still desired.
+                self.reconcile()
             }
             Message::FocusWorkspace(id) => {
                 niri::focus_workspace(id);
@@ -399,13 +395,15 @@ impl Shell {
             Role::Scrim => return Self::scrim(),
             Role::Launcher => return self.launcher(),
             Role::Notifications => {
-                return measure_height(self.notifications(), move |h| {
-                    Message::MeasuredHeight(id, h)
+                return measure_height(self.notifications(), move |d, h| {
+                    Message::Measured(id, d, h)
                 })
                 .into();
             }
         };
-        let island = measure(layer_island(content), move |w| Message::Measured(id, w));
+        let island = measure(layer_island(content), move |d, w| {
+            Message::Measured(id, d, w)
+        });
         // In autohide the islands double as hover region: pointer timing here
         // keeps them up and puts them away.
         if self.bar_mode == BarMode::AutoHide {
@@ -448,8 +446,8 @@ impl Shell {
             .into()
     }
 
-    /// The dim a press lands on to dismiss the launcher (`Scrim` covers the
-    /// output; the panel above it keeps its own presses).
+    /// The transparent surface a press lands on to dismiss the modal (`Scrim`
+    /// covers the output; the panel above it keeps its own presses).
     fn scrim() -> Element<'static, Message> {
         mouse_area(
             surface::surface(
@@ -614,11 +612,14 @@ impl Shell {
                 label: Some(format!("{}%", b.percent)),
             });
         }
-        // Warm colors mean attention: red for a low battery, rust for offline
-        // or DND, blue while all is well (`BarStates`).
+        // Warm colors mean attention: red for a low battery, rust for
+        // charging, offline or DND, blue while all is well (`BarStates`).
         let tone = if self.statuses.battery.is_some_and(|b| b.low) {
             StatusTone::Alert
-        } else if self.statuses.connectivity == Some(Connectivity::Offline) || self.dnd {
+        } else if self.statuses.battery.is_some_and(|b| b.charging)
+            || self.statuses.connectivity == Some(Connectivity::Offline)
+            || self.dnd
+        {
             StatusTone::Warn
         } else {
             StatusTone::Normal
