@@ -1,0 +1,32 @@
+// niri config for preview sessions. Copied to a scratch home on every start, so
+// triton's include-file writer (ADR-0004) edits that copy, never ~/.config/niri.
+output "winit" {
+    scale 1.75
+}
+
+prefer-no-csd
+screenshot-path "/preview/screenshots/%Y-%m-%d_%H-%M-%S.png"
+
+hotkey-overlay {
+    skip-at-startup
+}
+
+layout {
+    gaps 0
+    focus-ring { off; }
+    border { off; }
+}
+
+// Probe for the harness itself: a translucent foot with blur behind it.
+window-rule {
+    match app-id="^foot$"
+    open-floating true
+    geometry-corner-radius 28
+    clip-to-geometry true
+    background-effect {
+        blur true
+        xray false
+    }
+}
+
+include optional=true "triton/index.kdl"

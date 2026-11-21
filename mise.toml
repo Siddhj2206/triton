@@ -39,3 +39,66 @@ run = "cargo fmt --all"
 [tasks.test]
 description = "Run tests"
 run = "cargo test --workspace"
+
+# ── preview (container: headless sway -> nested niri -> triton) ─────────────
+# Never touches the real session: private runtime dir, scratch home, private
+# session bus. See docs/roadmap.md section 7 and dev/preview/.
+
+[tasks."preview:image"]
+description = "Build the preview container image"
+run = "podman build -t localhost/triton-preview:latest dev/preview"
+
+[tasks.preview]
+description = "Start a headless preview session in the background (TRITON_CMD sets what niri runs)"
+run = """
+mkdir -p target/preview
+podman rm -f triton-preview >/dev/null 2>&1 || true
+podman run -d --rm --name triton-preview \
+  --device /dev/dri --security-opt label=disable \
+  -v "$PWD:/work:ro" -v "$PWD/target/preview:/preview" \
+  -e TRITON_CMD="${TRITON_CMD:-}" -e RUST_LOG \
+  localhost/triton-preview:latest \
+  dbus-run-session -- /work/dev/preview/session.sh headless
+"""
+
+[tasks.dev]
+description = "Run a nested niri window on your desktop, isolated (TRITON_CMD sets what niri runs)"
+run = """
+mkdir -p target/preview
+podman rm -f triton-preview >/dev/null 2>&1 || true
+podman run --rm --name triton-preview \
+  --device /dev/dri --security-opt label=disable \
+  -v "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY:/run/host-wayland" \
+  -v "$PWD:/work:ro" -v "$PWD/target/preview:/preview" \
+  -e TRITON_CMD="${TRITON_CMD:-}" -e RUST_LOG \
+  localhost/triton-preview:latest \
+  dbus-run-session -- /work/dev/preview/session.sh nested
+"""
+
+[tasks."preview:msg"]
+description = "niri msg against the preview session (mise run preview:msg -- windows)"
+run = "podman exec triton-preview /work/dev/preview/msg.sh"
+
+[tasks."preview:shot"]
+description = "Screenshot the preview output to target/preview/shot.png"
+run = "podman exec triton-preview /work/dev/preview/msg.sh action screenshot-screen --show-pointer false --path /preview/shot.png"
+
+[tasks."preview:logs"]
+description = "Show the preview session's logs"
+run = "podman logs triton-preview"
+
+[tasks."preview:stop"]
+description = "Stop the preview session"
+run = "podman rm -f triton-preview"
+
+# ── assets ───────────────────────────────────────────────────────────────────
+
+[tasks.fonts]
+description = "Rebuild crates/triton-design/fonts from icons.txt (container with fonttools)"
+run = """
+podman build -q -t localhost/triton-fonts:latest dev/fonts >/dev/null
+mkdir -p target/fonts-src
+podman run --rm --security-opt label=disable -v "$PWD:/work" -w /work \
+  -v "$(readlink -f target/fonts-src):/cache" -e FONTS_CACHE=/cache \
+  localhost/triton-fonts:latest python3 -I dev/fonts/build.py
+"""

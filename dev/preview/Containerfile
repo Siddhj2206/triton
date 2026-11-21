@@ -1,0 +1,9 @@
+# Preview harness: headless sway hosts a nested niri, which hosts triton.
+# Rebuild with `mise run preview:image`. Nothing here runs against the real session.
+FROM quay.io/fedora/fedora:45
+RUN dnf -y install --setopt=install_weak_deps=False \
+      niri sway dbus-daemon mesa-dri-drivers mesa-vulkan-drivers libcap \
+      foot dejavu-sans-mono-fonts \
+ && dnf clean all \
+ # sway ships with file capabilities; rootless podman can't honour them and doesn't need them.
+ && setcap -r /usr/bin/sway

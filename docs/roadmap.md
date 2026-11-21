@@ -1,0 +1,173 @@
+# Triton roadmap
+
+Status: draft, November 2026. Source of truth for the look: the **Triton Shell** design canvas (Material 3 Futura, 30 boards, tokens in `project/triton/tokens.json`). This file decides *what* Triton does and *in what order*. The canvas decides how it looks.
+
+## 1. What Triton is
+
+Triton is a desktop environment built on niri. It is not a bar plus some widgets you bolt onto a compositor. It owns the session from greeter to power-off: the shell surfaces, the lock, login, notifications, theming, the settings app, and niri's configuration. It is one Rust/iced codebase and one blessed set of system services.
+
+It does **not** ship its own apps. Files, terminal, editor and viewers are stock GNOME apps, re-skinned (never re-laid out) through matugen-style `gtk.css`, as the Adwaita board shows.
+
+Rule for scope: **if GNOME Shell or gnome-control-center does it and niri does not, Triton probably does it. If a GNOME app does it, Triton does not.**
+
+**Unification (ADR-0006):** one design source (`tokens.json` → `triton-design`), one component set, shared by every process and every generated theme. A surface composes; it never styles.
+
+## 2. The stack
+
+One choice per job. Triton talks to each of these directly (D-Bus, Wayland, niri IPC) and does not shell out in hot paths.
+
+| Job | Provided by | Triton's part |
+|---|---|---|
+| Compositor, blur, overview, screencast backend | niri ≥ 26.04 (`background-effect`, `optional=true` includes) | Generated include files (ADR-0004), niri IPC event stream |
+| Session start | `niri-session` + systemd user units | `triton.service` bound to `graphical-session.target`; XDG autostart via systemd's generator |
+| Login | greetd | `triton-greeter` |
+| Lock | ext-session-lock-v1 | `triton-lock` |
+| Auth | PAM, fprintd (optional) | Lock, greeter and polkit agent share one field |
+| Privilege prompts | polkit | Triton is the polkit authentication agent |
+| Audio | PipeWire + WirePlumber | Volume, devices, mic-in-use, OSD |
+| Network | NetworkManager | Wi-Fi, Ethernet, VPN toggles and lists |
+| Bluetooth | BlueZ | Power, pair, connect |
+| Battery, power profiles | UPower, power-profiles-daemon | Indicators, power saver |
+| Brightness, suspend, power-off, inhibitors | systemd-logind | Brightness via `SetBrightness`, power menu |
+| Night light | wlr-gamma-control (niri), geoclue for sunset | Triton drives gamma itself |
+| Idle | ext-idle-notify-v1 | Dim, lock, suspend timeouts |
+| Clipboard | wlr/ext-data-control | History panel |
+| Media | MPRIS | Media pill and popover |
+| Tray | StatusNotifierItem | Background-apps (⋯) popover |
+| Notifications | `org.freedesktop.Notifications` | Triton is the server |
+| Portals | xdg-desktop-portal-gnome + -gtk | Nothing; niri implements the Mutter screencast API they use |
+| Secrets | gnome-keyring (prompts via gcr) | Unlocked at login through PAM |
+| Colors | `material-colors` crate (the engine matugen uses), in-process | Scheme from wallpaper; writes GTK3/GTK4 CSS, gsettings `color-scheme`, niri colors |
+| Fonts | Google Sans Flex, Jost, JetBrains Mono, Material Symbols Rounded | Packaged with Triton |
+| X11 apps | xwayland-satellite | Nothing |
+
+**Apps:** Nautilus, Ptyxis or Console (the canvas shows Console), Text Editor, Calculator, Loupe, Papers, Showtime, Decibels, GNOME Software (updates). Users can install anything; these are the ones the theme is tested against.
+
+## 3. Processes
+
+| Binary | What | Why separate |
+|---|---|---|
+| `triton` | Bar, panels, OSD, notifications, launcher, clipboard, wallpaper, power menu, capture UI, polkit agent, idle, night light, theming | The long-running daemon (ADR-0003, ADR-0005) |
+| `triton-lock` | Lock screen | A lock client that crashes must leave the session locked, not take the shell down with it |
+| `triton-greeter` | greetd greeter, run in its own niri instance | Runs as the greeter user before login |
+| `triton-settings` | Settings app, a normal floating window | Short-lived, opened on demand |
+| `triton msg …` | CLI that niri binds call (`triton msg launcher toggle`) | Binds stay plain `spawn` lines in our generated `binds.kdl` |
+
+## 4. Feature set
+
+The canvas boards are the spec. A feature listed here is built to its board. "Later" means it comes after 1.0.
+
+### Bar (`BarStates`, `MediaBar`)
+- Two Glass islands. Left: wave launcher button, numbered workspaces, focused app and title. Right: clock, status group, bell.
+- Modes: autohide with a 2 px reveal edge (default), pinned full-width Mica with an exclusive zone, hidden (Super+B only). Fullscreen uses a 300 ms dwell instead.
+- Status group goes warm or red with state: charging, low battery, offline, DND. Recording and mic-in-use get their own chips.
+- Hover popovers: a workspace preview (its window list), background apps (SNI tray), VPN, updates.
+- Media pill: a center island that exists only while an MPRIS player is playing. Hover widens it; clicking opens a popover with wavy progress and a player picker.
+
+### Panels
+- **Quick settings** (`QuickSettings`): Wi-Fi, Bluetooth, sound output, night light, volume and brightness sliders, DND, power saver, dark style. Chevrons drill into pages in place. "All … settings" opens `triton-settings` on that page.
+- **Notifications** (`Notifications`): toasts top right (max 4, hover pauses). The center groups by app. Card types: standard, message with inline reply, critical, progress, incoming call, screenshot. DND. The lock screen shows sender only.
+- **OSD** (`OSD`): volume, mute, brightness, mic off, keyboard layout, workspace (from a shortcut only), track change, low battery with a saver action. One at a time, morphing in place.
+
+### Launch and switch
+- **Launcher** (`Launcher`): one field for apps, windows, files and commands, with `>` commands, `=` math and `/` files. A top-hit card carries actions. Files come from recently-used and localsearch when it is present.
+- **Clipboard** (`Clipboard`, `ClipboardStates`): Super+V. Filters, pins, preview pane, sensitive items masked and wiped, 24 h history, plain-text paste, clear-with-confirm.
+- **Window switcher** (`WindowSwitcher`, `WindowSwitcherStates`): MRU across workspaces, tap-swaps without drawing, hold for 120 ms to show. Same-app cycling, compact tiles at 9+ windows, private windows blurred, type-to-find. *Live previews depend on niri window capture (see risks).*
+- **Overview** (`Overview`): niri's own overview, with Triton chrome on top: workspace labels, window name pills, the type-to-launch field. We style niri. We do not rebuild it.
+
+### Session
+- **Lock** (`Lock`, `LoginStates`): clock, date, next event, hidden-content notifications, avatar wave, password and fingerprint, media controls, status.
+- **Greeter** (`Greeter`, `LoginStates`): user picker, session picker, keyboard layout, network, accessibility, power.
+- **Power menu** (`Power`, `PowerStates`): Lock is focused first. Updates pending on restart. A 5 s countdown. Unsaved-work interception through inhibitors (we implement the `org.gnome.SessionManager` Inhibit subset GTK apps already call).
+- **Polkit agent**: the same field and wave, in a solid dialog.
+- **Idle**: dim, then lock, then suspend, respecting inhibitors.
+
+### Appearance
+- **Wallpaper** (`Wallpaper`, `WallpaperStates`): a background-layer renderer per output. The picker is a Glass shelf that previews live and reverts on Esc. Sources: Pictures folder, Triton set, dynamic day/dusk/night sets, plain colors. Per-display is optional. A light image offers the light scheme. Adaptive Mica tint on bright wallpapers. Applies to the lock and greeter too.
+- **Color pipeline**: wallpaper → scheme → shell theme + GTK4/libadwaita + GTK3 + gsettings + niri, applied live with a toast listing which targets finished.
+- **Materials**: Solid, Mica, Glass, Thick Glass. iced paints the tint, niri blurs it through layer and window rules we generate. Fall back to Solid on battery saver.
+
+### Capture (`Screenshot`, `ScreenshotStates`)
+- Region, window and screen modes, remembers the last mode, Shift+Print for the full screen. Shell surfaces never appear in the image, and private windows are blacked out. Saves to Pictures/Screenshots and copies. A preview card appears after capture.
+- *Later:* screen recording (countdown, audio options, bar chip) and the markup window. Both are real projects of their own: recording is a PipeWire and encoder pipeline, and markup is a small drawing app.
+
+### Settings app (`Settings`, `SettingsStates`)
+- iced, built to the board's two-pane adaptive layout: Mica sidebar, solid pane, grouped rows, search across every page, live apply, collapses below 860 px.
+- **1.0 pages:** Appearance, Bar & Shell, Windows, Keyboard (layouts + shortcuts with conflict detection), Mouse & touchpad, Displays, Notifications, Sound, Network (Wi-Fi/Ethernet/VPN on/off and lists), Bluetooth, Power, Apps (default apps, autostart), About.
+- **Later:** Users (AccountsService: avatar, name, password), deep network editing (hand off to `nm-connection-editor` until then).
+
+### Not in scope
+Our own files, terminal, editor or viewer apps. Qt and Kvantum theming, and kitty/zed templates (later, a user template folder can cover these). Disk-unlock UI (that is a Plymouth theme, separate from the Rust code). Sync of any kind. An app store. X11 sessions. Plugins and widgets.
+
+## 5. Phases
+
+Each phase ends with something usable and `mise run check` green.
+
+### Phase 0: Foundations and spikes
+- ✅ `triton-design` (ADR-0006): constants generated from `tokens.json` (both schemes, state layers, radii, space, sizes, type scale, materials, shadows, springs, wave path), material fills, closed-form springs with velocity-preserving retarget and reduce-motion fades, wave outline, wavy linear and circular progress. 20 behavior tests.
+- ◐ `triton-ui`: a Triton `Theme` that implements iced's widget `Catalog` traits with component classes, so surfaces pick a component variant and cannot style widgets themselves. Done: buttons (4 kinds × 4 sizes, veil, disabled), icon buttons (6 kinds, toggled), chips, nav items, connected groups (incl. large veil on Glass), materials and floating panels, island, pill, card, dialog, grouped list rows, icon disc, key cap, tag, eyebrow, type scale, icons, concentric corners for tight wrappers (`wrap`, outer = inner + gap). `settings()` is the one iced setup every process uses. Gallery snapshot tests in both schemes (`crates/triton-ui/tests/snapshots/`). Still to do: switch, slider, search field, menus, scrollbar, wave and wavy-progress canvas widgets, the custom surface widget that draws its own outline: the Glass top highlight, the animated shape morph, and smoothed (squircle) corners on in-shell shapes (cards, list rows, chips, key caps, toggled icon buttons, segment joins). Floating panels and windows keep circular 28 px corners to match niri's window rounding; pills stay plain since smoothing barely changes them. Its cost on tiny-skia is measured alongside spike 1.
+- Host reconciler (ADR-0003) and niri include-file writer (ADR-0004), including the generated layer rules for blur.
+- **Spikes** (each answers yes/no before the phase that needs it):
+  1. A full-screen Thick Glass surface with a spring at 2880×1800 @1.75, 90 Hz on tiny-skia: frame time. (ADR-0005's named risk.)
+  2. ✅ Fonts: cosmic-text renders a variable font's `wght`, but only *selects* a family's face on an exact weight match, and fontdb sees a variable font as one weight. So every family ships as static instances at 400/500/600, and icons as two static fonts (FILL 0 and 1) cut to `icons.txt`. Built by `mise run fonts` (fonttools in a container), embedded by `triton-design::fonts`, about 1.1 MB in all.
+  3. `ext-session-lock` from iced (iced_sessionlock or our own).
+  4. niri per-window capture (PR #3942) status, which gates switcher previews.
+
+- The dev loop (section 7) lands first, before any surface.
+
+**Done when:** a headless preview renders the Component index board pixel-close.
+
+### Phase 1: Daily-drivable
+Bar (all modes, workspaces, title, clock, status, bell), wallpaper renderer and color pipeline, notifications (toasts and center), OSD, quick settings (with pages), launcher (apps, windows, math, commands), lock screen, power menu (basic), polkit agent, idle, night light, systemd unit and generated `binds.kdl`/`rules.kdl`.
+
+**Done when:** you can log in through GDM or a TTY into `niri-session`, use Triton all day, and never need another shell component.
+
+### Phase 2: Complete shell
+Media pill and popover, clipboard history, screenshot (three modes plus the post-capture card), wallpaper picker shelf and dynamic sets, SNI tray, recording and mic chips, notification extras (inline reply, progress, calls), power-state countdown and the unsaved-work flow, bar popovers.
+
+### Phase 3: Settings
+`triton-settings` with the 1.0 pages above. The quick-settings hand-off lands on the right page.
+
+### Phase 4: Login
+`triton-greeter` under greetd, fingerprint, session picker, wallpaper and scheme shared with the greeter (copied to a system-readable location on change). Triton now owns the session end to end.
+
+### Phase 5: Switch and overview → 1.0
+The window switcher (with live previews if spike 4 says yes, else app-icon cards to the same layout), overview chrome, an accessibility pass (screen reader announcements for OSD, reduce motion everywhere), a memory soak against the 80 MB budget. **1.0.**
+
+### After 1.0
+Screen recording, markup editor, Users page, per-display wallpaper polish, user theme templates.
+
+## 6. Risks and conflicts to resolve
+
+- **ADR-0005 says "Blur stays off."** The design needs blur everywhere. This is compatible, because niri does the blur and iced only paints translucent fills, but ADR-0005's consequence line needs amending, and its large-panel performance risk is now central (spike 1).
+- **The Settings board says "ship as a real libadwaita app".** This roadmap builds it in iced instead, to keep one stack. It still follows the board's layout.
+- **The canvas says "matugen".** We use the same engine (the `material-colors` crate) in-process instead of shelling out. The visible behavior is the same.
+- **Placeholder copy in the canvas** (`Bar.qml`, `PanelWindow`, `quickshell` folders in the Main and Materials boards) is mock content only. Triton does not use Quickshell.
+- **Window previews** depend on niri landing toplevel capture.
+- **Workspace OSD "only from a shortcut":** niri events don't say what caused a switch. Route through `triton msg` binds so we know.
+- **Light-scheme hexes are hand-picked** in the tokens (the canvas README's own known gap). Generate them from the pipeline in Phase 1 and diff against the boards.
+- ADRs reference `product.md` and `architecture.md`, which were removed. This roadmap stands in for product.md until those are rewritten.
+
+## 7. Dev loop
+
+No VM. One small rootless podman container (`dev/preview/`, Fedora 45 with niri 26.04, sway, dbus, mesa). niri nests: inside any Wayland session it runs its winit backend as a normal window. Its headless backend (`src/backend/headless.rs`) is only used by niri's own tests and has no CLI flag, so headless runs nest niri inside a headless sway. The container exists because sway ships with file capabilities that `nx` can't unpack, and it also gives isolation for free. Plain podman, not toolbox or distrobox: those share your home, runtime dir and session bus.
+
+Three tiers, cheapest first:
+
+| Tier | Command | What runs | Use for |
+|---|---|---|---|
+| 1. Widgets | `cargo test -p triton-design` | `iced_test` on tiny-skia, no Wayland | Components, theme, springs; snapshot diffs |
+| 2. Nested | `mise run dev` | container: niri as a window on your desktop (host socket mounted) → triton | Interactive work: hover, keys, animation, blur |
+| 3. Headless | `mise run preview`, `preview:msg -- …`, `preview:shot`, `preview:stop` | container: headless sway at 2880×1800 → nested niri at scale 1.75 → triton | Agents and CI: drive with `niri msg action …`, capture with niri's own `screenshot-screen` (layer surfaces and blur included) to `target/preview/shot.png` |
+
+`TRITON_CMD=/work/target/debug/triton` sets what niri starts. The repo is mounted read-only at `/work`; only `target/preview` is writable.
+
+Isolation rules (all three tiers enforce them in the mise task, not by convention):
+
+- **Never `niri --session`.** That flag exports the environment to systemd and the session bus.
+- **Private runtime dir.** `XDG_RUNTIME_DIR` points at a temp dir, so wayland sockets, the niri socket and triton's own socket can't collide with the real session. The nested tier keeps the host display with an absolute `WAYLAND_DISPLAY=/run/user/$UID/wayland-1`, which libwayland accepts.
+- **Private config.** `XDG_CONFIG_HOME` and friends point under `target/preview/home`, so the ADR-0004 writer edits a scratch `niri/config.kdl`, never yours. niri runs with `-c` on that file.
+- **Private session bus** (`dbus-run-session`), so triton's notification server, SNI watcher and portal names don't fight the real shell.
+- **System-bus services are faked** (`Services::fake`, the `fake` feature): NetworkManager, BlueZ, UPower and logind live on the system bus, and a dev build must never toggle your real Wi-Fi or suspend the laptop. Tier 2 can opt into real services read-only with `--real-services`.
+
+Verified on 2026-11-21: nested niri gets hardware EGL on the AMD iGPU (`/dev/dri` passed through), output reports 2880×1800 @1.75 (logical 1645×1028; niri floors, the canvas rounds to 1646×1029), and a floating translucent window with `background-effect { blur true; xray false }` shows real blur of the window behind in `screenshot-screen` output. Not yet checked: llvmpipe for CI without a GPU. Starts in about a second.
