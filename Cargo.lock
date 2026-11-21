@@ -1041,8 +1041,6 @@ dependencies = [
 [[package]]
 name = "iced_layershell"
 version = "0.19.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51b59e8af02bf4c51db2ee5d130293e6e1e5ac4ae9f74a1e57990a19221aa0d5"
 dependencies = [
  "enumflags2",
  "futures",
@@ -1060,14 +1058,13 @@ dependencies = [
  "log",
  "thiserror 2.0.21",
  "tracing",
+ "wayland-protocols",
  "window_clipboard",
 ]
 
 [[package]]
 name = "iced_layershell_macros"
 version = "0.19.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "99d35752ff73ef8eb5f15008e501d011aead655baab9a5689dcea40e42e3463e"
 dependencies = [
  "darling",
  "manyhow",
@@ -1291,8 +1288,6 @@ dependencies = [
 [[package]]
 name = "layershellev"
 version = "0.19.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69fbd3ced50d91a5a118e3e00f49c72040ea6b48b78b159a3936104fc2632925"
 dependencies = [
  "calloop",
  "calloop-wayland-source",

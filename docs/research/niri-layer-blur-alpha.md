@@ -1,8 +1,11 @@
 # niri `geometry-corner-radius` + `blur` destroys interior alpha on layer surfaces
 
-Status: confirmed by experiment, November 2026. This resolves the "MSAA has no
+Status: fixed, November 2026. This resolves the "MSAA has no
 effect on Vulkan" open item in ADR-0007: the jagged paths were never a
-renderer, wgpu, MSAA or driver problem.
+renderer, wgpu, MSAA or driver problem. The shipped fix is in
+[the fix path](#the-fix-path-ext-background-effect-v1): the islands request
+pill-shaped blur through `ext-background-effect`, and the generated rule is
+radius + shadow only.
 
 ## Symptom
 
@@ -58,21 +61,24 @@ niri 26.04 advertises `ext_background_effect_manager_v1` (the preview's
 window"* — clients with their own rounded corners are expected to set a blur
 shape through the protocol instead of relying on `geometry-corner-radius`.
 
-Concretely, for the bar islands:
+Implemented this way, and verified in the preview:
 
 - `ext_background_effect_manager_v1.get_background_effect(wl_surface)` →
-  `ext_background_effect_v1`, then `set_blur_region(region)` with the pill
-  shape (or the surface rect — it's already rounded by transparency).
-- Drop `background-effect` *and* `geometry-corner-radius` from the generated
-  rule's blur role; keep `geometry-corner-radius` + `shadow` — radius alone
-  stays out of the destructive path and still rounds the shadow.
+  `ext_background_effect_surface_v1`, then `set_blur_region(region)` with the
+  pill banded into rectangles (`triton_design::shape::rounded_rect_bands`;
+  `wl_region` is rect unions only). `host::blur_region` sends it on create and
+  re-sends on resize, since the region is surface-local.
+- The generated rule drops `background-effect` and keeps
+  `geometry-corner-radius` + `shadow`. Confirmed in the preview: rule blur +
+  protocol blur is fine together, the edge stays smooth, and the blur hugs the
+  pill — no rectangular halo.
 
-Integration cost: `iced_layershell` 0.19.1 does not expose its `wl_surface`s,
-so the protocol needs either a patch to `iced_layershell`/`layershellev` (the
-natural place — it owns surface creation) or an upstream feature. The
-protocol itself is three requests; sctk has no helper for it yet. Quickshell,
-Vicinae, Ghostty and DankMaterialShell already implement it (niri PR #3483
-discussion).
+Integration: `iced_layershell` 0.19.1 exposes no `wl_surface`, so the three
+vendored patches in `patches/` carry it — `layershellev` owns the `Dispatch`
+impls, `iced_layershell` binds the manager at `BindProvide` and handles the
+`SetBlurRegion` action, `iced_layershell_macros` maps the message. Worth
+upstreaming; drop the patches if it lands. Quickshell, Vicinae, Ghostty and
+DankMaterialShell implement the same protocol (niri PR #3483 discussion).
 
 ## What this means for the renderer decision
 

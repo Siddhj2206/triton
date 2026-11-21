@@ -24,8 +24,11 @@ const HEADER: &str = "// Written by triton. Changes here are overwritten; use th
 
 /// Every file triton owns, by name: `index.kdl` includes the rest.
 pub fn render() -> Vec<(&'static str, String)> {
-    // The islands are pills; niri clips the blur to this radius and casts the
-    // Glass shadow (the floating shadow), since iced cannot draw outside the surface.
+    // The islands are pills; the rule's corner radius shapes their Glass
+    // shadow (the floating shadow), since iced cannot draw outside the surface.
+    // No background-effect here: rule blur plus corner radius makes niri
+    // binarize the surface's alpha, so the islands request their own blur
+    // through ext-background-effect instead (docs/research/niri-layer-blur-alpha.md).
     let radius = SIZE.bar_height / 2.0;
     let shadow = ShadowToken::FLOATING;
     let (x, y, softness, spread) = (shadow.x, shadow.y, shadow.blur, shadow.spread);
@@ -41,10 +44,6 @@ layer-rule {{
         spread {spread}
         offset x={x} y={y}
         color \"{color}\"
-    }}
-    background-effect {{
-        blur true
-        xray false
     }}
 }}
 "
@@ -98,9 +97,13 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_is_blurred() {
+    fn the_bar_is_rounded_and_shadowed_but_never_rule_blurred() {
+        // Rule blur + corner radius binarizes the surface's alpha in niri
+        // (docs/research/niri-layer-blur-alpha.md); blur is client-requested.
         let rules = &render()[1].1;
         assert!(rules.contains("namespace=\"^triton-bar$\""));
-        assert!(rules.contains("blur true"));
+        assert!(rules.contains("geometry-corner-radius"));
+        assert!(rules.contains("shadow {"));
+        assert!(!rules.contains("background-effect"));
     }
 }

@@ -75,10 +75,13 @@ pub struct SurfaceSpec {
     /// Only the top this many px take pointer input; `None` is the whole surface.
     /// Lets a shadow draw below a surface without catching clicks there.
     pub input_height: Option<u32>,
+    /// Corner radius of the blur triton asks niri for (ext-background-effect),
+    /// matching the surface's drawn shape. `None` is no background effect.
+    pub blur_radius: Option<u32>,
 }
 
-/// The bar islands' layer-shell namespace; niri's layer rule blurs them, clips the
-/// blur to the pill and casts their shadow (ADR-0004).
+/// The bar islands' layer-shell namespace; niri's layer rule rounds and shadows
+/// them while the islands ask for their own blur (ADR-0004).
 pub const BAR_NAMESPACE: &str = "triton-bar";
 /// The bar's reserved strip; no layer rule matches it.
 pub const BAR_ZONE_NAMESPACE: &str = "triton-bar-zone";
@@ -91,7 +94,7 @@ pub const BAR_SIDE: f32 = 16.0;
 /// Width of an island before it has been measured.
 const UNMEASURED: u32 = 56;
 
-/// One island, in a top corner, exactly its own size: niri blurs and shadows a
+/// One island, in a top corner, exactly its own size: niri clips and shadows a
 /// layer surface as a whole, so the surface must be the pill and nothing more.
 fn island(end: bool, width: u32) -> SurfaceSpec {
     SurfaceSpec {
@@ -115,6 +118,7 @@ fn island(end: bool, width: u32) -> SurfaceSpec {
         ),
         keyboard: Keyboard::None,
         input_height: None,
+        blur_radius: Some(SIZE.bar_height as u32 / 2),
     }
 }
 
@@ -135,6 +139,7 @@ fn zone() -> SurfaceSpec {
         margin: (0, 0, 0, 0),
         keyboard: Keyboard::None,
         input_height: Some(0),
+        blur_radius: None,
     }
 }
 

@@ -12,6 +12,8 @@ use iced_layershell::reexport::{
     Anchor, KeyboardInteractivity, Layer as LsLayer, NewLayerShellSettings, OutputOption, Task,
 };
 
+use triton_design::shape::rounded_rect_bands;
+
 use crate::app::Message;
 use crate::shell::{Anchors, Keyboard, Layer, SurfaceKey, SurfaceSpec};
 pub use plan::{Change, SurfaceOp, plan};
@@ -75,6 +77,24 @@ fn input_region(id: Id, height: Option<u32>) -> Task<Message> {
     })
 }
 
+/// Asks the compositor to blur behind the surface's drawn shape
+/// (ext-background-effect), banded into rectangles to follow its corners.
+/// Re-sent whenever the size or radius changes: the region is surface-local.
+fn blur_region(id: Id, spec: &SurfaceSpec) -> Task<Message> {
+    let Some(radius) = spec.blur_radius else {
+        return Task::none();
+    };
+    let (width, height) = spec.size;
+    Task::done(Message::SetBlurRegion {
+        id,
+        callback: ActionCallback::new(move |region| {
+            for (x, y, w, h) in rounded_rect_bands(width, height, radius as f32) {
+                region.add(x, y, w, h);
+            }
+        }),
+    })
+}
+
 /// The surfaces that exist, by key and by iced window id.
 #[derive(Debug, Default)]
 pub struct SurfaceTable {
@@ -118,9 +138,10 @@ impl SurfaceTable {
                     id,
                 });
                 let input = input_region(id, spec.input_height);
+                let blur = blur_region(id, &spec);
                 self.ids.insert(id, key.clone());
                 self.surfaces.insert(key, (id, spec));
-                task.chain(input)
+                task.chain(input).chain(blur)
             }
             SurfaceOp::Destroy(key) => {
                 tracing::info!(?key, "destroy surface");
@@ -135,11 +156,17 @@ impl SurfaceTable {
                     return Task::none();
                 };
                 let id = *id;
-                Task::batch(changes.into_iter().map(|change| {
+                let mut resend_blur = false;
+                let task = Task::batch(changes.into_iter().map(|change| {
                     let message = match change {
                         Change::InputHeight(h) => {
                             spec.input_height = h;
                             return input_region(id, h);
+                        }
+                        Change::BlurRadius(r) => {
+                            spec.blur_radius = r;
+                            resend_blur = true;
+                            return Task::none();
                         }
                         Change::Layer(l) => {
                             spec.layer = l;
@@ -151,6 +178,7 @@ impl SurfaceTable {
                         Change::AnchorSize(a, size) => {
                             spec.anchors = a;
                             spec.size = size;
+                            resend_blur = true;
                             Message::AnchorSizeChange {
                                 id,
                                 anchor: anchor(a),
@@ -174,7 +202,12 @@ impl SurfaceTable {
                         }
                     };
                     Task::done(message)
-                }))
+                }));
+                if resend_blur {
+                    task.chain(blur_region(id, spec))
+                } else {
+                    task
+                }
             }
         }
     }

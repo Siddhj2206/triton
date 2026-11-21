@@ -310,3 +310,43 @@ pub fn flatten(start: Point, segments: &[Segment], step: f32) -> Vec<Point> {
     }
     points
 }
+
+/// Horizontal rectangles covering a `width` × `height` rounded rect with
+/// `radius` corners — Wayland regions are unions of rectangles, so a rounded
+/// blur or input region is built by banding it. Each band is inset from the
+/// sides so it never reaches past the drawn edge.
+///
+/// `(x, y, width, height)` per band, in the surface's local coordinates.
+pub fn rounded_rect_bands(width: u32, height: u32, radius: f32) -> Vec<(i32, i32, i32, i32)> {
+    let w = i32::try_from(width).unwrap_or(i32::MAX);
+    let h = i32::try_from(height).unwrap_or(i32::MAX);
+    let radius = radius.clamp(0.0, w.min(h) as f32 / 2.0);
+    let mut bands = Vec::new();
+    let mut y = 0;
+    while y < h {
+        let inset = band_inset(y, h, radius);
+        let mut bottom = y + 1;
+        while bottom < h && band_inset(bottom, h, radius) == inset {
+            bottom += 1;
+        }
+        bands.push((inset, y, w - 2 * inset, bottom - y));
+        y = bottom;
+    }
+    bands
+}
+
+/// How far a pixel row comes in from each side at row `y` of `h`, for a corner
+/// radius of `r` — the quarter circle's x at the row's pixel center, rounded
+/// up so the band stays inside the curve.
+fn band_inset(y: i32, h: i32, r: f32) -> i32 {
+    let y = y as f32 + 0.5;
+    let d = if y <= h as f32 / 2.0 {
+        r - y
+    } else {
+        r - (h as f32 - y)
+    };
+    if d <= 0.0 {
+        return 0;
+    }
+    (r - (r * r - d * d).max(0.0).sqrt()).ceil() as i32
+}
