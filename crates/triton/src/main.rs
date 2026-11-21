@@ -9,6 +9,7 @@ mod msg;
 mod niri;
 mod niri_config;
 mod notify;
+mod panels;
 mod pipeline;
 mod polkit;
 mod services;

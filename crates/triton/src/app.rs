@@ -41,6 +41,11 @@ fn launcher_field() -> widget::Id {
     widget::Id::from("launcher-query")
 }
 
+/// The polkit dialog's field id (focused when the dialog maps).
+pub fn polkit_field() -> widget::Id {
+    widget::Id::from("polkit-password")
+}
+
 /// The Thick panel's inner padding; the field's radius is `nested` against it.
 const LAUNCHER_PAD: f32 = 14.0;
 
@@ -135,6 +140,35 @@ pub enum Message {
     BarSetMode(BarMode),
     /// A new services snapshot (battery, connectivity) for the status group.
     Statuses(Arc<Statuses>),
+    /// The battery-low OSD's action: power saver on.
+    OsdSaver,
+    /// A power-menu action was picked (click or digit jump); Enter re-picks the
+    /// focused one through `PowerConfirm`.
+    PowerPick(crate::panels::PowerAction),
+    PowerToggle,
+    PowerMove(i8),
+    PowerConfirm,
+    /// Quick settings.
+    QsPage(crate::panels::QsPage),
+    QsToggleWifi,
+    QsToggleBt,
+    QsToggleNight,
+    QsToggleDark,
+    QsToggleSaver,
+    QsBrightness(f32),
+    QsBrightnessCommit,
+    QsVolume(f32),
+    QsVolumeCommit,
+    QsMicMute,
+    QsAllSettings,
+    /// Notification center / toasts.
+    NotifActivate(u32),
+    NotifGroupToggle(String),
+    NotifClearApp(String),
+    /// Polkit dialog.
+    PolkitInput(String),
+    PolkitSubmit,
+    PolkitCancel,
 }
 
 #[derive(Debug, Default)]
