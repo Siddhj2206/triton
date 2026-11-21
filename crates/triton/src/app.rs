@@ -224,6 +224,8 @@ pub enum Message {
     Launch(Arc<crate::launch::Results>),
     /// A result row was pressed, or Enter picked the top hit.
     LaunchHit(crate::launch::HitKind),
+    /// Enter in the launcher field: activate the first hit (or the math row).
+    LauncherEnter,
     /// Wallpaper load + scheme pipeline finished on its thread.
     Pipeline(Arc<PipelineDone>),
     /// The battery-low OSD's action: power saver on.
@@ -465,13 +467,15 @@ impl Shell {
                 Task::none()
             }
             Message::Launcher(output) => {
-                self.launcher = if self.launcher.as_deref() == Some(output.as_str()) {
-                    None
+                if self.launcher.as_deref() == Some(output.as_str()) {
+                    self.launcher = None;
+                    self.reconcile()
                 } else {
                     self.query.clear();
-                    Some(output)
-                };
-                self.reconcile()
+                    self.launcher = Some(output);
+                    let t = self.search();
+                    Task::batch([t, self.reconcile()])
+                }
             }
             Message::Dismiss => {
                 if let Some((CenteredRole::Polkit, _)) = self.centered {
@@ -678,6 +682,18 @@ impl Shell {
                 Task::none()
             }
             Message::LaunchHit(kind) => self.activate_hit(&kind),
+            Message::LauncherEnter => {
+                let first = self
+                    .results
+                    .as_ref()
+                    .and_then(|r| r.groups.first())
+                    .and_then(|(_, hits)| hits.first())
+                    .map(|h| h.kind.clone());
+                match first {
+                    Some(kind) => self.activate_hit(&kind),
+                    None => Task::none(),
+                }
+            }
             Message::Pipeline(done) => {
                 self.wallpaper = done.wallpaper.clone();
                 self.wallpaper_luminance = done.luminance;
@@ -1314,6 +1330,7 @@ impl Shell {
         )
         .id(launcher_field())
         .on_input(Message::LauncherInput)
+        .on_submit(Message::LauncherEnter)
         .size(24.0)
         .padding(Padding::from([22.0, 20.0]));
         let scopes = Row::new()
