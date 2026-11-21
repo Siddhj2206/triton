@@ -14,8 +14,12 @@ pub enum Role {
     IslandStart,
     /// The right island: clock, status, notifications.
     IslandEnd,
-    /// The strip that reserves the bar's height.
-    Zone,
+    /// The pinned bar: one full-width Mica strip (`BarStates` board).
+    Strip,
+    /// The invisible 2 px top edge that wakes the left island in autohide.
+    RevealStart,
+    /// The same for the right island.
+    RevealEnd,
     /// The dim behind a modal panel. Declared before the modal roles so the
     /// scrim maps first and stacks below them within the overlay layer.
     Scrim,
@@ -90,8 +94,10 @@ pub struct SurfaceSpec {
 /// The bar islands' layer-shell namespace; niri's layer rule rounds and shadows
 /// them while the islands ask for their own blur (ADR-0004).
 pub const BAR_NAMESPACE: &str = "triton-bar";
-/// The bar's reserved strip; no layer rule matches it.
-pub const BAR_ZONE_NAMESPACE: &str = "triton-bar-zone";
+/// The pinned bar strip; no layer rule matches it (square, unshadowed chrome).
+pub const BAR_STRIP_NAMESPACE: &str = "triton-bar-strip";
+/// The autohide reveal edge; no layer rule matches it (transparent input strip).
+pub const BAR_REVEAL_NAMESPACE: &str = "triton-bar-reveal";
 /// The modal scrim; no layer rule matches it (transparent input surface).
 pub const SCRIM_NAMESPACE: &str = "triton-scrim";
 /// The launcher's namespace; a layer rule rounds and shadows it.
@@ -140,11 +146,11 @@ fn island(end: bool, width: u32) -> SurfaceSpec {
 /// fits the placeholder content (field + hits + hints) without clipping.
 pub const LAUNCHER_SIZE: (u32, u32) = (900, 700);
 
-/// An invisible 1 px strip across the top that reserves the bar's height, so
-/// windows start below the islands. It takes no input.
-fn zone() -> SurfaceSpec {
+/// The pinned bar: a square Mica strip edge to edge. Its exclusive zone is the
+/// reservation — windows start below it (`BarStates`: "Docked").
+fn strip() -> SurfaceSpec {
     SurfaceSpec {
-        namespace: BAR_ZONE_NAMESPACE,
+        namespace: BAR_STRIP_NAMESPACE,
         layer: Layer::Top,
         anchors: Anchors {
             top: true,
@@ -152,11 +158,35 @@ fn zone() -> SurfaceSpec {
             right: true,
             bottom: false,
         },
-        size: (0, 1),
-        exclusive_zone: (BAR_TOP + SIZE.bar_height) as i32,
+        size: (0, SIZE.bar_height as u32),
+        exclusive_zone: SIZE.bar_height as i32,
         margin: (0, 0, 0, 0),
         keyboard: Keyboard::None,
-        input_height: Some(0),
+        input_height: None,
+        // Rectangle region: whole-surface blur suits a strip.
+        blur_radius: Some(0),
+    }
+}
+
+/// The 2 px top edge over an island's footprint that wakes it in autohide
+/// (`BarStates`: "the only trace is an invisible 2 px strip"). One edge per
+/// island so they reveal independently. It reserves nothing and stays mapped
+/// while the island is up so hover state stays continuous.
+fn reveal(end: bool, width: u32) -> SurfaceSpec {
+    SurfaceSpec {
+        namespace: BAR_REVEAL_NAMESPACE,
+        layer: Layer::Top,
+        anchors: Anchors {
+            top: true,
+            left: !end,
+            right: end,
+            bottom: false,
+        },
+        size: (width.max(1), 2),
+        exclusive_zone: 0,
+        margin: (0, 0, 0, 0),
+        keyboard: Keyboard::None,
+        input_height: None,
         blur_radius: None,
     }
 }
@@ -228,6 +258,22 @@ fn notifications(height: u32, bar_shown: bool) -> SurfaceSpec {
     }
 }
 
+/// How the bar presents (`BarStates` board). The user picks a mode in settings
+/// later; `triton msg bar mode …` switches it for now.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum BarMode {
+    /// Two floating Glass islands that hide until the 2 px top edge (or
+    /// `bar toggle`) wakes them. Nothing is reserved; windows use the whole
+    /// screen and the islands cover what is under them.
+    #[default]
+    AutoHide,
+    /// A square, full-width Mica strip with an exclusive zone — windows start
+    /// below it.
+    Pinned,
+    /// Nothing until `bar toggle`; no reveal edge.
+    Hidden,
+}
+
 /// The modal surfaces open on an output, if any. One field per panel; the scrim
 /// comes free while any of them is set.
 #[derive(Debug, Default, Clone, Copy)]
@@ -247,16 +293,29 @@ pub struct Sizes {
 /// Seed height for the center before its first measure lands.
 const UNMEASURED_PANEL_HEIGHT: u32 = 96;
 
+/// The island's reveal edge covers its side margin plus its own measured width,
+/// so the whole footprint wakes it.
+fn reveal_width(end: bool, sizes: &Sizes, key: impl Fn(Role) -> SurfaceKey) -> SurfaceSpec {
+    let k = key(if end {
+        Role::IslandEnd
+    } else {
+        Role::IslandStart
+    });
+    let island = sizes.widths.get(&k).copied().unwrap_or(UNMEASURED);
+    reveal(end, island + BAR_SIDE as u32)
+}
+
 /// Every surface the shell wants, for the outputs niri has reported. `sizes`
 /// holds the measured extents of content-sized surfaces. `modals` names the
-/// output each open panel lives on, if any. `bar_shown` reports whether the bar
-/// is visible on an output — pinned or autohide-revealed — so modals can clear
-/// it (autohide feeds this once it exists; today the bar is always up).
+/// output each open panel lives on, if any. `mode` is the bar mode; `bar_shown`
+/// reports whether an island is up (ignored when pinned — it always is) and
+/// modals clear it where it floats.
 pub fn desired<'a>(
     outputs: impl IntoIterator<Item = &'a str>,
     sizes: &Sizes,
     modals: &Modals<'a>,
-    bar_shown: impl Fn(&str) -> bool,
+    mode: BarMode,
+    bar_shown: impl Fn(&SurfaceKey) -> bool,
 ) -> BTreeMap<SurfaceKey, SurfaceSpec> {
     let mut out = BTreeMap::new();
     for output in outputs {
@@ -264,11 +323,24 @@ pub fn desired<'a>(
             role,
             output: output.to_owned(),
         };
-        out.insert(key(Role::Zone), zone());
-        for (role, end) in [(Role::IslandStart, false), (Role::IslandEnd, true)] {
-            let k = key(role);
-            let width = sizes.widths.get(&k).copied().unwrap_or(UNMEASURED);
-            out.insert(k, island(end, width));
+        if mode == BarMode::Pinned {
+            out.insert(key(Role::Strip), strip());
+        } else {
+            for (role, end) in [(Role::IslandStart, false), (Role::IslandEnd, true)] {
+                if mode == BarMode::AutoHide {
+                    let edge = if end {
+                        Role::RevealEnd
+                    } else {
+                        Role::RevealStart
+                    };
+                    out.insert(key(edge), reveal_width(end, sizes, key));
+                }
+                let k = key(role);
+                if bar_shown(&k) {
+                    let width = sizes.widths.get(&k).copied().unwrap_or(UNMEASURED);
+                    out.insert(k, island(end, width));
+                }
+            }
         }
         if modals.launcher == Some(output) || modals.notifications == Some(output) {
             out.insert(key(Role::Scrim), scrim());
@@ -283,7 +355,9 @@ pub fn desired<'a>(
                 .get(&k)
                 .copied()
                 .unwrap_or(UNMEASURED_PANEL_HEIGHT);
-            out.insert(k, notifications(height, bar_shown(output)));
+            // The panel sits top-right: it clears the right island's state.
+            let up = mode == BarMode::Pinned || bar_shown(&key(Role::IslandEnd));
+            out.insert(k, notifications(height, up));
         }
     }
     out

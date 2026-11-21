@@ -93,7 +93,7 @@ pub fn plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shell::{Modals, Role, Sizes, desired};
+    use crate::shell::{BAR_SIDE, BarMode, Modals, Role, Sizes, desired};
 
     fn key(role: Role, output: &str) -> SurfaceKey {
         SurfaceKey {
@@ -114,6 +114,7 @@ mod tests {
             outputs.iter().copied(),
             &Sizes::default(),
             &Modals::default(),
+            BarMode::AutoHide,
             |_| true,
         )
     }
@@ -130,9 +131,10 @@ mod tests {
     #[test]
     fn a_bar_per_output_from_nothing() {
         let ops = plan(&want(&["DP-1", "eDP-1"]), &BTreeMap::new());
-        assert_eq!(ops.len(), 6);
+        assert_eq!(ops.len(), 8);
         assert!(creates(&ops).contains(&&key(Role::IslandStart, "DP-1")));
-        assert!(creates(&ops).contains(&&key(Role::Zone, "eDP-1")));
+        assert!(creates(&ops).contains(&&key(Role::RevealStart, "eDP-1")));
+        assert!(creates(&ops).contains(&&key(Role::RevealEnd, "eDP-1")));
     }
 
     #[test]
@@ -153,8 +155,8 @@ mod tests {
                 .iter()
                 .all(|op| matches!(op, SurfaceOp::Destroy(k) if k.output == "DP-1"))
         );
-        assert_eq!(first_create, 3);
-        assert_eq!(ops.len(), 6);
+        assert_eq!(first_create, 4);
+        assert_eq!(ops.len(), 8);
     }
 
     #[test]
@@ -169,6 +171,7 @@ mod tests {
                     ..Sizes::default()
                 },
                 &Modals::default(),
+                BarMode::AutoHide,
                 |_| true,
             ),
             &want(&["eDP-1"]),
@@ -180,29 +183,45 @@ mod tests {
                 ..Sizes::default()
             },
             &Modals::default(),
+            BarMode::AutoHide,
             |_| true,
         )[&k];
         assert_eq!(
             ops,
-            vec![SurfaceOp::Reconfigure(
-                k,
-                vec![Change::AnchorSize(spec.anchors, (300, spec.size.1))]
-            )]
+            vec![
+                SurfaceOp::Reconfigure(
+                    k,
+                    vec![Change::AnchorSize(spec.anchors, (300, spec.size.1))]
+                ),
+                // The island's reveal edge tracks its width.
+                SurfaceOp::Reconfigure(
+                    key(Role::RevealStart, "eDP-1"),
+                    vec![Change::AnchorSize(
+                        Anchors {
+                            top: true,
+                            bottom: false,
+                            left: true,
+                            right: false
+                        },
+                        (300 + BAR_SIDE as u32, 2)
+                    )]
+                )
+            ]
         );
     }
 
     #[test]
     fn a_changed_spec_uses_the_narrowest_request() {
         let mut w = want(&["eDP-1"]);
-        let spec = w.get_mut(&key(Role::Zone, "eDP-1")).expect("zone");
-        spec.exclusive_zone = 0;
+        let spec = w.get_mut(&key(Role::RevealStart, "eDP-1")).expect("reveal");
+        spec.exclusive_zone = 1;
         spec.layer = Layer::Overlay;
         let ops = plan(&w, &want(&["eDP-1"]));
         assert_eq!(
             ops,
             vec![SurfaceOp::Reconfigure(
-                key(Role::Zone, "eDP-1"),
-                vec![Change::Layer(Layer::Overlay), Change::ExclusiveZone(0)]
+                key(Role::RevealStart, "eDP-1"),
+                vec![Change::Layer(Layer::Overlay), Change::ExclusiveZone(1)]
             )]
         );
     }
@@ -212,9 +231,13 @@ mod tests {
         // niri stacks same-layer surfaces in map order: the scrim must be
         // created before the panel so it sits below it.
         let ops = plan(
-            &desired(["eDP-1"], &Sizes::default(), &launcher_on("eDP-1"), |_| {
-                true
-            }),
+            &desired(
+                ["eDP-1"],
+                &Sizes::default(),
+                &launcher_on("eDP-1"),
+                BarMode::AutoHide,
+                |_| true,
+            ),
             &want(&["eDP-1"]),
         );
         let scrim = ops
@@ -226,9 +249,13 @@ mod tests {
             .position(|op| matches!(op, SurfaceOp::Create(k, _) if k.role == Role::Launcher))
             .expect("launcher");
         assert!(scrim < panel);
-        let spec = &desired(["eDP-1"], &Sizes::default(), &launcher_on("eDP-1"), |_| {
-            true
-        })[&key(Role::Launcher, "eDP-1")];
+        let spec = &desired(
+            ["eDP-1"],
+            &Sizes::default(),
+            &launcher_on("eDP-1"),
+            BarMode::AutoHide,
+            |_| true,
+        )[&key(Role::Launcher, "eDP-1")];
         assert_eq!(spec.keyboard, Keyboard::Exclusive);
         assert_eq!(spec.blur_radius, Some(28));
     }
@@ -239,6 +266,7 @@ mod tests {
             ["eDP-1", "DP-1"],
             &Sizes::default(),
             &launcher_on("DP-1"),
+            BarMode::AutoHide,
             |_| true,
         );
         assert!(!d.contains_key(&key(Role::Launcher, "eDP-1")));
@@ -254,16 +282,84 @@ mod tests {
     }
 
     #[test]
+    fn autohide_hidden_maps_only_the_reveal_edges() {
+        let d = desired(
+            ["eDP-1"],
+            &Sizes::default(),
+            &Modals::default(),
+            BarMode::AutoHide,
+            |_| false,
+        );
+        assert_eq!(d.len(), 2);
+        for role in [Role::RevealStart, Role::RevealEnd] {
+            let spec = &d[&key(role, "eDP-1")];
+            assert_eq!(spec.size.1, 2);
+            assert_eq!(spec.exclusive_zone, 0);
+        }
+    }
+
+    #[test]
+    fn the_islands_come_and_go_independently() {
+        let d = desired(
+            ["eDP-1"],
+            &Sizes::default(),
+            &Modals::default(),
+            BarMode::AutoHide,
+            |k| k.role == Role::IslandStart,
+        );
+        assert!(d.contains_key(&key(Role::IslandStart, "eDP-1")));
+        assert!(!d.contains_key(&key(Role::IslandEnd, "eDP-1")));
+        // Both edges stay mapped either way.
+        assert!(d.contains_key(&key(Role::RevealEnd, "eDP-1")));
+    }
+
+    #[test]
+    fn pinned_maps_one_exclusive_strip() {
+        let d = desired(
+            ["eDP-1"],
+            &Sizes::default(),
+            &Modals::default(),
+            BarMode::Pinned,
+            |_| false,
+        );
+        assert_eq!(d.len(), 1);
+        let spec = &d[&key(Role::Strip, "eDP-1")];
+        assert_eq!(spec.exclusive_zone, i32::try_from(spec.size.1).unwrap());
+        assert!(spec.anchors.left && spec.anchors.right);
+    }
+
+    #[test]
+    fn the_notifications_margin_tracks_the_bar() {
+        let modals = Modals {
+            notifications: Some("eDP-1"),
+            ..Modals::default()
+        };
+        let margin = |shown| {
+            desired(
+                ["eDP-1"],
+                &Sizes::default(),
+                &modals,
+                BarMode::AutoHide,
+                |_| shown,
+            )[&key(Role::Notifications, "eDP-1")]
+                .margin
+                .0
+        };
+        assert_eq!(margin(true), 76);
+        assert_eq!(margin(false), 20);
+    }
+
+    #[test]
     fn a_new_namespace_means_a_new_surface() {
         let mut w = want(&["eDP-1"]);
-        let k = key(Role::Zone, "eDP-1");
-        w.get_mut(&k).expect("zone").namespace = "other";
+        let k = key(Role::RevealStart, "eDP-1");
+        w.get_mut(&k).expect("reveal").namespace = "other";
         let ops = plan(&w, &want(&["eDP-1"]));
         assert_eq!(
             ops,
             vec![
                 SurfaceOp::Destroy(k.clone()),
-                SurfaceOp::Create(k, w[&key(Role::Zone, "eDP-1")].clone())
+                SurfaceOp::Create(k, w[&key(Role::RevealStart, "eDP-1")].clone())
             ]
         );
     }

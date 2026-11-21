@@ -1,6 +1,8 @@
 //! The shell as one iced daemon: niri snapshots in, a bar on every output out.
 
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use iced_core::alignment::Vertical;
 use iced_core::keyboard::{self, Key, key};
@@ -24,7 +26,7 @@ use triton_ui::{Element, Renderer, Surface, Theme, Tone};
 use crate::host::SurfaceTable;
 use crate::msg;
 use crate::niri::{self, Snapshot};
-use crate::shell::{self, Modals, Role, Sizes};
+use crate::shell::{self, BarMode, Modals, Role, Sizes, SurfaceKey};
 
 /// The launcher field's widget id, so it can be focused once its surface maps.
 fn launcher_field() -> widget::Id {
@@ -33,6 +35,12 @@ fn launcher_field() -> widget::Id {
 
 /// The Thick panel's inner padding; the field's radius is `nested` against it.
 const LAUNCHER_PAD: f32 = 14.0;
+
+/// `BarStates` timings: 120 ms on the top edge wakes the bar, 600 ms of no
+/// pointer over bar chrome puts it away. (The fullscreen 300 ms dwell waits on
+/// a fullscreen flag in niri's IPC.)
+const REVEAL_DELAY: Duration = Duration::from_millis(120);
+const HIDE_DELAY: Duration = Duration::from_millis(600);
 
 /// Placeholder result groups until search lands.
 fn launcher_results<'a>() -> Column<'a, Message, Theme, Renderer> {
@@ -107,6 +115,18 @@ pub enum Message {
     Bell(String),
     /// The center's DND toggle.
     Dnd,
+    /// The pointer entered an island's chrome (its edge or the island itself).
+    BarEnter(SurfaceKey),
+    /// The pointer left it.
+    BarExit(SurfaceKey),
+    /// The reveal dwell elapsed; show the island if the pointer is still there.
+    BarReveal(SurfaceKey),
+    /// The hide delay elapsed; hide the island if the pointer is still away.
+    BarHide(SurfaceKey),
+    /// `triton msg bar toggle`: flip the bar on this output.
+    BarToggle(String),
+    /// `triton msg bar mode …`: how the bar presents.
+    BarSetMode(BarMode),
 }
 
 #[derive(Debug, Default)]
@@ -121,6 +141,13 @@ pub struct Shell {
     notifications: Option<String>,
     /// Do Not Disturb; the bell and the center's toggle show it.
     dnd: bool,
+    /// How the bar presents (`BarStates`); `triton msg bar mode …` sets it.
+    bar_mode: BarMode,
+    /// Islands that are up right now (ignored while pinned). Keys carry the
+    /// island roles — the two ends come and go independently.
+    bar_shown: HashSet<SurfaceKey>,
+    /// Islands whose chrome (edge or surface) the pointer is over.
+    bar_hover: HashSet<SurfaceKey>,
     /// The launcher's query text.
     query: String,
     time: String,
@@ -259,9 +286,85 @@ impl Shell {
                 self.dnd = !self.dnd;
                 Task::none()
             }
+            // Bar hover and mode plumbing lives in `bar`.
+            Message::BarEnter(_)
+            | Message::BarExit(_)
+            | Message::BarReveal(_)
+            | Message::BarHide(_)
+            | Message::BarToggle(_)
+            | Message::BarSetMode(_) => self.bar(message),
             // The layer-shell variants are consumed by iced_layershell itself.
             _ => Task::none(),
         }
+    }
+
+    /// The bar's state machine (`BarStates`): edge hover and the dwell timers
+    /// drive `bar_shown`; `bar toggle` flips it directly; `bar mode` re-arms it.
+    fn bar(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::BarEnter(output) => {
+                self.bar_hover.insert(output.clone());
+                Self::after(REVEAL_DELAY, Message::BarReveal(output))
+            }
+            Message::BarExit(output) => {
+                self.bar_hover.remove(&output);
+                Self::after(HIDE_DELAY, Message::BarHide(output))
+            }
+            Message::BarReveal(output) => {
+                if self.bar_mode == BarMode::AutoHide
+                    && self.bar_hover.contains(&output)
+                    && self.bar_shown.insert(output)
+                {
+                    return self.reconcile();
+                }
+                Task::none()
+            }
+            Message::BarHide(output) => {
+                if self.bar_mode == BarMode::AutoHide
+                    && !self.bar_hover.contains(&output)
+                    && self.bar_shown.remove(&output)
+                {
+                    return self.reconcile();
+                }
+                Task::none()
+            }
+            Message::BarToggle(output) => {
+                // Toggle flips the bar as a whole: anything up hides both ends.
+                let key = |role| SurfaceKey {
+                    role,
+                    output: output.clone(),
+                };
+                if self.bar_shown.contains(&key(Role::IslandStart))
+                    || self.bar_shown.contains(&key(Role::IslandEnd))
+                {
+                    self.bar_shown.remove(&key(Role::IslandStart));
+                    self.bar_shown.remove(&key(Role::IslandEnd));
+                } else {
+                    self.bar_shown.insert(key(Role::IslandStart));
+                    self.bar_shown.insert(key(Role::IslandEnd));
+                }
+                self.reconcile()
+            }
+            Message::BarSetMode(mode) => {
+                self.bar_mode = mode;
+                // A mode switch starts the bar hidden: pinned needs nothing, and
+                // autohide/hidden wake on the edge or `bar toggle`.
+                self.bar_shown.clear();
+                self.bar_hover.clear();
+                self.reconcile()
+            }
+            _ => Task::none(),
+        }
+    }
+
+    /// A message `d` from now — the bar's reveal dwell and hide delay.
+    fn after(d: Duration, message: Message) -> Task<Message> {
+        Task::perform(
+            async move {
+                tokio::time::sleep(d).await;
+            },
+            move |()| message.clone(),
+        )
     }
 
     /// The output a `triton msg` toggle acts on: the focused workspace's, else
@@ -285,6 +388,16 @@ impl Shell {
         match words.as_slice() {
             ["launcher", "toggle"] => toggle(Message::Launcher),
             ["notifications", "toggle"] => toggle(Message::Bell),
+            ["bar", "toggle"] => toggle(Message::BarToggle),
+            ["bar", "mode", mode] => match *mode {
+                "autohide" => self.update(Message::BarSetMode(BarMode::AutoHide)),
+                "pinned" => self.update(Message::BarSetMode(BarMode::Pinned)),
+                "hidden" => self.update(Message::BarSetMode(BarMode::Hidden)),
+                other => {
+                    tracing::warn!(?other, "msg: unknown bar mode");
+                    Task::none()
+                }
+            },
             other => {
                 tracing::warn!(?other, "msg: unknown command");
                 Task::none()
@@ -301,8 +414,8 @@ impl Shell {
                 launcher: self.launcher.as_deref(),
                 notifications: self.notifications.as_deref(),
             },
-            // Autohide lands later; today the bar never hides.
-            |_| true,
+            self.bar_mode,
+            |k| self.bar_shown.contains(k),
         );
         self.surfaces.reconcile(&desired)
     }
@@ -314,7 +427,9 @@ impl Shell {
         let content = match key.role {
             Role::IslandStart => self.bar_start(&key.output),
             Role::IslandEnd => self.bar_end(&key.output),
-            Role::Zone => return Space::new().into(),
+            Role::Strip => return self.strip(&key.output),
+            Role::RevealStart => return Self::reveal(key, Role::IslandStart),
+            Role::RevealEnd => return Self::reveal(key, Role::IslandEnd),
             Role::Scrim => return Self::scrim(),
             Role::Launcher => return self.launcher(),
             Role::Notifications => {
@@ -324,7 +439,47 @@ impl Shell {
                 .into();
             }
         };
-        measure(layer_island(content), move |w| Message::Measured(id, w)).into()
+        let island = measure(layer_island(content), move |w| Message::Measured(id, w));
+        // In autohide the islands double as hover region: pointer timing here
+        // keeps them up and puts them away.
+        if self.bar_mode == BarMode::AutoHide {
+            let k = key.clone();
+            return mouse_area(island)
+                .on_enter(Message::BarEnter(k.clone()))
+                .on_exit(Message::BarExit(k))
+                .into();
+        }
+        island.into()
+    }
+
+    /// The pinned bar: the same parts, laid flat in one Mica strip.
+    fn strip<'a>(&'a self, output: &'a str) -> Element<'a, Message> {
+        surface::surface(
+            Row::new()
+                .spacing(bar::GAP)
+                .align_y(Vertical::Center)
+                .push(self.bar_start(output))
+                .push(Space::new().width(Length::Fill))
+                .push(self.bar_end(output)),
+            Surface::Material(Material::Mica),
+        )
+        .padding(Padding::from([0.0, 16.0]))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+
+    /// The 2 px wake edge: nothing drawn, only hover. It stands in for `island`
+    /// — hover and dwell timers are tracked against the island's key.
+    fn reveal(key: &SurfaceKey, island: Role) -> Element<'static, Message> {
+        let k = SurfaceKey {
+            role: island,
+            output: key.output.clone(),
+        };
+        mouse_area(Space::new().width(Length::Fill).height(Length::Fill))
+            .on_enter(Message::BarEnter(k.clone()))
+            .on_exit(Message::BarExit(k))
+            .into()
     }
 
     /// The dim a press lands on to dismiss the launcher (`Scrim` covers the

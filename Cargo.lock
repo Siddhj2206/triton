@@ -2638,6 +2638,7 @@ dependencies = [
  "iced_widget",
  "niri-ipc",
  "tempfile",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "triton-design",

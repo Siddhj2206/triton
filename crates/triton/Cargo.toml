@@ -29,6 +29,8 @@ iced_renderer = { workspace = true, features = [
 ] }
 iced_widget = { workspace = true, features = ["advanced", "canvas"] }
 niri-ipc.workspace = true
+# `after` sleeps; iced_futures' tokio executor provides the runtime.
+tokio = { workspace = true, features = ["time"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi"] }
 triton-design.workspace = true
