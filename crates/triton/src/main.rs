@@ -7,6 +7,7 @@ mod host;
 mod msg;
 mod niri;
 mod niri_config;
+mod services;
 mod shell;
 
 use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
@@ -48,23 +49,31 @@ fn main() -> Result<(), iced_layershell::Error> {
     if let Err(e) = niri_config::install() {
         tracing::warn!(%e, "cannot write the niri include files");
     }
+    // Dev and preview run `Services::fake`; this opts into the real read-only
+    // UPower and NetworkManager watchers.
+    let real_services = std::env::args().any(|a| a == "--real-services");
     let base = triton_ui::settings();
-    iced_layershell::daemon(Shell::boot, "triton", Shell::update, Shell::view)
-        .subscription(Shell::subscription)
-        .theme(Shell::theme)
-        .style(Shell::style)
-        .settings(Settings {
-            fonts: base.fonts,
-            default_font: base.default_font,
-            default_text_size: base.default_text_size,
-            // wgpu antialiases paths (the wave, smoothed corners) only with MSAA;
-            // without it their edges are jagged. Quads and text are smooth either way.
-            antialiasing: true,
-            layer_settings: LayerShellSettings {
-                start_mode: StartMode::Background,
-                ..LayerShellSettings::default()
-            },
-            ..Settings::default()
-        })
-        .run()
+    iced_layershell::daemon(
+        move || Shell::boot(real_services),
+        "triton",
+        Shell::update,
+        Shell::view,
+    )
+    .subscription(Shell::subscription)
+    .theme(Shell::theme)
+    .style(Shell::style)
+    .settings(Settings {
+        fonts: base.fonts,
+        default_font: base.default_font,
+        default_text_size: base.default_text_size,
+        // wgpu antialiases paths (the wave, smoothed corners) only with MSAA;
+        // without it their edges are jagged. Quads and text are smooth either way.
+        antialiasing: true,
+        layer_settings: LayerShellSettings {
+            start_mode: StartMode::Background,
+            ..LayerShellSettings::default()
+        },
+        ..Settings::default()
+    })
+    .run()
 }

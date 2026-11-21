@@ -60,8 +60,9 @@ pub enum Surface {
     Kbd,
     /// `.t-tag`: a small tertiary label.
     Tag,
-    /// The bar's status group: a primary-container pill.
-    Status,
+    /// The bar's status group: a container pill tinted by what it reports —
+    /// primary while all is well, the board's warm colors otherwise.
+    Status(StatusTone),
     /// The bell's unread dot: tertiary.
     Dot,
     /// The radio's 12 px primary dot.
@@ -71,6 +72,36 @@ pub enum Surface {
     /// `.t-scrim`: the input-capture surface a modal sits on. Paints nothing —
     /// the modal is modal by input, not by dimming.
     Scrim,
+}
+
+/// How the status group reads: blue when all is well, rust (tertiary) when
+/// something is off, error red when it is urgent.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum StatusTone {
+    #[default]
+    Normal,
+    Warn,
+    Alert,
+}
+
+impl Theme {
+    fn status_paint(&self, tone: StatusTone) -> (Paint, Option<Color>) {
+        let s = &self.scheme;
+        let (fill, on) = match tone {
+            StatusTone::Normal => (s.primary_container, s.on_primary_container),
+            StatusTone::Warn => (s.tertiary_container, s.on_tertiary_container),
+            StatusTone::Alert => (s.error_container, s.on_error_container),
+        };
+        (
+            Paint {
+                fill: Some(fill),
+                radii: [RADII.full; 4],
+                smooth: true,
+                ..Paint::default()
+            },
+            Some(on),
+        )
+    }
 }
 
 fn shadow(token: Option<ShadowToken>) -> Option<Shadow> {
@@ -129,10 +160,7 @@ impl Theme {
                 on,
             ),
             Surface::RadioDot => (solid(s.primary, RADII.full), None),
-            Surface::Status => (
-                solid(s.primary_container, RADII.full),
-                Some(s.on_primary_container),
-            ),
+            Surface::Status(tone) => self.status_paint(tone),
             Surface::Dot => (solid(s.tertiary, RADII.full), None),
             Surface::Card => (solid(s.surface_container_low, RADII.list_outer), None),
             Surface::Dialog => (

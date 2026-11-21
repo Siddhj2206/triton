@@ -23,7 +23,7 @@ pub mod text;
 pub mod theme;
 
 pub use button::{ButtonClass, IconKind, Kind, Segment, Size};
-pub use surface::Surface;
+pub use surface::{StatusTone, Surface};
 pub use text::Tone;
 pub use theme::Theme;
 

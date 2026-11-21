@@ -12,7 +12,7 @@ use triton_design::{Family, Icon, IconStyle};
 use crate::button::{BAR_ITEM, ButtonClass, Pressable};
 use crate::press::pressable;
 use crate::progress::{WaveTone, wave_shape};
-use crate::surface::{Panel, surface};
+use crate::surface::{Panel, StatusTone, surface};
 use crate::text::{icon, ui};
 use crate::{Element, Surface, Tone};
 
@@ -94,8 +94,9 @@ pub struct Status {
     pub label: Option<String>,
 }
 
-/// `.stat`: a 44 px primary-container pill of status icons. `None` if empty.
-pub fn status<'a, M: 'a>(items: Vec<Status>) -> Option<Panel<'a, M>> {
+/// `.stat`: a 44 px container pill of status icons, tinted by `tone` — the
+/// board's warm colors when something needs attention. `None` if empty.
+pub fn status<'a, M: 'a>(items: Vec<Status>, tone: StatusTone) -> Option<Panel<'a, M>> {
     if items.is_empty() {
         return None;
     }
@@ -112,7 +113,7 @@ pub fn status<'a, M: 'a>(items: Vec<Status>) -> Option<Panel<'a, M>> {
     .spacing(16)
     .align_y(Vertical::Center);
     Some(
-        surface(row, Surface::Status)
+        surface(row, Surface::Status(tone))
             .height(BAR_ITEM)
             .center_y(BAR_ITEM)
             .padding(Padding::from([0.0, 18.0])),

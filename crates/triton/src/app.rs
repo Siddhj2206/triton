@@ -21,11 +21,12 @@ use triton_ui::field::{self, Field};
 use triton_ui::measure::{measure, measure_height};
 use triton_ui::surface::{self, layer_island};
 use triton_ui::text;
-use triton_ui::{Element, Renderer, Surface, Theme, Tone};
+use triton_ui::{Element, Renderer, StatusTone, Surface, Theme, Tone};
 
 use crate::host::SurfaceTable;
 use crate::msg;
 use crate::niri::{self, Snapshot};
+use crate::services::{self, Connectivity, Statuses};
 use crate::shell::{self, BarMode, Modals, Role, Sizes, SurfaceKey};
 
 /// The launcher field's widget id, so it can be focused once its surface maps.
@@ -127,6 +128,8 @@ pub enum Message {
     BarToggle(String),
     /// `triton msg bar mode …`: how the bar presents.
     BarSetMode(BarMode),
+    /// A new services snapshot (battery, connectivity) for the status group.
+    Statuses(Arc<Statuses>),
 }
 
 #[derive(Debug, Default)]
@@ -152,58 +155,18 @@ pub struct Shell {
     query: String,
     time: String,
     date: String,
-    battery: Option<Battery>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Battery {
-    percent: u8,
-    charging: bool,
-}
-
-impl Battery {
-    /// The first system battery in sysfs, if this machine has one.
-    fn read() -> Option<Self> {
-        let dir = std::fs::read_dir("/sys/class/power_supply").ok()?;
-        dir.flatten()
-            .map(|e| e.path())
-            .find(|p| {
-                std::fs::read_to_string(p.join("type")).is_ok_and(|t| t.trim() == "Battery")
-                    && std::fs::read_to_string(p.join("scope"))
-                        .map_or(true, |s| s.trim() != "Device")
-            })
-            .and_then(|p| {
-                let percent = std::fs::read_to_string(p.join("capacity"))
-                    .ok()?
-                    .trim()
-                    .parse::<u8>()
-                    .ok()?;
-                let charging = std::fs::read_to_string(p.join("status"))
-                    .is_ok_and(|s| matches!(s.trim(), "Charging" | "Full"));
-                Some(Self { percent, charging })
-            })
-    }
-
-    fn icon(self) -> Icon {
-        if self.charging {
-            return Icon::BatteryChargingFull;
-        }
-        match self.percent {
-            0..=5 => Icon::BatteryAlert,
-            6..=15 => Icon::Battery1Bar,
-            16..=30 => Icon::Battery2Bar,
-            31..=45 => Icon::Battery3Bar,
-            46..=60 => Icon::Battery4Bar,
-            61..=75 => Icon::Battery5Bar,
-            76..=90 => Icon::Battery6Bar,
-            _ => Icon::BatteryFull,
-        }
-    }
+    /// Battery + connectivity for the status group, from `services`.
+    statuses: Statuses,
+    /// `--real-services`: watch real UPower/NetworkManager, not the fake.
+    real_services: bool,
 }
 
 impl Shell {
-    pub fn boot() -> (Self, Task<Message>) {
-        let mut shell = Self::default();
+    pub fn boot(real_services: bool) -> (Self, Task<Message>) {
+        let mut shell = Self {
+            real_services,
+            ..Self::default()
+        };
         shell.tick();
         (shell, Task::none())
     }
@@ -212,7 +175,6 @@ impl Shell {
         let now = chrono::Local::now();
         self.time = now.format("%H:%M").to_string();
         self.date = now.format("%a %-d %b").to_string();
-        self.battery = Battery::read();
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -237,6 +199,10 @@ impl Shell {
             }
             Message::Minute => {
                 self.tick();
+                Task::none()
+            }
+            Message::Statuses(statuses) => {
+                self.statuses = (*statuses).clone();
                 Task::none()
             }
             Message::Closed(id) => {
@@ -632,15 +598,32 @@ impl Shell {
             .spacing(bar::GAP)
             .align_y(Vertical::Center)
             .push(bar::clock(self.time.clone(), self.date.clone()));
-        let status: Vec<Status> = self
-            .battery
-            .map(|b| Status {
+        let mut items = Vec::new();
+        if let Some(c) = self.statuses.connectivity {
+            items.push(Status {
+                icon: match c {
+                    Connectivity::Online => Icon::Wifi,
+                    Connectivity::Offline => Icon::WifiOff,
+                },
+                label: None,
+            });
+        }
+        if let Some(b) = self.statuses.battery {
+            items.push(Status {
                 icon: b.icon(),
                 label: Some(format!("{}%", b.percent)),
-            })
-            .into_iter()
-            .collect();
-        if let Some(pill) = bar::status(status) {
+            });
+        }
+        // Warm colors mean attention: red for a low battery, rust for offline
+        // or DND, blue while all is well (`BarStates`).
+        let tone = if self.statuses.battery.is_some_and(|b| b.low) {
+            StatusTone::Alert
+        } else if self.statuses.connectivity == Some(Connectivity::Offline) || self.dnd {
+            StatusTone::Warn
+        } else {
+            StatusTone::Normal
+        };
+        if let Some(pill) = bar::status(items, tone) {
             right = right.push(pill);
         }
         right
@@ -648,11 +631,12 @@ impl Shell {
             .into()
     }
 
-    pub fn subscription(_shell: &Self) -> Subscription<Message> {
+    pub fn subscription(shell: &Self) -> Subscription<Message> {
         Subscription::batch([
             niri::snapshots().map(Message::Niri),
             niri::minutes().map(|()| Message::Minute),
             msg::commands().map(Message::Cmd),
+            services::statuses(shell.real_services).map(Message::Statuses),
             iced_runtime::window::close_events().map(Message::Closed),
             event::listen_with(|event, _status, id| match event {
                 Event::Window(window::Event::Opened { .. }) => Some(Message::Opened(id)),

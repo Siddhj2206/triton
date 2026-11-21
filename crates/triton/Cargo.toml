@@ -35,6 +35,13 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "ansi"] }
 triton-design.workspace = true
 triton-ui.workspace = true
+# Status services read UPower and NetworkManager over D-Bus; `block_on` on the
+# watcher threads needs no async runtime of ours (zruntime's helper thread).
+zbus = { version = "6", default-features = false, features = [
+  "default-rt",
+  "proxy",
+  "tracing",
+] }
 # Pins only (see the workspace manifest).
 winit-common.workspace = true
 winit-core.workspace = true
