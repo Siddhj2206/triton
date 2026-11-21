@@ -248,8 +248,9 @@ pub fn power_menu<'a>(
 // ── Quick settings ────────────────────────────────────────────────────────────
 
 /// The panel's pages; chevrons drill in place (`QuickSettings` board).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum QsPage {
+    #[default]
     Root,
     Wifi,
     Bluetooth,

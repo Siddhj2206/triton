@@ -46,6 +46,18 @@ pub fn polkit_field() -> widget::Id {
     widget::Id::from("polkit-password")
 }
 
+/// What the pipeline worker hands back: the wallpaper image and both schemes.
+#[derive(Debug)]
+pub struct PipelineDone {
+    pub wallpaper: Option<iced_widget::image::Handle>,
+    /// Mean wallpaper luminance → Mica's adaptive tint.
+    pub luminance: f32,
+    pub dark: triton_design::Scheme,
+    pub light: triton_design::Scheme,
+    /// Targets the last `apply` finished (for its toast).
+    pub applied: Vec<&'static str>,
+}
+
 /// The Thick panel's inner padding; the field's radius is `nested` against it.
 const LAUNCHER_PAD: f32 = 14.0;
 
@@ -140,6 +152,20 @@ pub enum Message {
     BarSetMode(BarMode),
     /// A new services snapshot (battery, connectivity) for the status group.
     Statuses(Arc<Statuses>),
+    /// A `notify` module event: a notification arrived or closed.
+    Notify(crate::notify::Event),
+    /// The OSD's hold elapsed; hide it if the same OSD is still up.
+    OsdHide,
+    /// A notification expired in the store.
+    NotifExpired(u32),
+    /// A polkit agent event (a prompt opened or was cancelled).
+    Polkit(crate::polkit::Event),
+    /// An ext-idle-notify event from `wayl`.
+    Idle(crate::wayl::IdleEvent),
+    /// A launcher search finished on its thread.
+    Launch(Arc<crate::launch::Results>),
+    /// Wallpaper load + scheme pipeline finished on its thread.
+    Pipeline(Arc<PipelineDone>),
     /// The battery-low OSD's action: power saver on.
     OsdSaver,
     /// A power-menu action was picked (click or digit jump); Enter re-picks the
@@ -187,6 +213,31 @@ pub struct Shell {
     centered: Option<(CenteredRole, String)>,
     /// Do Not Disturb; the bell and the center's toggle show it.
     dnd: bool,
+    /// The OSD showing right now, and its hold deadline.
+    osd: Option<crate::panels::Osd>,
+    /// Centered power menu: the focused action's index into POWER_ACTIONS.
+    power_focus: usize,
+    /// The quick settings page showing.
+    qs_page: crate::panels::QsPage,
+    /// Wallpaper drawn on every output's background surface, if one is set.
+    wallpaper: Option<iced_widget::image::Handle>,
+    /// Mean wallpaper luminance → Mica's adaptive tint.
+    wallpaper_luminance: f32,
+    /// The active color variant; `qs` dark tile and the pipeline set it.
+    variant: triton_design::Variant,
+    /// The live scheme (pipeline output); `None` keeps the token reference.
+    scheme: Option<triton_design::Scheme>,
+    /// Notification store (filled by `notify` once its server lands).
+    notifs: crate::notify::Store,
+    /// Apps expanded in the notification center.
+    notif_expanded: HashSet<String>,
+    /// Polkit prompt waiting for a password, if any.
+    polkit: Option<crate::polkit::Prompt>,
+    polkit_password: String,
+    /// Night light is on (gamma goes warm).
+    night: bool,
+    /// Idle-notification timeouts index → what fires at it (see `idles`).
+    idle_stage: usize,
     /// How the bar presents (`BarStates`); `triton msg bar mode …` sets it.
     bar_mode: BarMode,
     /// Islands that are up right now (ignored while pinned). Keys carry the
