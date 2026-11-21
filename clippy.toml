@@ -1,0 +1,11 @@
+# System service names read as words in docs, not code.
+doc-valid-idents = ["PulseAudio", "LocalAPI", "MPRIS", "OpenMeteo", "..", "NetworkManager", "UPower", "PipeWire", "WirePlumber", "BlueZ", "DBar"]
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
+disallowed-methods = [
+  { path = "std::thread::sleep", reason = "no sleeping or polling; wait on an event (product principle: idle CPU)" },
+  { path = "std::process::Command::output", reason = "no subprocess in hot paths; spawn detached from a service, or use a service" },
+  { path = "std::process::Command::status", reason = "same as output" },
+]

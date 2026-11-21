@@ -1,0 +1,41 @@
+# cargo runs through mr-boxington (mbx), which caches compiled crates across builds.
+wrappers = { cargo = { command = "mbx", env = { MBX_CARGO_SHIM_MODE = "1" } } }
+
+[tools]
+mr-boxington = "1.30.0"
+rust = { version = "1.100.0", components = "rustfmt,clippy", mr_boxington = true }
+
+[env]
+# Native libraries come from nx (nix) on Fedora Atomic: libraries live in
+# ~/.nix-profile/lib, and link-only pkg-config entries live in dev/pkgconfig.
+PKG_CONFIG_PATH = "{{config_root}}/dev/pkgconfig:{{env.PKG_CONFIG_PATH | default(value='')}}"
+LIBRARY_PATH = "{{env.HOME}}/.nix-profile/lib"
+RUST_LOG = "{{env.RUST_LOG | default(value='triton=debug,info')}}"
+
+# ── setup ────────────────────────────────────────────────────────────────────
+
+[tasks.setup]
+description = "Install native deps (nx)"
+run = "nx add libxkbcommon"
+
+# ── build & checks ───────────────────────────────────────────────────────────
+
+[tasks.build]
+description = "Build all crates (debug)"
+run = "cargo build"
+
+[tasks.check]
+description = "fmt check, clippy (warnings are errors), tests"
+run = [
+  "cargo fmt --all --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo test --workspace",
+]
+
+[tasks.fmt]
+description = "Format the workspace"
+run = "cargo fmt --all"
+
+[tasks.test]
+description = "Run tests"
+run = "cargo test --workspace"

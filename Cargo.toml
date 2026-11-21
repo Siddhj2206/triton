@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+rust-version = "1.100" # equals mise.toml
+publish = false
+
+[workspace.dependencies]
+# external (members re-enable the features they need)
+chrono = { version = "0.4.45", default-features = false }
+iced = { version = "0.14.0", default-features = false }
+iced_layershell = "0.19.1"
+niri-ipc = { version = "26.4.0", default-features = false }
+tokio = { version = "1.54.1", default-features = false }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false }
+# Pinned: iced_layershell 0.19.1 (via iced_exdevtools) breaks on winit-core beta.4,
+# which added a NativeKeyCode variant. Drop once waycrate releases a fix.
+winit-common = "=0.31.0-beta.2"
+winit-core = "=0.31.0-beta.2"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+similar_names = "allow"
+unreadable_literal = "allow" # hex colours read better unseparated
+dbg_macro = "deny"
+todo = "warn"
+unwrap_used = "warn"
+await_holding_lock = "deny"
+large_futures = "warn"
+disallowed_methods = "deny"
+
+# Dependencies build optimised even in dev, so the shell is smooth while iterating.
+[profile.dev.package."*"]
+opt-level = 2
+
+# See patches/README.md for why each patch exists.
+[patch.crates-io]
+softbuffer = { path = "patches/softbuffer" }
