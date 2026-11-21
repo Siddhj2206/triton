@@ -118,6 +118,13 @@ Each phase ends with something usable and `mise run check` green.
 
 **Done when:** a headless preview renders the Component index board pixel-close.
 
+**Known deviations and deferrals** (reviewed, kept; revisit in the named phase):
+- *Board deviations on purpose:* the scrim is transparent (the `Launcher` board's 30% dim was dropped — the panel floats over live windows), and the reveal edge is per-island over each island's footprint, not the board's full-width strip.
+- *Roadmap/board conflict:* DND warms the whole status pill (roadmap §4); the `BarStates` board restyles only the bell. Follow the roadmap until the boards are re-cut.
+- *Waiting on niri IPC:* urgency-pulse reveals and the fullscreen 300 ms reveal dwell — v26.4's `Window` has no urgent or fullscreen flag.
+- *Phase 1:* launcher search and real result groups; `LAUNCHER_SIZE` is fixed at 900×700 until they drive the height; live-motion check in `mise run dev` (hover field label, scrollbar widen, springs).
+- *Polish, unscheduled:* focused title hard-clips at `max_width(360)`; the board wants an edge fade. Naming: `triton_ui::Surface` (a paint class) vs. the glossary's layer-shell *Surface*, `button::Size` vs. `iced_core::Size`, and `Status`/`StatusTone`/`Statuses` — rename only if they start confusing. `Measure`/`FilledField`/`Scroll` hand-write iced's child-delegation boilerplate (only `Panel` uses `forward!`); a shared macro is fine if a sixth widget joins.
+
 ### Phase 1: Daily-drivable
 Bar (all modes, workspaces, title, clock, status, bell), wallpaper renderer and color pipeline, notifications (toasts and center), OSD, quick settings (with pages), launcher (apps, windows, math, commands), lock screen, power menu (basic), polkit agent, idle, night light, systemd unit and generated `binds.kdl`/`rules.kdl`.
 
