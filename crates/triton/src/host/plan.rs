@@ -93,7 +93,7 @@ pub fn plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shell::{Role, desired};
+    use crate::shell::{Modals, Role, Sizes, desired};
 
     fn key(role: Role, output: &str) -> SurfaceKey {
         SurfaceKey {
@@ -102,8 +102,20 @@ mod tests {
         }
     }
 
+    fn launcher_on(output: &str) -> Modals<'_> {
+        Modals {
+            launcher: Some(output),
+            ..Modals::default()
+        }
+    }
+
     fn want(outputs: &[&str]) -> BTreeMap<SurfaceKey, SurfaceSpec> {
-        desired(outputs.iter().copied(), &BTreeMap::new(), None)
+        desired(
+            outputs.iter().copied(),
+            &Sizes::default(),
+            &Modals::default(),
+            |_| true,
+        )
     }
 
     fn creates(ops: &[SurfaceOp]) -> Vec<&SurfaceKey> {
@@ -149,8 +161,27 @@ mod tests {
     fn a_measured_island_is_resized_not_recreated() {
         let k = key(Role::IslandStart, "eDP-1");
         let widths = BTreeMap::from([(k.clone(), 300)]);
-        let ops = plan(&desired(["eDP-1"], &widths, None), &want(&["eDP-1"]));
-        let spec = &desired(["eDP-1"], &widths, None)[&k];
+        let ops = plan(
+            &desired(
+                ["eDP-1"],
+                &Sizes {
+                    widths: widths.clone(),
+                    ..Sizes::default()
+                },
+                &Modals::default(),
+                |_| true,
+            ),
+            &want(&["eDP-1"]),
+        );
+        let spec = &desired(
+            ["eDP-1"],
+            &Sizes {
+                widths: widths.clone(),
+                ..Sizes::default()
+            },
+            &Modals::default(),
+            |_| true,
+        )[&k];
         assert_eq!(
             ops,
             vec![SurfaceOp::Reconfigure(
@@ -181,7 +212,9 @@ mod tests {
         // niri stacks same-layer surfaces in map order: the scrim must be
         // created before the panel so it sits below it.
         let ops = plan(
-            &desired(["eDP-1"], &BTreeMap::new(), Some("eDP-1")),
+            &desired(["eDP-1"], &Sizes::default(), &launcher_on("eDP-1"), |_| {
+                true
+            }),
             &want(&["eDP-1"]),
         );
         let scrim = ops
@@ -193,15 +226,21 @@ mod tests {
             .position(|op| matches!(op, SurfaceOp::Create(k, _) if k.role == Role::Launcher))
             .expect("launcher");
         assert!(scrim < panel);
-        let spec =
-            &desired(["eDP-1"], &BTreeMap::new(), Some("eDP-1"))[&key(Role::Launcher, "eDP-1")];
+        let spec = &desired(["eDP-1"], &Sizes::default(), &launcher_on("eDP-1"), |_| {
+            true
+        })[&key(Role::Launcher, "eDP-1")];
         assert_eq!(spec.keyboard, Keyboard::Exclusive);
         assert_eq!(spec.blur_radius, Some(28));
     }
 
     #[test]
     fn the_launcher_only_lives_on_its_output() {
-        let d = desired(["eDP-1", "DP-1"], &BTreeMap::new(), Some("DP-1"));
+        let d = desired(
+            ["eDP-1", "DP-1"],
+            &Sizes::default(),
+            &launcher_on("DP-1"),
+            |_| true,
+        );
         assert!(!d.contains_key(&key(Role::Launcher, "eDP-1")));
         assert!(d.contains_key(&key(Role::Launcher, "DP-1")));
         // Its output vanishing takes the modal with it.

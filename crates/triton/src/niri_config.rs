@@ -11,7 +11,7 @@ use std::{fs, io};
 use triton_design::SIZE;
 use triton_design::material::ShadowToken;
 
-use crate::shell::{BAR_NAMESPACE, LAUNCHER_NAMESPACE};
+use crate::shell::{BAR_NAMESPACE, LAUNCHER_NAMESPACE, NOTIFICATIONS_NAMESPACE};
 
 /// `#rrggbbaa`, as niri's config takes colors.
 fn hex(color: iced_core::Color) -> String {
@@ -60,6 +60,10 @@ pub fn render() -> Vec<(&'static str, String)> {
         rule(BAR_NAMESPACE, SIZE.bar_height / 2.0, ShadowToken::FLOATING),
         rule(
             LAUNCHER_NAMESPACE,
+            triton_design::shape::RADII.floating_window,
+            ShadowToken::FLOATING_LARGE,
+        ) + &rule(
+            NOTIFICATIONS_NAMESPACE,
             triton_design::shape::RADII.floating_window,
             ShadowToken::FLOATING_LARGE,
         ),
@@ -149,13 +153,13 @@ mod tests {
         // Rule blur + corner radius binarizes the surface's alpha in niri
         // (docs/research/niri-layer-blur-alpha.md); blur is client-requested.
         let rules = &render()[1].1;
-        for namespace in ["triton-bar", "triton-launcher"] {
+        for namespace in ["triton-bar", "triton-launcher", "triton-notifications"] {
             assert!(
                 rules.contains(&format!("namespace=\"^{namespace}$\"")),
                 "{namespace}"
             );
         }
-        assert_eq!(rules.matches("geometry-corner-radius").count(), 2);
+        assert_eq!(rules.matches("geometry-corner-radius").count(), 3);
         assert!(!rules.contains("background-effect"));
     }
 

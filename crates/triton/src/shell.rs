@@ -16,11 +16,13 @@ pub enum Role {
     IslandEnd,
     /// The strip that reserves the bar's height.
     Zone,
-    /// The dim behind a modal panel. Declared before [`Role::Launcher`] so the
-    /// scrim maps first and stacks below it within the overlay layer.
+    /// The dim behind a modal panel. Declared before the modal roles so the
+    /// scrim maps first and stacks below them within the overlay layer.
     Scrim,
     /// The launcher panel (`Launcher` board).
     Launcher,
+    /// The notification center (`Notifications` board).
+    Notifications,
 }
 
 /// One surface: a role on an output.
@@ -94,6 +96,8 @@ pub const BAR_ZONE_NAMESPACE: &str = "triton-bar-zone";
 pub const SCRIM_NAMESPACE: &str = "triton-scrim";
 /// The launcher's namespace; a layer rule rounds and shadows it.
 pub const LAUNCHER_NAMESPACE: &str = "triton-launcher";
+/// The notification center's namespace; a layer rule rounds and shadows it.
+pub const NOTIFICATIONS_NAMESPACE: &str = "triton-notifications";
 
 /// The islands sit `BAR_TOP` below the output's top edge, `BAR_SIDE` in from its
 /// sides.
@@ -196,13 +200,63 @@ fn launcher() -> SurfaceSpec {
     }
 }
 
-/// Every surface the shell wants, for the outputs niri has reported. `widths`
-/// holds the islands' measured widths; an unmeasured island starts as a circle.
-/// `launcher_output` is the output the launcher is open on, if any.
+/// The notification center (`Notifications` board): a 440 px Glass column at
+/// the top-right, as tall as its content. Its top edge clears the bar when the
+/// bar is up and pulls to the output's top when autohide has it hidden.
+fn notifications(height: u32, bar_shown: bool) -> SurfaceSpec {
+    let top = if bar_shown {
+        // The islands' bottom edge is BAR_TOP + bar_height; a gap below.
+        (BAR_TOP + SIZE.bar_height + 12.0) as i32
+    } else {
+        20
+    };
+    SurfaceSpec {
+        namespace: NOTIFICATIONS_NAMESPACE,
+        layer: Layer::Overlay,
+        anchors: Anchors {
+            top: true,
+            right: true,
+            bottom: false,
+            left: false,
+        },
+        size: (440, height.max(1)),
+        exclusive_zone: -1,
+        margin: (top, 20, 0, 0),
+        keyboard: Keyboard::Exclusive,
+        input_height: None,
+        blur_radius: Some(triton_design::shape::RADII.floating_window as u32),
+    }
+}
+
+/// The modal surfaces open on an output, if any. One field per panel; the scrim
+/// comes free while any of them is set.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Modals<'a> {
+    pub launcher: Option<&'a str>,
+    pub notifications: Option<&'a str>,
+}
+
+/// The measured extents of content-sized surfaces: the islands by width, the
+/// notification center by height. Unmeasured surfaces get a sensible seed.
+#[derive(Debug, Default)]
+pub struct Sizes {
+    pub widths: BTreeMap<SurfaceKey, u32>,
+    pub heights: BTreeMap<SurfaceKey, u32>,
+}
+
+/// Seed height for the center before its first measure lands.
+const UNMEASURED_PANEL_HEIGHT: u32 = 96;
+
+/// Every surface the shell wants, for the outputs niri has reported. `sizes`
+/// holds the measured extents of content-sized surfaces. `modals` names the
+/// output each open panel lives on, if any. `bar_shown` reports whether the bar
+/// is visible on an output — pinned or autohide-revealed — so modals can clear
+/// it (autohide feeds this once it exists; today the bar is always up).
 pub fn desired<'a>(
     outputs: impl IntoIterator<Item = &'a str>,
-    widths: &BTreeMap<SurfaceKey, u32>,
-    launcher_output: Option<&str>,
+    sizes: &Sizes,
+    modals: &Modals<'a>,
+    bar_shown: impl Fn(&str) -> bool,
 ) -> BTreeMap<SurfaceKey, SurfaceSpec> {
     let mut out = BTreeMap::new();
     for output in outputs {
@@ -213,12 +267,23 @@ pub fn desired<'a>(
         out.insert(key(Role::Zone), zone());
         for (role, end) in [(Role::IslandStart, false), (Role::IslandEnd, true)] {
             let k = key(role);
-            let width = widths.get(&k).copied().unwrap_or(UNMEASURED);
+            let width = sizes.widths.get(&k).copied().unwrap_or(UNMEASURED);
             out.insert(k, island(end, width));
         }
-        if launcher_output == Some(output) {
+        if modals.launcher == Some(output) || modals.notifications == Some(output) {
             out.insert(key(Role::Scrim), scrim());
+        }
+        if modals.launcher == Some(output) {
             out.insert(key(Role::Launcher), launcher());
+        }
+        if modals.notifications == Some(output) {
+            let k = key(Role::Notifications);
+            let height = sizes
+                .heights
+                .get(&k)
+                .copied()
+                .unwrap_or(UNMEASURED_PANEL_HEIGHT);
+            out.insert(k, notifications(height, bar_shown(output)));
         }
     }
     out

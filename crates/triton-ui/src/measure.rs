@@ -1,9 +1,9 @@
-//! [`Measure`]: lays its content out at its natural width and reports that width,
-//! so a layer surface can be sized to fit what it shows (a bar island is its own
-//! surface, and niri blurs and shadows the whole surface).
+//! [`Measure`]: lays its content out at its natural size on one axis and reports
+//! it, so a layer surface can be sized to fit what it shows (a bar island is its
+//! own surface, and niri blurs and shadows the whole surface).
 //!
-//! The content is laid out with no width limit, whatever size the surface has at
-//! the moment; a report is sent only when the width changes.
+//! The other axis stays bounded by the surface; a report is sent only when the
+//! measured extent changes.
 
 use std::cell::Cell;
 
@@ -13,9 +13,17 @@ use iced_core::{Length, Rectangle, Size, Vector, mouse, renderer};
 
 use crate::{Element, Renderer, Theme};
 
+/// The axis `Measure` lets run free: width for the islands, height for panels.
+#[derive(Debug, Clone, Copy)]
+enum Dim {
+    Width,
+    Height,
+}
+
 pub struct Measure<'a, M> {
     content: Element<'a, M>,
-    on_width: Box<dyn Fn(f32) -> M + 'a>,
+    on_extent: Box<dyn Fn(f32) -> M + 'a>,
+    dim: Dim,
 }
 
 impl<M> std::fmt::Debug for Measure<'_, M> {
@@ -31,7 +39,21 @@ pub fn measure<'a, M>(
 ) -> Measure<'a, M> {
     Measure {
         content: content.into(),
-        on_width: Box::new(on_width),
+        on_extent: Box::new(on_width),
+        dim: Dim::Width,
+    }
+}
+
+/// Wraps `content`; `on_height` gets its natural height at the surface's width
+/// whenever that changes.
+pub fn measure_height<'a, M>(
+    content: impl Into<Element<'a, M>>,
+    on_height: impl Fn(f32) -> M + 'a,
+) -> Measure<'a, M> {
+    Measure {
+        content: content.into(),
+        on_extent: Box::new(on_height),
+        dim: Dim::Height,
     }
 }
 
@@ -68,15 +90,20 @@ impl<M> Widget<M, Theme, Renderer> for Measure<'_, M> {
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
-        let loose = layout::Limits::new(Size::ZERO, Size::new(f32::INFINITY, limits.max().height));
+        let free = match self.dim {
+            Dim::Width => Size::new(f32::INFINITY, limits.max().height),
+            Dim::Height => Size::new(limits.max().width, f32::INFINITY),
+        };
+        let loose = layout::Limits::new(Size::ZERO, free);
         let node = self
             .content
             .as_widget_mut()
             .layout(&mut tree.children[0], renderer, &loose);
-        tree.state
-            .downcast_ref::<State>()
-            .measured
-            .set(node.size().width);
+        let extent = match self.dim {
+            Dim::Width => node.size().width,
+            Dim::Height => node.size().height,
+        };
+        tree.state.downcast_ref::<State>().measured.set(extent);
         node
     }
 
@@ -114,10 +141,10 @@ impl<M> Widget<M, Theme, Renderer> for Measure<'_, M> {
             viewport,
         );
         let state = tree.state.downcast_mut::<State>();
-        let width = state.measured.get();
-        if state.reported.is_none_or(|r| (r - width).abs() >= 0.5) {
-            state.reported = Some(width);
-            shell.publish((self.on_width)(width));
+        let extent = state.measured.get();
+        if state.reported.is_none_or(|r| (r - extent).abs() >= 0.5) {
+            state.reported = Some(extent);
+            shell.publish((self.on_extent)(extent));
         }
     }
 

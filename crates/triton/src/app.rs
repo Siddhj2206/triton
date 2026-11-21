@@ -1,6 +1,5 @@
 //! The shell as one iced daemon: niri snapshots in, a bar on every output out.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use iced_core::alignment::Vertical;
@@ -17,7 +16,7 @@ use triton_design::{Icon, TypeStyle};
 use triton_ui::bar::{self, Status};
 use triton_ui::button::{self, chip};
 use triton_ui::field::{self, Field};
-use triton_ui::measure::measure;
+use triton_ui::measure::{measure, measure_height};
 use triton_ui::surface::{self, layer_island};
 use triton_ui::text;
 use triton_ui::{Element, Renderer, Surface, Theme, Tone};
@@ -25,7 +24,7 @@ use triton_ui::{Element, Renderer, Surface, Theme, Tone};
 use crate::host::SurfaceTable;
 use crate::msg;
 use crate::niri::{self, Snapshot};
-use crate::shell::{self, Role, SurfaceKey};
+use crate::shell::{self, Modals, Role, Sizes};
 
 /// The launcher field's widget id, so it can be focused once its surface maps.
 fn launcher_field() -> widget::Id {
@@ -94,6 +93,8 @@ pub enum Message {
     Opened(Id),
     /// An island's natural width, so its surface can fit it.
     Measured(Id, f32),
+    /// The notification center's natural height at its fixed width.
+    MeasuredHeight(Id, f32),
     FocusWorkspace(u64),
     /// The wave was pressed on this output: toggle the launcher there.
     Launcher(String),
@@ -102,16 +103,24 @@ pub enum Message {
     LauncherInput(String),
     /// A `triton msg …` line.
     Cmd(String),
-    Bell,
+    /// The bell was pressed on this output: toggle the notification center.
+    Bell(String),
+    /// The center's DND toggle.
+    Dnd,
 }
 
 #[derive(Debug, Default)]
 pub struct Shell {
     niri: Arc<Snapshot>,
     surfaces: SurfaceTable,
-    widths: BTreeMap<SurfaceKey, u32>,
+    /// Measured extents of content-sized surfaces (island widths, panel heights).
+    sizes: Sizes,
     /// The output the launcher is open on, if any.
     launcher: Option<String>,
+    /// The output the notification center is open on, if any.
+    notifications: Option<String>,
+    /// Do Not Disturb; the bell and the center's toggle show it.
+    dnd: bool,
     /// The launcher's query text.
     query: String,
     time: String,
@@ -189,7 +198,14 @@ impl Shell {
                 let Some(key) = self.surfaces.key(id).cloned() else {
                     return Task::none();
                 };
-                self.widths.insert(key, width.ceil() as u32);
+                self.sizes.widths.insert(key, width.ceil() as u32);
+                self.reconcile()
+            }
+            Message::MeasuredHeight(id, height) => {
+                let Some(key) = self.surfaces.key(id).cloned() else {
+                    return Task::none();
+                };
+                self.sizes.heights.insert(key, height.ceil() as u32);
                 self.reconcile()
             }
             Message::Minute => {
@@ -214,7 +230,7 @@ impl Shell {
                 self.reconcile()
             }
             Message::Dismiss => {
-                if self.launcher.take().is_none() {
+                if self.launcher.take().is_none() && self.notifications.take().is_none() {
                     return Task::none();
                 }
                 self.reconcile()
@@ -231,29 +247,44 @@ impl Shell {
                 Task::none()
             }
             Message::Cmd(line) => self.command(&line),
-            // The bell's notification center is not built yet; the layer-shell
-            // variants are consumed by iced_layershell itself.
+            Message::Bell(output) => {
+                self.notifications = if self.notifications.as_deref() == Some(output.as_str()) {
+                    None
+                } else {
+                    Some(output)
+                };
+                self.reconcile()
+            }
+            Message::Dnd => {
+                self.dnd = !self.dnd;
+                Task::none()
+            }
+            // The layer-shell variants are consumed by iced_layershell itself.
             _ => Task::none(),
         }
+    }
+
+    /// The output a `triton msg` toggle acts on: the focused workspace's, else
+    /// the first niri reports.
+    fn focused_output(&self) -> Option<String> {
+        self.niri
+            .workspaces
+            .iter()
+            .find(|w| w.is_focused)
+            .and_then(|w| w.output.clone())
+            .or_else(|| self.niri.outputs.first().cloned())
     }
 
     /// One `triton msg` line, on the focused output where no output is named.
     fn command(&mut self, line: &str) -> Task<Message> {
         let words: Vec<_> = line.split_whitespace().collect();
+        let mut toggle = |message: fn(String) -> Message| match self.focused_output() {
+            Some(output) => self.update(message(output)),
+            None => Task::none(),
+        };
         match words.as_slice() {
-            ["launcher", "toggle"] => {
-                let output = self
-                    .niri
-                    .workspaces
-                    .iter()
-                    .find(|w| w.is_focused)
-                    .and_then(|w| w.output.clone())
-                    .or_else(|| self.niri.outputs.first().cloned());
-                match output {
-                    Some(output) => self.update(Message::Launcher(output)),
-                    None => Task::none(),
-                }
-            }
+            ["launcher", "toggle"] => toggle(Message::Launcher),
+            ["notifications", "toggle"] => toggle(Message::Bell),
             other => {
                 tracing::warn!(?other, "msg: unknown command");
                 Task::none()
@@ -263,7 +294,16 @@ impl Shell {
 
     fn reconcile(&mut self) -> Task<Message> {
         let outputs = self.niri.outputs.iter().map(String::as_str);
-        let desired = shell::desired(outputs, &self.widths, self.launcher.as_deref());
+        let desired = shell::desired(
+            outputs,
+            &self.sizes,
+            &Modals {
+                launcher: self.launcher.as_deref(),
+                notifications: self.notifications.as_deref(),
+            },
+            // Autohide lands later; today the bar never hides.
+            |_| true,
+        );
         self.surfaces.reconcile(&desired)
     }
 
@@ -273,10 +313,16 @@ impl Shell {
         };
         let content = match key.role {
             Role::IslandStart => self.bar_start(&key.output),
-            Role::IslandEnd => self.bar_end(),
+            Role::IslandEnd => self.bar_end(&key.output),
             Role::Zone => return Space::new().into(),
             Role::Scrim => return Self::scrim(),
             Role::Launcher => return self.launcher(),
+            Role::Notifications => {
+                return measure_height(self.notifications(), move |h| {
+                    Message::MeasuredHeight(id, h)
+                })
+                .into();
+            }
         };
         measure(layer_island(content), move |w| Message::Measured(id, w)).into()
     }
@@ -386,7 +432,47 @@ impl Shell {
         left.into()
     }
 
-    fn bar_end(&self) -> Element<'_, Message> {
+    /// The notification center's header and empty state, as plumbing: the
+    /// surface and its DND toggle are real, groups arrive with the notification
+    /// server in Phase 1.
+    fn notifications(&self) -> Element<'_, Message> {
+        let header = Row::new()
+            .spacing(10)
+            .align_y(Vertical::Center)
+            .push(text::text("Notifications", TypeStyle::TITLE_M))
+            .push(Space::new().width(Length::Fill))
+            .push(
+                button::icon_button(
+                    Icon::DarkMode,
+                    button::IconKind::Veil,
+                    button::Size::S,
+                    self.dnd,
+                )
+                .on_press(Message::Dnd),
+            )
+            .push(text::text("DND", TypeStyle::LABEL_L).class(Tone::OnSurfaceVariant));
+        let empty = Column::new()
+            .spacing(10)
+            .align_x(iced_core::alignment::Horizontal::Center)
+            .width(Length::Fill)
+            .push(surface::icon_disc(Icon::Notifications))
+            .push(text::text("Nothing new", TypeStyle::BODY_M).class(Tone::OnSurfaceVariant));
+        // The surface is measured for height: no Fill anywhere inside, or it
+        // would stretch forever.
+        surface::surface(
+            Column::new()
+                .push(header)
+                .push(Space::new().height(48))
+                .push(empty)
+                .push(Space::new().height(56)),
+            Surface::LayerPanel(Material::Glass),
+        )
+        .padding(Padding::from([18.0, 16.0]))
+        .width(Length::Fill)
+        .into()
+    }
+
+    fn bar_end<'a>(&'a self, output: &'a str) -> Element<'a, Message> {
         let mut right = Row::new()
             .spacing(bar::GAP)
             .align_y(Vertical::Center)
@@ -403,7 +489,7 @@ impl Shell {
             right = right.push(pill);
         }
         right
-            .push(bar::bell(false, false).on_press(Message::Bell))
+            .push(bar::bell(false, self.dnd).on_press(Message::Bell(output.to_owned())))
             .into()
     }
 
