@@ -22,6 +22,8 @@ pub enum Tone {
     OnSurfaceVariant,
     /// Dark scheme only on materials: in light, primary is for fills, never text.
     Primary,
+    /// Glyphs on a primary fill (the launcher wave).
+    OnPrimary,
     Tertiary,
     Error,
     Warn,
@@ -35,6 +37,7 @@ impl Tone {
             Tone::OnSurface => s.on_surface,
             Tone::OnSurfaceVariant => s.on_surface_variant,
             Tone::Primary => s.primary,
+            Tone::OnPrimary => s.on_primary,
             Tone::Tertiary => s.tertiary,
             Tone::Error => s.error,
             Tone::Warn => s.signal_warn,

@@ -5,6 +5,9 @@ output "winit" {
 }
 
 prefer-no-csd
+
+// The design canvas's wallpaper (the Glass contrast numbers are measured on it).
+spawn-at-startup "swaybg" "-i" "/work/dev/preview/wallpaper.jpg" "-m" "fill"
 screenshot-path "/preview/screenshots/%Y-%m-%d_%H-%M-%S.png"
 
 hotkey-overlay {

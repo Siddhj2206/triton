@@ -43,6 +43,8 @@ run = "cargo test --workspace"
 # ── preview (container: headless sway -> nested niri -> triton) ─────────────
 # Never touches the real session: private runtime dir, scratch home, private
 # session bus. See docs/roadmap.md section 7 and dev/preview/.
+# target/ is a symlink into the mbx cache, so its real path is mounted too:
+# TRITON_CMD=/work/target/debug/triton then resolves inside the container.
 
 [tasks."preview:image"]
 description = "Build the preview container image"
@@ -55,7 +57,8 @@ mkdir -p target/preview
 podman rm -f triton-preview >/dev/null 2>&1 || true
 podman run -d --rm --name triton-preview \
   --device /dev/dri --security-opt label=disable \
-  -v "$PWD:/work:ro" -v "$PWD/target/preview:/preview" \
+  -v "$PWD:/work:ro" -v "$(readlink -f target):$(readlink -f target):ro" \
+  -v "$PWD/target/preview:/preview" \
   -e TRITON_CMD="${TRITON_CMD:-}" -e RUST_LOG \
   localhost/triton-preview:latest \
   dbus-run-session -- /work/dev/preview/session.sh headless
@@ -69,7 +72,8 @@ podman rm -f triton-preview >/dev/null 2>&1 || true
 podman run --rm --name triton-preview \
   --device /dev/dri --security-opt label=disable \
   -v "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY:/run/host-wayland" \
-  -v "$PWD:/work:ro" -v "$PWD/target/preview:/preview" \
+  -v "$PWD:/work:ro" -v "$(readlink -f target):$(readlink -f target):ro" \
+  -v "$PWD/target/preview:/preview" \
   -e TRITON_CMD="${TRITON_CMD:-}" -e RUST_LOG \
   localhost/triton-preview:latest \
   dbus-run-session -- /work/dev/preview/session.sh nested

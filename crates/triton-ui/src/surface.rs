@@ -1,6 +1,8 @@
 //! Containers: materials, islands, cards, list rows and the small labels.
 
-use iced_core::{Background, Border, Color, Length, Padding, Shadow};
+use iced_core::layout::{self, Layout};
+use iced_core::widget::{Tree, Widget, tree};
+use iced_core::{Color, Length, Padding, Rectangle, Shadow, Vector, mouse, renderer};
 use iced_widget::container::{Catalog, Style};
 use iced_widget::{Column, Container, Row, Space};
 use triton_design::color::with_alpha;
@@ -8,6 +10,7 @@ use triton_design::material::ShadowToken;
 use triton_design::shape::{concentric, list_corners};
 use triton_design::{Icon, IconStyle, Material, RADII, SIZE};
 
+use crate::paint::{Paint, PaintCache};
 use crate::text::icon;
 use crate::{Element, Renderer, Theme};
 
@@ -30,6 +33,9 @@ pub enum Surface {
     },
     /// `.t-island`: a Glass pill in the bar.
     Island,
+    /// An island that is its own layer surface: niri casts its shadow and clips
+    /// its blur to the pill (a layer rule), so it paints only fill and highlight.
+    LayerIsland,
     /// `.t-pill`: a non-interactive Glass label (overview window names, hints).
     Pill,
     /// `.t-card`: Solid, 24 px corners.
@@ -50,57 +56,84 @@ pub enum Surface {
     Kbd,
     /// `.t-tag`: a small tertiary label.
     Tag,
+    /// The bar's status group: a primary-container pill.
+    Status,
+    /// The bell's unread dot: tertiary.
+    Dot,
+    /// The radio's 12 px primary dot.
+    RadioDot,
+    /// A Glass tooltip: 32 high, radius 12.
+    Tooltip,
 }
 
-fn shadow(token: Option<ShadowToken>) -> Shadow {
-    token.map_or_else(Shadow::default, ShadowToken::to_iced)
+fn shadow(token: Option<ShadowToken>) -> Option<Shadow> {
+    token.map(ShadowToken::to_iced)
 }
 
-impl Catalog for Theme {
-    type Class<'a> = Surface;
-
-    fn default<'a>() -> Self::Class<'a> {
-        Surface::None
-    }
-
-    fn style(&self, class: &Surface) -> Style {
+impl Theme {
+    /// What a surface paints, and the content color it sets (`None` inherits).
+    pub(crate) fn surface_paint(&self, class: Surface) -> (Paint, Option<Color>) {
         let s = &self.scheme;
         let v = self.variant;
-        let fill = |m: Material| m.fill_adaptive(s, v, self.bright_backdrop);
-        let solid = |c: Color, r: f32| Style {
-            background: Some(Background::Color(c)),
-            border: Border::default().rounded(r),
-            ..Style::default()
+        // In-shell shapes: flat, smoothed corners.
+        let solid = |c: Color, r: f32| Paint {
+            fill: Some(c),
+            radii: [r; 4],
+            smooth: true,
+            ..Paint::default()
         };
-        // Glass and Thick float: shadow underneath. (The 1 px top highlight needs an
-        // inset shadow, which iced lacks; it comes with the custom material widget.)
-        let floating = |m: Material, r: f32| Style {
-            text_color: Some(s.on_surface),
-            background: Some(Background::Color(fill(m))),
-            border: Border::default().rounded(r),
+        // Glass and Thick float: circular corners like niri's windows, a shadow
+        // underneath, the 1 px highlight on top.
+        let floating = |m: Material, r: f32| Paint {
+            fill: Some(m.fill_adaptive(s, v, self.bright_backdrop)),
+            radii: [r; 4],
+            smooth: false,
             shadow: shadow(m.shadow()),
-            snap: true,
+            highlight: matches!(m, Material::Glass | Material::Thick),
+            border: None,
         };
-        match *class {
-            Surface::None => Style::default(),
-            Surface::Material(m) => Style {
-                text_color: Some(s.on_surface),
-                ..floating(m, RADII.tiled)
-            },
-            Surface::Panel(m) => floating(m, RADII.floating_window),
+        let on = Some(s.on_surface);
+        match class {
+            Surface::None => (Paint::default(), None),
+            Surface::Material(m) => (floating(m, RADII.tiled), on),
+            Surface::Panel(m) => (floating(m, RADII.floating_window), on),
             Surface::Wrap {
                 material,
                 inner,
                 inset,
-            } => floating(material, concentric(inner, inset)),
-            Surface::Island => floating(Material::Glass, SIZE.bar_height / 2.0),
+            } => (floating(material, concentric(inner, inset)), on),
+            Surface::Island => (floating(Material::Glass, SIZE.bar_height / 2.0), on),
+            Surface::LayerIsland => (
+                Paint {
+                    shadow: None,
+                    ..floating(Material::Glass, SIZE.bar_height / 2.0)
+                },
+                on,
+            ),
             // .t-pill: 36 high, radius 18.
-            Surface::Pill => floating(Material::Glass, 18.0),
-            Surface::Card => solid(s.surface_container_low, RADII.list_outer),
-            Surface::Dialog => Style {
-                shadow: shadow(Material::Thick.shadow()),
-                ..solid(s.surface_container_low, RADII.floating_window)
-            },
+            Surface::Pill => (floating(Material::Glass, 18.0), on),
+            Surface::Tooltip => (
+                Paint {
+                    shadow: Some(ShadowToken::RAISED.to_iced()),
+                    ..floating(Material::Glass, RADII.sm)
+                },
+                on,
+            ),
+            Surface::RadioDot => (solid(s.primary, RADII.full), None),
+            Surface::Status => (
+                solid(s.primary_container, RADII.full),
+                Some(s.on_primary_container),
+            ),
+            Surface::Dot => (solid(s.tertiary, RADII.full), None),
+            Surface::Card => (solid(s.surface_container_low, RADII.list_outer), None),
+            Surface::Dialog => (
+                Paint {
+                    smooth: false,
+                    shadow: shadow(Material::Thick.shadow()),
+                    ..solid(s.surface_container_low, RADII.floating_window)
+                },
+                None,
+            ),
             Surface::ListRow {
                 index,
                 count,
@@ -112,54 +145,234 @@ impl Catalog for Theme {
                     (false, true) => s.surface_container_high,
                     (false, false) => s.surface_container,
                 };
-                let [tl, tr, br, bl] = list_corners(index, count);
-                Style {
-                    text_color: Some(if selected {
-                        s.on_secondary_container
-                    } else {
-                        s.on_surface
-                    }),
-                    background: Some(Background::Color(bg)),
-                    border: Border {
-                        radius: iced_core::border::Radius {
-                            top_left: tl,
-                            top_right: tr,
-                            bottom_right: br,
-                            bottom_left: bl,
-                        },
-                        ..Border::default()
+                let text = if selected {
+                    s.on_secondary_container
+                } else {
+                    s.on_surface
+                };
+                (
+                    Paint {
+                        radii: list_corners(index, count),
+                        ..solid(bg, 0.0)
                     },
-                    ..Style::default()
-                }
+                    Some(text),
+                )
             }
-            Surface::IconDisc => Style {
-                text_color: Some(s.on_secondary_container),
-                ..solid(s.secondary_container, RADII.full)
-            },
+            Surface::IconDisc => (
+                solid(s.secondary_container, RADII.full),
+                Some(s.on_secondary_container),
+            ),
             // .t-kbd: 1 px outline at .35, radius 7.
-            Surface::Kbd => Style {
-                text_color: Some(s.on_surface),
-                border: Border {
-                    color: with_alpha(s.on_surface, 0.35),
-                    width: 1.0,
-                    radius: 7.0.into(),
+            Surface::Kbd => (
+                Paint {
+                    fill: None,
+                    border: Some((with_alpha(s.on_surface, 0.35), 1.0)),
+                    ..solid(Color::TRANSPARENT, 7.0)
                 },
-                ..Style::default()
-            },
+                on,
+            ),
             // .t-tag: radius 10.
-            Surface::Tag => Style {
-                text_color: Some(s.on_tertiary_container),
-                ..solid(s.tertiary_container, 10.0)
-            },
+            Surface::Tag => (
+                solid(s.tertiary_container, 10.0),
+                Some(s.on_tertiary_container),
+            ),
         }
     }
 }
 
-pub type Panel<'a, M> = Container<'a, M, Theme, Renderer>;
+/// The container only lays out and sets the content color; [`Panel`] paints.
+impl Catalog for Theme {
+    type Class<'a> = Surface;
+
+    fn default<'a>() -> Self::Class<'a> {
+        Surface::None
+    }
+
+    fn style(&self, class: &Surface) -> Style {
+        Style {
+            text_color: self.surface_paint(*class).1,
+            ..Style::default()
+        }
+    }
+}
+
+/// A surface: an iced container for layout, painted by [`paint`](crate::paint) so
+/// it gets smoothed corners and the Glass highlight.
+pub struct Panel<'a, M> {
+    inner: Container<'a, M, Theme, Renderer>,
+    class: Surface,
+}
+
+impl<M> std::fmt::Debug for Panel<'_, M> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Panel")
+            .field("class", &self.class)
+            .finish_non_exhaustive()
+    }
+}
+
+macro_rules! forward {
+    ($($name:ident($($arg:ident: $ty:ty),*)),* $(,)?) => {
+        $(
+            #[must_use]
+            pub fn $name(mut self, $($arg: $ty),*) -> Self {
+                self.inner = self.inner.$name($($arg),*);
+                self
+            }
+        )*
+    };
+}
+
+impl<M> Panel<'_, M> {
+    forward!(
+        padding(p: impl Into<Padding>),
+        width(w: impl Into<Length>),
+        height(h: impl Into<Length>),
+        max_width(w: impl Into<iced_core::Pixels>),
+        center_x(w: impl Into<Length>),
+        center_y(h: impl Into<Length>),
+        center(l: impl Into<Length>),
+        align_x(a: impl Into<iced_core::alignment::Horizontal>),
+        align_y(a: impl Into<iced_core::alignment::Vertical>),
+    );
+}
+
+impl<M> Widget<M, Theme, Renderer> for Panel<'_, M> {
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<PaintCache>()
+    }
+
+    fn state(&self) -> tree::State {
+        tree::State::new(PaintCache::default())
+    }
+
+    fn children(&self) -> Vec<Tree> {
+        vec![Tree::new(&self.inner as &dyn Widget<M, Theme, Renderer>)]
+    }
+
+    fn diff(&self, tree: &mut Tree) {
+        tree.diff_children(&[&self.inner as &dyn Widget<M, Theme, Renderer>]);
+    }
+
+    fn size(&self) -> iced_core::Size<Length> {
+        self.inner.size()
+    }
+
+    fn size_hint(&self) -> iced_core::Size<Length> {
+        self.inner.size_hint()
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.inner.layout(&mut tree.children[0], renderer, limits)
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn iced_core::widget::Operation,
+    ) {
+        self.inner
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &iced_core::Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn iced_core::Clipboard,
+        shell: &mut iced_core::Shell<'_, M>,
+        viewport: &Rectangle,
+    ) {
+        self.inner.update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.inner
+            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        let bounds = layout.bounds();
+        let layered = bounds.intersects(viewport) && {
+            let (paint, _) = theme.surface_paint(self.class);
+            crate::paint::draw(renderer, bounds, paint, tree.state.downcast_ref())
+        };
+        let content = |r: &mut Renderer| {
+            self.inner
+                .draw(&tree.children[0], r, theme, style, layout, cursor, viewport);
+        };
+        if layered {
+            iced_core::Renderer::with_layer(renderer, *viewport, content);
+        } else {
+            content(renderer);
+        }
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<iced_core::overlay::Element<'b, M, Theme, Renderer>> {
+        self.inner.overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+}
+
+impl<'a, M: 'a> From<Panel<'a, M>> for Element<'a, M> {
+    fn from(panel: Panel<'a, M>) -> Self {
+        iced_core::Element::new(panel)
+    }
+}
 
 /// Any content in a surface.
 pub fn surface<'a, M: 'a>(content: impl Into<Element<'a, M>>, class: Surface) -> Panel<'a, M> {
-    iced_widget::container(content).class(class)
+    Panel {
+        inner: iced_widget::container(content).class(class),
+        class,
+    }
 }
 
 /// A floating material around one control with corner radius `inner`, `inset` px
@@ -181,11 +394,64 @@ pub fn wrap<'a, M: 'a>(
     .padding(inset)
 }
 
-/// A bar island: 56 high, content centered vertically.
+/// The bar island's inner padding.
+pub const ISLAND_INSET: f32 = 6.0;
+
+/// A Glass tooltip label, for iced's `tooltip` widget.
+pub fn tooltip_label<'a, M: 'a>(label: &'a str) -> Panel<'a, M> {
+    surface(
+        crate::text::ui(label, 13.0, iced_core::font::Weight::Medium),
+        Surface::Tooltip,
+    )
+    .height(32)
+    .center_y(32)
+    .padding(Padding::from([0.0, 12.0]))
+}
+
+/// A toast: a Glass pill, 56 high, with a message and an optional text action. The
+/// 40 px action sits 8 px in, concentric with the 28 px ends.
+pub fn toast<'a, M: Clone + 'a>(message: &'a str, action: Option<(&'a str, M)>) -> Panel<'a, M> {
+    let mut content = Row::new()
+        .spacing(22)
+        .align_y(iced_core::alignment::Vertical::Center)
+        .push(crate::text::ui(
+            message,
+            15.0,
+            iced_core::font::Weight::Medium,
+        ));
+    let right = if let Some((label, on_press)) = action {
+        content = content.push(
+            crate::button::button(label, None, crate::Kind::Text, crate::Size::M)
+                .on_press(on_press),
+        );
+        8.0
+    } else {
+        24.0
+    };
+    surface(content, Surface::Island)
+        .height(SIZE.bar_height)
+        .center_y(SIZE.bar_height)
+        .padding(Padding {
+            left: 24.0,
+            right,
+            ..Padding::ZERO
+        })
+}
+
+/// A bar island (`.isl`): 56 high, 6 px inset, content centered vertically. Its
+/// 44 px end items are concentric with its ends (22 + 6 = 28).
 pub fn island<'a, M: 'a>(content: impl Into<Element<'a, M>>) -> Panel<'a, M> {
     surface(content, Surface::Island)
         .height(SIZE.bar_height)
-        .padding(Padding::from([0.0, 8.0]))
+        .padding(Padding::from([0.0, ISLAND_INSET]))
+        .center_y(SIZE.bar_height)
+}
+
+/// An [`island`] that fills its own layer surface (see [`Surface::LayerIsland`]).
+pub fn layer_island<'a, M: 'a>(content: impl Into<Element<'a, M>>) -> Panel<'a, M> {
+    surface(content, Surface::LayerIsland)
+        .height(SIZE.bar_height)
+        .padding(Padding::from([0.0, ISLAND_INSET]))
         .center_y(SIZE.bar_height)
 }
 

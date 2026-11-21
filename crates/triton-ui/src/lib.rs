@@ -6,8 +6,18 @@
 //! from `triton-design`, never literals, except component metrics that the CSS
 //! defines and the tokens do not (each one cites its CSS class).
 
+pub mod bar;
 pub mod button;
+pub mod control;
+pub mod field;
 pub mod gallery;
+pub mod measure;
+pub mod menu;
+mod paint;
+pub mod press;
+pub mod progress;
+pub mod scroll;
+pub mod slider;
 pub mod surface;
 pub mod text;
 pub mod theme;

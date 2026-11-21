@@ -2,20 +2,19 @@
 //!
 //! A button without `on_press` is disabled. State layers follow the tokens: hover
 //! 8%, press 10% of the content color over the fill. Pressing tightens a button's
-//! corners to 12 px (`.t-btn:active`); the animated morph comes with the shape
-//! widget, this is the settled state.
+//! corners to 12 px (`.t-btn:active`) and selection squares an icon button; the
+//! [`Pressable`] widget springs between these shapes and fades the layers.
 
 use iced_core::alignment::Vertical;
-use iced_core::border::Radius;
 use iced_core::font::Weight;
-use iced_core::{Background, Border, Color, Length, Padding, Shadow};
-use iced_widget::button::{Catalog, Status, Style};
-use iced_widget::{Button, Row};
+use iced_core::{Color, Length, Padding};
+use iced_widget::Row;
 use triton_design::color::{STATE_LAYER, over, with_alpha};
 use triton_design::material::{veil, veil_hi};
 use triton_design::shape::connected_corners;
 use triton_design::{Icon, IconStyle, RADII, SIZE};
 
+use crate::paint::Paint;
 use crate::text::{icon, ui};
 use crate::{Element, Renderer, Theme};
 
@@ -100,212 +99,266 @@ pub enum ButtonClass {
         large: bool,
         veil: bool,
     },
+    /// The switch track (`.t-switch`).
+    Switch {
+        on: bool,
+    },
+    /// A checkbox box.
+    Check {
+        checked: bool,
+    },
+    /// A radio ring.
+    Radio {
+        selected: bool,
+    },
+    /// A bar workspace (`.ws`): 40 high, Jost 17; the active one is a 56 px primary
+    /// pill.
+    Workspace {
+        active: bool,
+    },
+    /// A 44 px veil disc in the bar (`.bell`).
+    BarDisc,
+    /// No fill at rest, a round state layer on hover (the wave launcher).
+    Bare,
+    /// A menu row (`.mi`): pill, primary wash when hovered or its submenu is open.
+    MenuItem {
+        destructive: bool,
+        open: bool,
+    },
 }
 
-/// The resting look before status is applied.
+/// The resting colors before interaction is applied.
 struct Look {
     fill: Option<Color>,
     content: Color,
     outline: Option<Color>,
-    radius: Radius,
-    /// Radius while pressed, if pressing changes the shape.
-    pressed_radius: Option<f32>,
+    outline_width: f32,
+    /// Hover and press wash this color (at `MENU_WASH`) instead of a state layer.
+    wash: Option<Color>,
 }
 
 impl Look {
-    fn new(
-        fill: Option<Color>,
-        content: Color,
-        outline: Option<Color>,
-        radius: impl Into<Radius>,
-    ) -> Look {
+    fn new(fill: Option<Color>, content: Color, outline: Option<Color>) -> Look {
         Look {
             fill,
             content,
             outline,
-            radius: radius.into(),
-            pressed_radius: None,
+            outline_width: 1.0,
+            wash: None,
+        }
+    }
+}
+
+impl ButtonClass {
+    /// Corner radii (top-left, top-right, bottom-right, bottom-left), at rest or
+    /// pressed. Independent of the scheme, so the widget can animate them.
+    pub(crate) fn radii(self, pressed: bool) -> [f32; 4] {
+        match self {
+            // .t-btn: a pill that tightens to 12 while pressed.
+            ButtonClass::Button { size, .. } => {
+                [if pressed {
+                    RADII.sm
+                } else {
+                    size.height() / 2.0
+                }; 4]
+            }
+            // .t-ibtn: round; selection squares the corners (12 at 40 px, scaled).
+            ButtonClass::Icon { size, toggled, .. } => {
+                let h = size.height();
+                [if toggled {
+                    RADII.sm * h / SIZE.control_m
+                } else {
+                    h / 2.0
+                }; 4]
+            }
+            ButtonClass::Chip { .. } => [10.0; 4],
+            ButtonClass::Nav { .. } | ButtonClass::MenuItem { .. } => [SIZE.control_l / 2.0; 4],
+            ButtonClass::Segment {
+                index,
+                count,
+                large,
+                ..
+            } => connected_corners(index, count, segment_end(large)),
+            ButtonClass::Switch { .. } => [SIZE.switch.1 / 2.0; 4],
+            ButtonClass::Workspace { .. } => [SIZE.control_m / 2.0; 4],
+            ButtonClass::BarDisc | ButtonClass::Bare => [BAR_ITEM / 2.0; 4],
+            ButtonClass::Check { .. } => [6.0; 4],
+            ButtonClass::Radio { .. } => [12.0; 4],
         }
     }
 }
 
 impl Theme {
     fn look(&self, class: ButtonClass) -> Look {
+        let s = &self.scheme;
         match class {
-            ButtonClass::Button { kind, size } => self.button_look(kind, size),
-            ButtonClass::Icon {
-                kind,
-                size,
-                toggled,
-            } => self.icon_look(kind, size, toggled),
-            ButtonClass::Chip { selected } => self.chip_look(selected),
-            ButtonClass::Nav { selected } => self.nav_look(selected),
-            ButtonClass::Segment {
-                index,
-                count,
-                selected,
-                large,
-                veil,
-            } => self.segment_look(index, count, selected, large, veil),
-        }
-    }
-
-    /// `.t-btn`: a pill whose corners tighten to 12 while pressed.
-    fn button_look(&self, kind: Kind, size: Size) -> Look {
-        let s = &self.scheme;
-        let (fill, content, outline) = match kind {
-            Kind::Filled => (Some(s.primary), s.on_primary, None),
-            Kind::Tonal => (Some(s.secondary_container), s.on_secondary_container, None),
-            Kind::Outlined => (None, s.primary, Some(s.outline)),
-            Kind::Text => (None, s.primary, None),
-            Kind::Veil => (Some(veil(self.variant)), s.on_surface, None),
-        };
-        Look {
-            pressed_radius: Some(RADII.sm),
-            ..Look::new(fill, content, outline, size.height() / 2.0)
-        }
-    }
-
-    /// `.t-ibtn`: round; selection squares the corners (12 at 40 px, scaled).
-    fn icon_look(&self, kind: IconKind, size: Size, toggled: bool) -> Look {
-        let s = &self.scheme;
-        let (fill, content, outline) = match kind {
-            IconKind::Standard => (None, s.on_surface_variant, None),
-            IconKind::Filled => (Some(s.primary), s.on_primary, None),
-            IconKind::Tonal => (Some(s.secondary_container), s.on_secondary_container, None),
-            IconKind::Outlined => (None, s.on_surface_variant, Some(s.outline)),
-            IconKind::Neutral => (
-                Some(s.surface_container_highest),
-                s.on_surface_variant,
+            ButtonClass::Button { kind, .. } => {
+                let (fill, content, outline) = match kind {
+                    Kind::Filled => (Some(s.primary), s.on_primary, None),
+                    Kind::Tonal => (Some(s.secondary_container), s.on_secondary_container, None),
+                    Kind::Outlined => (None, s.primary, Some(s.outline)),
+                    Kind::Text => (None, s.primary, None),
+                    Kind::Veil => (Some(veil(self.variant)), s.on_surface, None),
+                };
+                Look::new(fill, content, outline)
+            }
+            ButtonClass::Icon { kind, .. } => {
+                let (fill, content, outline) = match kind {
+                    IconKind::Standard => (None, s.on_surface_variant, None),
+                    IconKind::Filled => (Some(s.primary), s.on_primary, None),
+                    IconKind::Tonal => {
+                        (Some(s.secondary_container), s.on_secondary_container, None)
+                    }
+                    IconKind::Outlined => (None, s.on_surface_variant, Some(s.outline)),
+                    IconKind::Neutral => (
+                        Some(s.surface_container_highest),
+                        s.on_surface_variant,
+                        None,
+                    ),
+                    IconKind::Veil => (Some(veil(self.variant)), s.on_surface, None),
+                };
+                Look::new(fill, content, outline)
+            }
+            // .t-chip: 1 px outline unless selected.
+            ButtonClass::Chip { selected: true } => {
+                Look::new(Some(s.secondary_container), s.on_secondary_container, None)
+            }
+            ButtonClass::Chip { selected: false } => {
+                Look::new(None, s.on_surface_variant, Some(s.outline))
+            }
+            // .t-nav: primary container when selected.
+            ButtonClass::Nav { selected } => Look::new(
+                selected.then_some(s.primary_container),
+                if selected {
+                    s.on_primary_container
+                } else {
+                    s.on_surface
+                },
                 None,
             ),
-            IconKind::Veil => (Some(veil(self.variant)), s.on_surface, None),
-        };
-        let h = size.height();
-        let radius = if toggled {
-            RADII.sm * h / SIZE.control_m
-        } else {
-            h / 2.0
-        };
-        Look::new(fill, content, outline, radius)
-    }
-
-    /// `.t-chip`: radius 10, 1 px outline unless selected.
-    fn chip_look(&self, selected: bool) -> Look {
-        let s = &self.scheme;
-        if selected {
-            Look::new(
-                Some(s.secondary_container),
-                s.on_secondary_container,
-                None,
-                10.0,
-            )
-        } else {
-            Look::new(None, s.on_surface_variant, Some(s.outline), 10.0)
-        }
-    }
-
-    /// `.t-nav`: a 48 px pill, primary container when selected.
-    fn nav_look(&self, selected: bool) -> Look {
-        let s = &self.scheme;
-        let content = if selected {
-            s.on_primary_container
-        } else {
-            s.on_surface
-        };
-        Look::new(
-            selected.then_some(s.primary_container),
-            content,
-            None,
-            SIZE.control_l / 2.0,
-        )
-    }
-
-    /// `.t-seg`: ends 22 (24 large), joins 8.
-    fn segment_look(
-        &self,
-        index: usize,
-        count: usize,
-        selected: bool,
-        large: bool,
-        on_glass: bool,
-    ) -> Look {
-        let s = &self.scheme;
-        let end = segment_end(large);
-        let [top_left, top_right, bottom_right, bottom_left] = connected_corners(index, count, end);
-        let (fill, content) = if selected {
-            (s.primary, s.on_primary)
-        } else if on_glass {
-            (veil(self.variant), s.on_surface)
-        } else {
-            (s.surface_container_high, s.on_surface)
-        };
-        let radius = Radius {
-            top_left,
-            top_right,
-            bottom_right,
-            bottom_left,
-        };
-        Look::new(Some(fill), content, None, radius)
-    }
-}
-
-impl Catalog for Theme {
-    type Class<'a> = ButtonClass;
-
-    fn default<'a>() -> Self::Class<'a> {
-        ButtonClass::Button {
-            kind: Kind::Filled,
-            size: Size::M,
-        }
-    }
-
-    fn style(&self, class: &ButtonClass, status: Status) -> Style {
-        let s = &self.scheme;
-        let look = self.look(*class);
-        let layer = match status {
-            Status::Hovered => STATE_LAYER.hover,
-            Status::Pressed => STATE_LAYER.press,
-            Status::Active | Status::Disabled => 0.0,
-        };
-        let fill = match look.fill {
-            // A veil brightens to veil-hi instead of taking a state layer.
-            Some(f) if layer > 0.0 && f == veil(self.variant) => Some(veil_hi(self.variant)),
-            Some(f) => Some(over(f, look.content, layer)),
-            None if layer > 0.0 => Some(with_alpha(look.content, layer)),
-            None => None,
-        };
-        let radius = match (status, look.pressed_radius) {
-            (Status::Pressed, Some(r)) => r.into(),
-            _ => look.radius,
-        };
-        let mut style = Style {
-            background: fill.map(Background::Color),
-            text_color: look.content,
-            border: Border {
-                color: look.outline.unwrap_or(Color::TRANSPARENT),
-                width: if look.outline.is_some() { 1.0 } else { 0.0 },
-                radius,
+            ButtonClass::Segment {
+                selected,
+                veil: on_glass,
+                ..
+            } => {
+                let (fill, content) = if selected {
+                    (s.primary, s.on_primary)
+                } else if on_glass {
+                    (veil(self.variant), s.on_surface)
+                } else {
+                    (s.surface_container_high, s.on_surface)
+                };
+                Look::new(Some(fill), content, None)
+            }
+            ButtonClass::Workspace { active: true } => {
+                Look::new(Some(s.primary), s.on_primary, None)
+            }
+            ButtonClass::Workspace { active: false } => Look::new(None, s.on_surface_variant, None),
+            ButtonClass::BarDisc => Look::new(Some(veil(self.variant)), s.on_surface, None),
+            // The switch draws its own track colors (see `switch_colors`).
+            ButtonClass::Bare | ButtonClass::Switch { .. } => Look::new(None, s.on_surface, None),
+            ButtonClass::Check { checked: true } => Look::new(Some(s.primary), s.on_primary, None),
+            ButtonClass::Check { checked: false } => Look {
+                outline_width: 2.0,
+                ..Look::new(None, s.on_surface_variant, Some(s.outline))
             },
-            shadow: Shadow::default(),
-            snap: true,
-        };
-        if status == Status::Disabled {
-            let content = with_alpha(s.on_surface, STATE_LAYER.disabled_content);
-            style.text_color = content;
-            if look.fill.is_some() {
-                style.background = Some(Background::Color(with_alpha(
-                    s.on_surface,
-                    STATE_LAYER.disabled_container,
-                )));
-            }
-            if look.outline.is_some() {
-                style.border.color = with_alpha(s.on_surface, STATE_LAYER.disabled_container);
-            }
+            // The dot is the content.
+            ButtonClass::Radio { selected } => Look {
+                outline_width: 2.0,
+                ..Look::new(
+                    None,
+                    s.primary,
+                    Some(if selected { s.primary } else { s.outline }),
+                )
+            },
+            // .mi: an open submenu keeps the wash.
+            ButtonClass::MenuItem { destructive, open } => Look {
+                wash: Some(s.primary),
+                ..Look::new(
+                    open.then_some(with_alpha(s.primary, MENU_WASH)),
+                    if destructive { s.error } else { s.on_surface },
+                    None,
+                )
+            },
         }
-        style
+    }
+
+    /// The switch track at `on` (0 off to 1 on): fill, outline, thumb, check.
+    pub(crate) fn switch_colors(&self, on: f32) -> [Color; 4] {
+        let s = &self.scheme;
+        [
+            mix(s.surface_container_highest, s.primary, on),
+            mix(s.outline, s.primary, on),
+            mix(s.outline, s.on_primary, on),
+            with_alpha(s.primary, on),
+        ]
+    }
+
+    /// The paint and content color of a pressable, given how hovered and pressed it
+    /// is (0 to 1, animated) and its current corner radii.
+    pub(crate) fn press_paint(
+        &self,
+        class: ButtonClass,
+        hover: f32,
+        press: f32,
+        disabled: bool,
+        radii: [f32; 4],
+    ) -> (Paint, Color) {
+        let s = &self.scheme;
+        let look = self.look(class);
+        let layer = STATE_LAYER.hover * hover + (STATE_LAYER.press - STATE_LAYER.hover) * press;
+        let fill = match (look.fill, look.wash) {
+            // A washed control (menu rows) fades its wash in, a step stronger pressed.
+            (base, Some(wash)) => {
+                let rest = if base.is_some() { MENU_WASH } else { 0.0 };
+                let alpha = rest.max(MENU_WASH * hover.max(press)) + PRESS_WASH * press;
+                (alpha > 0.0).then(|| with_alpha(wash, alpha))
+            }
+            // A veil brightens toward veil-hi instead of taking a state layer.
+            (Some(f), None) if f == veil(self.variant) => {
+                Some(mix(f, veil_hi(self.variant), hover.max(press)))
+            }
+            (Some(f), None) => Some(over(f, look.content, layer)),
+            (None, None) => (layer > 0.0).then(|| with_alpha(look.content, layer)),
+        };
+        let mut paint = Paint {
+            fill,
+            border: look.outline.map(|c| (c, look.outline_width)),
+            radii,
+            // In-shell controls ease their corners; nothing here floats.
+            smooth: true,
+            shadow: None,
+            highlight: false,
+        };
+        let mut content = look.content;
+        if disabled {
+            content = with_alpha(s.on_surface, STATE_LAYER.disabled_content);
+            let dim = with_alpha(s.on_surface, STATE_LAYER.disabled_container);
+            paint.fill = look.fill.map(|_| dim);
+            paint.border = look.outline.map(|_| (dim, look.outline_width));
+        }
+        (paint, content)
     }
 }
+
+/// Linear blend from `a` to `b`.
+pub(crate) fn mix(a: Color, b: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    Color::from_rgba(
+        a.r + (b.r - a.r) * t,
+        a.g + (b.g - a.g) * t,
+        a.b + (b.b - a.b) * t,
+        a.a + (b.a - a.a) * t,
+    )
+}
+
+/// Bar items that end an island: 44 px, so with the island's 6 px inset their
+/// corners are concentric with its 28 px ends.
+pub(crate) const BAR_ITEM: f32 = 44.0;
+
+/// `.mi.hov`: the menu highlight is primary at 16%; pressing adds this much.
+const MENU_WASH: f32 = 0.16;
+const PRESS_WASH: f32 = 0.08;
 
 /// Content centered vertically in the control's height (iced buttons top-align).
 fn centered<'a, M: 'a>(
@@ -314,7 +367,8 @@ fn centered<'a, M: 'a>(
     iced_widget::container(content).center_y(Length::Fill)
 }
 
-pub type Pressable<'a, M> = Button<'a, M, Theme, Renderer>;
+pub use crate::press::Pressable;
+use crate::press::pressable;
 
 /// `.t-btn`: a label, optionally led by an icon.
 pub fn button<'a, M: 'a>(
@@ -335,7 +389,7 @@ pub fn button<'a, M: 'a>(
         content = content.push(icon(glyph, IconStyle::Outlined, icon_size));
     }
     content = content.push(ui(label, font, Weight::Semibold));
-    iced_widget::button(centered(content))
+    pressable(centered(content))
         .height(size.height())
         .padding(Padding::from([0.0, pad]))
         .class(ButtonClass::Button { kind, size })
@@ -356,7 +410,7 @@ pub fn icon_button<'a, M: 'a>(
         IconStyle::Outlined
     };
     let glyph_size = if size == Size::S { 20.0 } else { 24.0 };
-    iced_widget::button(
+    pressable(
         iced_widget::container(icon(glyph, style, glyph_size))
             .center_x(Length::Fill)
             .center_y(Length::Fill),
@@ -383,7 +437,7 @@ pub fn chip<'a, M: 'a>(label: &'a str, leading: Option<Icon>, selected: bool) ->
         content = content.push(icon(glyph, style, 18.0));
     }
     content = content.push(ui(label, 14.0, Weight::Medium));
-    iced_widget::button(centered(content))
+    pressable(centered(content))
         .height(36)
         .padding(Padding::from([0.0, 14.0]))
         .class(ButtonClass::Chip { selected })
@@ -410,7 +464,7 @@ pub fn nav_item<'a, M: 'a>(glyph: Icon, label: &'a str, selected: bool) -> Press
         .push(ui(label, 15.0, weight))
         .spacing(16)
         .align_y(Vertical::Center);
-    iced_widget::button(centered(content))
+    pressable(centered(content))
         .width(Length::Fill)
         .height(SIZE.control_l)
         .padding(Padding::from([0.0, 16.0]))
@@ -462,7 +516,7 @@ pub fn segmented<'a, M: Clone + 'a>(
             if let Some(label) = seg.label {
                 content = content.push(ui(label, font, Weight::Semibold));
             }
-            iced_widget::button(
+            pressable(
                 iced_widget::container(content)
                     .center_x(Length::Fill)
                     .center_y(Length::Fill),

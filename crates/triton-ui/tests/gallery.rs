@@ -5,7 +5,7 @@ use iced_test::simulator::Simulator;
 use triton_ui::{Theme, gallery, settings};
 
 fn snapshot(theme: &Theme, name: &str) {
-    let mut ui = Simulator::with_size(settings(), (1440.0, 980.0), gallery::view(()));
+    let mut ui = Simulator::with_size(settings(), (1440.0, 1640.0), gallery::view(()));
     let snap = ui.snapshot(theme).expect("render");
     let path = format!("{}/tests/snapshots/{name}", env!("CARGO_MANIFEST_DIR"));
     assert!(

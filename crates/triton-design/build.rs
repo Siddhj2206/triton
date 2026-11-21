@@ -180,6 +180,12 @@ fn state_layer(t: &Value, out: &mut String) {
 }
 
 fn shape(t: &Value, out: &mut String) {
+    writeln!(
+        out,
+        "pub(crate) const CORNER_SMOOTHING: f32 = {};",
+        f(num(t, "shape.corner_smoothing"))
+    )
+    .unwrap_or_default();
     out.push_str("pub(crate) const RADII: Radii = Radii {\n");
     for key in [
         "tiled",

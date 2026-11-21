@@ -126,6 +126,7 @@ pub struct ShadowToken {
 }
 
 impl ShadowToken {
+    pub const FLOATING: ShadowToken = tokens::SHADOW_FLOATING;
     pub const RAISED: ShadowToken = tokens::SHADOW_RAISED;
     pub const WINDOW_OUTLINE: ShadowToken = tokens::WINDOW_OUTLINE;
 
