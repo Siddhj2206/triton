@@ -891,12 +891,23 @@ fn scroll_area_clips_fades_scrolls_and_morphs_thumb() {
     );
     assert!(thumb2.fill[3] > 0.6, "hover alpha toward .75");
 
-    // Children keep intrinsic height past the viewport (no flex-shrink squeeze).
-    let child_h = quads(&dl)
-        .iter()
+    // Children keep intrinsic height past the viewport (no flex-shrink squeeze)
+    // and off-screen rows are culled from the DrawList for smooth scrolling.
+    let visible_white: Vec<_> = quads(&dl)
+        .into_iter()
         .filter(|q| q.2.fill.iter().all(|c| *c > 0.99))
-        .count();
-    assert!(child_h >= 8, "8 white children drawn (clipped)");
+        .collect();
+    assert!(
+        !visible_white.is_empty() && visible_white.len() < 8,
+        "only viewport-visible white children are emitted (got {})",
+        visible_white.len()
+    );
+    assert!(
+        visible_white
+            .iter()
+            .all(|q| (q.2.dst[3] - 40.0).abs() < EPS),
+        "visible children keep their full 40px intrinsic height without flex-shrink"
+    );
 }
 
 #[test]

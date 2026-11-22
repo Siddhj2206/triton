@@ -1764,9 +1764,9 @@ fn scroll_area_uses_custom_scrollbar_style_for_thumb() {
     );
 
     let quads = collect_quads(&draw_list);
-    // bg + 4 children + 1 thumb = 6
-    assert_eq!(quads.len(), 6);
-    let thumb = quads[5].1;
+    // bg + 3 visible children (row 3 at y=120..160 is culled outside h=100) + 1 thumb = 5
+    assert_eq!(quads.len(), 5);
+    let thumb = quads[4].1;
 
     // Scroll rect (20,20,160,100): thumb_x = 20 + 160 - (10 + 4) = 166.
     assert_rect_approx(
@@ -1808,8 +1808,9 @@ fn scroll_area_default_scrollbar_matches_legacy_geometry() {
     );
 
     let quads = collect_quads(&draw_list);
-    assert_eq!(quads.len(), 6);
-    let thumb = quads[5].1;
+    // bg + 3 visible children (row 3 culled) + 1 thumb = 5
+    assert_eq!(quads.len(), 5);
+    let thumb = quads[4].1;
     // Legacy: w 3.5, margin 2 → x = 20 + 160 - 5.5 = 174.5; alpha 0.24.
     assert_approx(thumb.dst[2], 3.5, "default thumb width");
     assert_approx(thumb.dst[0], 174.5, "default thumb x");
@@ -1844,8 +1845,8 @@ fn scroll_area_hides_thumb_when_scrollbar_width_is_zero() {
         &mut draw_list,
     );
 
-    // bg + 4 children, no thumb.
-    assert_eq!(collect_quads(&draw_list).len(), 5);
+    // bg + 3 visible children (row 3 culled), no thumb.
+    assert_eq!(collect_quads(&draw_list).len(), 4);
 }
 
 // ── 16. child_opt inside a scroll container keeps intrinsic height ────────────

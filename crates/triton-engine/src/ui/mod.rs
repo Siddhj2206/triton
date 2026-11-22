@@ -1238,7 +1238,7 @@ impl<M> BuiltFrame<M> {
                     let max_scroll = (entry.content_height - entry.rect.h).max(0.0);
                     let cur = interaction.scroll_offset(key);
                     let next = (cur + delta_y).clamp(0.0, max_scroll);
-                    if (next - cur).abs() > 0.1 {
+                    if (next - cur).abs() > 0.01 {
                         interaction.set_scroll_offset(key, next);
                         dirty = true;
                     }
@@ -1455,6 +1455,7 @@ pub fn layout_and_paint<M>(
         None,
         None,
         None,
+        None,
         scale,
         interaction,
         text,
@@ -1545,6 +1546,7 @@ fn paint_node<M>(
     edge_fade: Option<EdgeFade>,
     scroll_ancestor: Option<NodeKey>,
     blur_ancestor: Option<Rect>,
+    input_ancestor: Option<Rect>,
     scale: f32,
     interaction: &InteractionState,
     text: &mut TextEngine,
@@ -1610,6 +1612,7 @@ fn paint_node<M>(
             None,
             scroll_ancestor,
             None,
+            None,
             scale,
             interaction,
             text,
@@ -1646,7 +1649,8 @@ fn paint_node<M>(
         for br in &local_frame.input_rects {
             let mapped = to_screen(br.rect);
             let clipped = clip_rect.map_or(mapped, |c| mapped.intersect(c));
-            if !clipped.is_empty() {
+            let covered = input_ancestor.is_some_and(|a| rect_contains(a, clipped));
+            if !clipped.is_empty() && !covered {
                 frame.input_rects.push(BlurRect {
                     rect: clipped,
                     radius: br.radius * tf.scale,
@@ -1712,39 +1716,43 @@ fn paint_node<M>(
     // 1. Optional SDF drop shadow (painted behind the element itself).
     //    For translucent fills (Glass/Thick/alpha < 0.99), request an interior
     //    caster cutout so the dark shadow never bleeds through and muddies the glass.
+    let in_viewport = clip_rect.is_none_or(|c| !screen_rect.intersect(c).is_empty());
     if let Some(sh) = elem.visual.shadow {
         let pad = sh.blur * 2.0;
         let sx = screen_rect.x + sh.offset_x * tf.scale - sh.spread * tf.scale - pad * tf.scale;
         let sy = screen_rect.y + sh.offset_y * tf.scale - sh.spread * tf.scale - pad * tf.scale;
         let sw = screen_rect.w + (sh.spread + pad) * 2.0 * tf.scale;
         let sh_h = screen_rect.h + (sh.spread + pad) * 2.0 * tf.scale;
-        let radii = elem
-            .visual
-            .radii
-            .clamped(local_rect.w, local_rect.h)
-            .map(|r| (r + sh.spread).max(0.0) * eff_scale);
-        let cutout = elem.visual.fill.is_some_and(|f| f.a > 0.0 && f.a < 0.99);
-        draw_list.push_quad_faded(
-            scissor,
-            edge_fade,
-            QuadInstance {
-                dst: [sx * scale, sy * scale, sw * scale, sh_h * scale],
-                radii,
-                fill: sh.color.to_array(),
-                border: [
-                    sh.offset_x * eff_scale,
-                    sh.offset_y * eff_scale,
-                    sh.spread * eff_scale,
-                    if cutout { 1.0 } else { 0.0 },
-                ],
-                misc: [
-                    KIND_SHADOW,
-                    elem.visual.smoothing,
-                    sh.blur * eff_scale,
-                    tf.opacity,
-                ],
-            },
-        );
+        let shadow_rect = Rect::new(sx, sy, sw, sh_h);
+        if clip_rect.is_none_or(|c| !shadow_rect.intersect(c).is_empty()) {
+            let radii = elem
+                .visual
+                .radii
+                .clamped(local_rect.w, local_rect.h)
+                .map(|r| (r + sh.spread).max(0.0) * eff_scale);
+            let cutout = elem.visual.fill.is_some_and(|f| f.a > 0.0 && f.a < 0.99);
+            draw_list.push_quad_faded(
+                scissor,
+                edge_fade,
+                QuadInstance {
+                    dst: [sx * scale, sy * scale, sw * scale, sh_h * scale],
+                    radii,
+                    fill: sh.color.to_array(),
+                    border: [
+                        sh.offset_x * eff_scale,
+                        sh.offset_y * eff_scale,
+                        sh.spread * eff_scale,
+                        if cutout { 1.0 } else { 0.0 },
+                    ],
+                    misc: [
+                        KIND_SHADOW,
+                        elem.visual.smoothing,
+                        sh.blur * eff_scale,
+                        tf.opacity,
+                    ],
+                },
+            );
+        }
     }
 
     // 2. Background fill / hover-press state / border / top highlight / wave
@@ -1769,7 +1777,7 @@ fn paint_node<M>(
         || (!is_image && (elem.visual.border_width > 0.0 || elem.wave.is_some()));
 
     let clamped_radii = elem.visual.radii.clamped(local_rect.w, local_rect.h);
-    if has_shape && screen_rect.w > 0.0 && screen_rect.h > 0.0 {
+    if has_shape && in_viewport && screen_rect.w > 0.0 && screen_rect.h > 0.0 {
         let fill_arr = fill.unwrap_or(Rgba::TRANSPARENT).to_array();
         let quad_border_w = if is_image {
             0.0
@@ -1841,7 +1849,11 @@ fn paint_node<M>(
             radius: blur_r,
         });
     }
-    if elem.captures_input && !clipped_screen_rect.is_empty() {
+    let covered_by_input_ancestor =
+        input_ancestor.is_some_and(|a| rect_contains(a, clipped_screen_rect));
+    let emitted_input =
+        elem.captures_input && !covered_by_input_ancestor && !clipped_screen_rect.is_empty();
+    if emitted_input {
         frame.input_rects.push(BlurRect {
             rect: clipped_screen_rect,
             radius: blur_r,
@@ -1852,15 +1864,21 @@ fn paint_node<M>(
     } else {
         blur_ancestor
     };
+    let child_input_ancestor = if emitted_input {
+        Some(clipped_screen_rect)
+    } else {
+        input_ancestor
+    };
 
     // 3. Text content
-    if let ElementContent::Text {
-        text: content,
-        font,
-        color,
-        align,
-        wrap,
-    } = &elem.content
+    if in_viewport
+        && let ElementContent::Text {
+            text: content,
+            font,
+            color,
+            align,
+            wrap,
+        } = &elem.content
         && !content.is_empty()
     {
         let max_w = if *wrap { Some(local_rect.w) } else { None };
@@ -1887,7 +1905,8 @@ fn paint_node<M>(
     }
 
     // 4. Image content (textured quad batch, z-ordered with quads/glyphs)
-    if let ElementContent::Image { id, style } = &elem.content
+    if in_viewport
+        && let ElementContent::Image { id, style } = &elem.content
         && !screen_rect.is_empty()
     {
         let (src_w, src_h) = images
@@ -1961,11 +1980,12 @@ fn paint_node<M>(
     }
 
     // 4b. Polyline content (round-capped SDF capsule segments)
-    if let ElementContent::Polyline {
-        points,
-        width,
-        color,
-    } = &elem.content
+    if in_viewport
+        && let ElementContent::Polyline {
+            points,
+            width,
+            color,
+        } = &elem.content
         && !points.is_empty()
         && *width > 0.0
         && color.a > 0.0
@@ -2171,6 +2191,7 @@ fn paint_node<M>(
             child_edge_fade,
             child_scroll_ancestor,
             child_blur_ancestor,
+            child_input_ancestor,
             scale,
             interaction,
             text,

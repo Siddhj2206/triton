@@ -731,3 +731,57 @@ fn smooth_corner_shadow_decays_cleanly_without_clamped_square_halo() {
          (near={near}, mid={mid}, far={far}, outer_corner={outer_corner})"
     );
 }
+
+#[test]
+fn input_rects_deduplicate_inside_scrollable_card_and_cull_offscreen_draw_work() {
+    let mut session = HeadlessSession::<()>::new((400.0, 260.0), 1.0);
+    let scroll_key = NodeKey::named("perf-scroll");
+
+    let build_tree = || {
+        let mut sc = col().id("perf-scroll").w(300.0).h(120.0).gap(8.0);
+        for i in 0..30 {
+            sc = sc.child(
+                row()
+                    .w(280.0)
+                    .h(40.0)
+                    .bg(Rgba::new(0.2, 0.2, 0.25, 1.0))
+                    .child(text(format!("Row {i}"), FontSpec::ui(14.0), Rgba::WHITE)),
+            );
+        }
+        col()
+            .w(340.0)
+            .h(200.0)
+            .p(Edges::all(16.0))
+            .bg(Rgba::new(0.1, 0.1, 0.14, 1.0))
+            .child(sc.scroll_y())
+    };
+
+    let frame0 = session.render(|_| build_tree());
+    let inputs0 = frame0.input_rects.clone();
+    let quads0 = session.draw_list().quad_count();
+    let glyphs0 = session.draw_list().glyph_count();
+    assert_eq!(
+        inputs0.len(),
+        1,
+        "all 30 scrollable child rows are contained inside the outer card's input_rect"
+    );
+    // Only the outer card + ~3 visible rows + scrollbar thumb should emit quads (not all 30 rows!).
+    assert!(
+        quads0 < 12,
+        "off-screen scroll rows must be culled from DrawList (got {quads0} quads)"
+    );
+    assert!(
+        glyphs0 < 40,
+        "off-screen scroll labels must be culled from glyph emission (got {glyphs0} glyphs)"
+    );
+
+    // Scrolling must keep `input_rects` bit-identical so Wayland never rebuilds wl_region mid-scroll.
+    session
+        .interaction_mut()
+        .set_scroll_offset(scroll_key, 240.0);
+    let frame1 = session.render(|_| build_tree());
+    assert_eq!(
+        frame1.input_rects, inputs0,
+        "scrolling inside a card must not churn Wayland input_rects"
+    );
+}
