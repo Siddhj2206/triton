@@ -1,17 +1,19 @@
 //! Core Triton Material 3 Futura widgets built 100% in safe Rust on [`triton_engine::ui`].
 //!
-//! Organized by component family — later phases add `overlay`
-//! modules alongside these:
+//! Organized by component family:
 //! - [`surface`]: [`panel`] & [`island`] (materials, top highlight, blur reporting,
 //!   [`shadow_gutter`]), [`card`], [`scrim`], [`dialog`], [`divider`],
 //!   [`empty_state`], [`list_group`] + [`list_row`], [`scroll_area`].
 //! - [`button`]: [`button`], [`icon_button`], [`chip`], [`toggle_tile`],
 //!   [`segmented`], [`power_menu`], and their spec structs.
 //! - [`control`]: [`switch`], [`checkbox`], [`radio`], [`slider`] (`Animator`-driven).
-//! - [`input`]: [`TextInputState`] + [`text_input`].
+//! - [`input`]: [`TextInputState`] + [`text_input`], [`search_field`]
+//!   (mode-aware Wave disc), and [`password_field`] (masked dots, reveal
+//!   toggle, submit disc, Caps Lock chip, [`trigger_password_shake`]).
 //! - [`chrome`]: [`pill`], [`status_pill`], [`overflow_pill`], [`icon_disc`],
 //!   [`wave_avatar`], [`badge`], [`keycap`], [`hint_bar`].
 //! - [`progress`]: [`wavy_progress`], [`wavy_ring`], [`level_meter`].
+//! - [`overlay`]: [`menu`], [`tooltip`], [`toast_card`], [`toast_is_hovered`].
 //!
 //! Depends only on `triton-design` and `triton-engine`: no D-Bus, tokio, or IPC.
 
@@ -37,7 +39,10 @@ pub use chrome::{
 pub use control::{
     CheckState, SliderMode, SliderOptions, SliderSurface, checkbox, radio, slider, switch,
 };
-pub use input::{TextInputAction, TextInputState, text_input};
+pub use input::{
+    PASSWORD_SHAKE_AMPLITUDE, PasswordField, SearchField, SearchMode, TextInput, TextInputAction,
+    TextInputState, password_field, search_field, text_input, trigger_password_shake,
+};
 pub use overlay::{
     Menu, MenuEntry, MenuItem, ToastAction, ToastActionTone, ToastCard, ToastIdentity,
     ToastVariant, menu, toast_card, toast_is_hovered, tooltip,
