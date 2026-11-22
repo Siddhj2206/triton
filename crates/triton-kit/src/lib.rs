@@ -6,7 +6,7 @@
 //!   [`shadow_gutter`]), [`card`], [`scrim`], [`dialog`], [`divider`],
 //!   [`empty_state`], [`list_group`] + [`list_row`], [`scroll_area`].
 //! - [`button`]: [`button`], [`icon_button`], [`ButtonTone`].
-//! - [`control`]: [`slider`], [`SwitchState`] + [`switch`].
+//! - [`control`]: [`switch`], [`checkbox`], [`radio`], [`slider`] (`Animator`-driven).
 //! - [`input`]: [`TextInputState`] + [`text_input`].
 //! - [`chrome`]: [`pill`], [`status_pill`], [`overflow_pill`], [`icon_disc`],
 //!   [`wave_avatar`], [`badge`], [`keycap`], [`hint_bar`].
@@ -28,7 +28,9 @@ pub use chrome::{
     Badge, KeycapStyle, PillStatus, badge, badged, hint_bar, icon_disc, icon_disc_styled, keycap,
     overflow_pill, pill, status_pill, wave_avatar, wave_avatar_image,
 };
-pub use control::{SwitchState, slider, switch};
+pub use control::{
+    CheckState, SliderMode, SliderOptions, SliderSurface, checkbox, radio, slider, switch,
+};
 pub use input::{TextInputAction, TextInputState, text_input};
 pub use progress::{MeterMode, Progress, level_meter, wavy_progress, wavy_ring};
 pub use surface::{

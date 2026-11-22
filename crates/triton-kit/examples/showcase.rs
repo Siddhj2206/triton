@@ -27,7 +27,7 @@ use triton_engine::{
     SurfaceSize, SurfaceSpec, Theme, ViewContext, box_, col, icon, row, run, text,
 };
 use triton_kit::{
-    ButtonTone, ScrollAreaOptions, SwitchState, TextInputAction, TextInputState, button,
+    ButtonTone, ScrollAreaOptions, SliderOptions, TextInputAction, TextInputState, button,
     concentric_inner, icon_button, island, panel, pill, scroll_area, slider, switch, text_input,
 };
 
@@ -130,6 +130,10 @@ enum Msg {
     ToggleDnd,
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "demo shell state: independent toggles, a state machine would obscure them"
+)]
 struct ShowcaseApp {
     theme: Theme,
     active_ws: usize,
@@ -139,9 +143,9 @@ struct ShowcaseApp {
     selected_app: usize,
     brightness: f32,
     volume: f32,
-    wifi: SwitchState,
-    night_light: SwitchState,
-    dnd: SwitchState,
+    wifi: bool,
+    night_light: bool,
+    dnd: bool,
     status_note: String,
     auto_open: bool,
     quit_ms: Option<u64>,
@@ -169,9 +173,9 @@ impl ShowcaseApp {
             selected_app: 0,
             brightness: 0.72,
             volume: 0.48,
-            wifi: SwitchState::new(true, now),
-            night_light: SwitchState::new(true, now),
-            dnd: SwitchState::new(false, now),
+            wifi: true,
+            night_light: true,
+            dnd: false,
             status_note: "Neptuno-5G".into(),
             auto_open,
             quit_ms,
@@ -291,12 +295,12 @@ impl ShowcaseApp {
 
     fn view_right_island(&self, ctx: &mut ViewContext<'_>) -> Element<Msg> {
         let t = &self.theme;
-        let target_bg = if self.wifi.checked {
+        let target_bg = if self.wifi {
             Rgba::from_color(t.scheme.primary_container)
         } else {
             Rgba::from_color(t.scheme.tertiary_container)
         };
-        let target_fg = if self.wifi.checked {
+        let target_fg = if self.wifi {
             Rgba::from_color(t.scheme.on_primary_container)
         } else {
             Rgba::from_color(t.scheme.on_tertiary_container)
@@ -335,11 +339,7 @@ impl ShowcaseApp {
             .hover_bg(status_bg.over(status_fg, 0.08))
             .on_click(|| Msg::ToggleLauncher)
             .child(icon(
-                if self.wifi.checked {
-                    Icon::Wifi
-                } else {
-                    Icon::WifiOff
-                },
+                if self.wifi { Icon::Wifi } else { Icon::WifiOff },
                 IconStyle::Outlined,
                 20.0,
                 status_fg,
@@ -369,18 +369,18 @@ impl ShowcaseApp {
 
         let bell = icon_button(
             "btn-dnd",
-            if self.dnd.checked {
+            if self.dnd {
                 Icon::NotificationsOff
             } else {
                 Icon::Notifications
             },
-            if self.dnd.checked {
+            if self.dnd {
                 IconStyle::Filled
             } else {
                 IconStyle::Outlined
             },
             44.0,
-            self.dnd.checked,
+            self.dnd,
             ButtonTone::Veil,
             t,
             || Msg::ToggleDnd,
@@ -462,7 +462,7 @@ impl ShowcaseApp {
                     .w_full()
                     .gap(14.0)
                     .child(self.view_app_list(ctx.interaction, ctx.anim))
-                    .child(self.view_quick_controls(ctx.now)),
+                    .child(self.view_quick_controls(ctx.interaction, ctx.anim)),
             )
             .child(box_().w_full().h(1.0).bg(Rgba::new(1.0, 1.0, 1.0, 0.10)))
             .child(footer);
@@ -599,7 +599,11 @@ impl ShowcaseApp {
         r
     }
 
-    fn view_quick_controls(&self, now: Instant) -> Element<Msg> {
+    fn view_quick_controls(
+        &self,
+        interaction: &triton_engine::InteractionState,
+        anim: &mut triton_engine::Animator,
+    ) -> Element<Msg> {
         let t = &self.theme;
         col()
             .w(320.0)
@@ -630,6 +634,8 @@ impl ShowcaseApp {
                 Icon::LightMode,
                 "Brightness",
                 self.brightness,
+                interaction,
+                anim,
                 Msg::SetBrightness,
             ))
             .child(self.slider_row(
@@ -637,6 +643,8 @@ impl ShowcaseApp {
                 Icon::VolumeUp,
                 "Volume",
                 self.volume,
+                interaction,
+                anim,
                 Msg::SetVolume,
             ))
             .child(box_().w_full().h(1.0).bg(Rgba::new(1.0, 1.0, 1.0, 0.10)))
@@ -644,26 +652,28 @@ impl ShowcaseApp {
                 "sw-wifi",
                 Icon::Wifi,
                 "Wi-Fi",
-                if self.wifi.checked {
+                if self.wifi {
                     &self.status_note
                 } else {
                     "Disconnected"
                 },
-                &self.wifi,
-                now,
+                self.wifi,
+                interaction,
+                anim,
                 Msg::ToggleWifi,
             ))
             .child(self.switch_row(
                 "sw-night",
                 Icon::Bedtime,
                 "Night Light",
-                if self.night_light.checked {
+                if self.night_light {
                     "Warm · Until 06:30"
                 } else {
                     "Off"
                 },
-                &self.night_light,
-                now,
+                self.night_light,
+                interaction,
+                anim,
                 Msg::ToggleNightLight,
             ))
             .child(
@@ -683,12 +693,15 @@ impl ShowcaseApp {
             )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn slider_row(
         &self,
         key: &'static str,
         ic: Icon,
         label: &str,
         value: f32,
+        interaction: &triton_engine::InteractionState,
+        anim: &mut triton_engine::Animator,
         on_change: impl Fn(f32) -> Msg + 'static,
     ) -> Element<Msg> {
         let t = &self.theme;
@@ -722,7 +735,16 @@ impl ShowcaseApp {
                         Rgba::from_color(t.scheme.on_surface_variant),
                     )),
             )
-            .child(slider(key, value, 288.0, t, on_change))
+            .child(slider(
+                key,
+                value,
+                288.0,
+                SliderOptions::default(),
+                t,
+                interaction,
+                anim,
+                on_change,
+            ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -732,8 +754,9 @@ impl ShowcaseApp {
         ic: Icon,
         title: &str,
         sub: &str,
-        state: &SwitchState,
-        now: Instant,
+        checked: bool,
+        interaction: &triton_engine::InteractionState,
+        anim: &mut triton_engine::Animator,
         msg: Msg,
     ) -> Element<Msg> {
         let t = &self.theme;
@@ -743,13 +766,13 @@ impl ShowcaseApp {
             .gap(10.0)
             .child(icon(
                 ic,
-                if state.checked {
+                if checked {
                     IconStyle::Filled
                 } else {
                     IconStyle::Outlined
                 },
                 20.0,
-                if state.checked {
+                if checked {
                     Rgba::from_color(t.scheme.primary)
                 } else {
                     Rgba::from_color(t.scheme.on_surface_variant)
@@ -770,7 +793,15 @@ impl ShowcaseApp {
                         Rgba::from_color(t.scheme.on_surface_variant),
                     )),
             )
-            .child(switch(key, state, now, t, move || msg.clone()))
+            .child(switch(
+                key,
+                checked,
+                false,
+                t,
+                interaction,
+                anim,
+                move || msg.clone(),
+            ))
     }
 }
 
@@ -936,18 +967,18 @@ impl ShellApp for ShowcaseApp {
                 ]
             }
             Msg::ToggleWifi => {
-                self.wifi.toggle(now);
+                self.wifi = !self.wifi;
                 vec![
                     AppCommand::Redraw(SurfaceId::Launcher),
                     AppCommand::Redraw(SurfaceId::RightIsland),
                 ]
             }
             Msg::ToggleNightLight => {
-                self.night_light.toggle(now);
+                self.night_light = !self.night_light;
                 vec![AppCommand::Redraw(SurfaceId::Launcher)]
             }
             Msg::ToggleDnd => {
-                self.dnd.toggle(now);
+                self.dnd = !self.dnd;
                 vec![AppCommand::Redraw(SurfaceId::RightIsland)]
             }
         }
@@ -955,13 +986,8 @@ impl ShellApp for ShowcaseApp {
 
     fn is_animating(&self, id: SurfaceId, now: Instant) -> bool {
         match id {
-            SurfaceId::LeftIsland => false,
-            SurfaceId::RightIsland => self.dnd.is_animating(now),
-            SurfaceId::Launcher => {
-                !self.launcher_anim.is_settled(now)
-                    || self.wifi.is_animating(now)
-                    || self.night_light.is_animating(now)
-            }
+            SurfaceId::LeftIsland | SurfaceId::RightIsland => false,
+            SurfaceId::Launcher => !self.launcher_anim.is_settled(now),
         }
     }
 
@@ -1002,7 +1028,7 @@ impl ShellApp for ShowcaseApp {
                 cmds
             }
             TIMER_TOGGLE_SWITCH => {
-                self.night_light.toggle(now);
+                self.night_light = !self.night_light;
                 vec![AppCommand::Redraw(SurfaceId::Launcher)]
             }
             TIMER_CARET_BLINK => {
