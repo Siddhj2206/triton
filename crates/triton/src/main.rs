@@ -10,10 +10,10 @@ use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use triton::cli::USAGE;
 use triton::{
-    BackendMode, CliCommand, DaemonArgs, IpcResponse, IpcServer, MsgArgs, NiriIpc, ShellEvent,
-    ThemeSyncConfig, TritonShell, parse_args, resolve_socket_path, send_command,
+    BackendMode, CliCommand, DaemonArgs, HeadlessArgs, IpcResponse, IpcServer, MsgArgs, NiriIpc,
+    ShellEvent, ThemeSyncConfig, TritonShell, parse_args, resolve_socket_path, send_command,
 };
-use triton::{niri_config, theme_pipeline};
+use triton::{headless, niri_config, theme_pipeline};
 use triton_engine::{event_channel, run_with_events};
 
 fn main() -> ExitCode {
@@ -35,7 +35,28 @@ fn run_cli() -> Result<()> {
         }
         CliCommand::Msg(args) => run_msg(&args),
         CliCommand::Daemon(args) => run_daemon(&args),
+        CliCommand::Headless(args) => run_headless(&args),
     }
+}
+
+fn run_headless(args: &HeadlessArgs) -> Result<()> {
+    let report = headless::run(args).context("headless run")?;
+    for path in &report.snapshots {
+        eprintln!("snapped {}", path.display());
+    }
+    for path in &report.trees {
+        if path.as_os_str() != "-" {
+            eprintln!("tree {}", path.display());
+        }
+    }
+    if args.script.is_some() {
+        eprintln!(
+            "script: {} events, {} marks",
+            report.events_dispatched,
+            report.marks.len()
+        );
+    }
+    Ok(())
 }
 
 fn run_msg(args: &MsgArgs) -> Result<()> {

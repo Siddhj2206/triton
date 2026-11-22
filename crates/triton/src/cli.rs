@@ -3,10 +3,12 @@
 use std::path::PathBuf;
 
 use thiserror::Error;
+use triton_design::color::Variant;
 
+use crate::headless::HeadlessArgs;
 use crate::ipc::{BarCommand, IpcCommand, OsdCommand, ThemeCommand};
 use crate::osd::OsdPayload;
-use crate::state::BackendMode;
+use crate::state::{BackendMode, BarMode, SurfaceRole};
 
 /// Usage text printed for `triton --help`.
 pub const USAGE: &str = "\
@@ -14,12 +16,30 @@ triton — Triton desktop shell for niri
 
 USAGE:
     triton [--real-services] [--socket <PATH>]
+    triton --snap <FILE.png|DIR> [HEADLESS FLAGS]
+    triton --tree <FILE.json|DIR|-> [HEADLESS FLAGS]
+    triton --script <FILE.json> [--snap ...] [--tree ...]
     triton msg [--socket <PATH>] [--json] <SUBCOMMAND>
 
 DAEMON FLAGS:
     --real-services       Enable live system integrations (default: safe fake dev backend)
     --socket <PATH>       Override Unix socket path (default: $TRITON_SOCKET or $XDG_RUNTIME_DIR/triton.sock)
     -h, --help            Print this help message
+
+HEADLESS FLAGS (offscreen dev loop; always the fake backend, no Wayland):
+    --snap <PATH>         Write offscreen EGL PNG snapshot(s) to a file or directory
+    --tree <PATH>         Write semantic tree JSON to a file, directory, or `-` for stdout
+    --script <PATH>       Replay a timestamped input-event script (JSON `events` array)
+    --surface <ROLE>      bar | osd | wallpaper | all (repeatable; default: bar)
+    --variant <V>         dark | light | both (default: dark)
+    --mode <MODE>         autohide | pinned | hidden (Bar mode during the run)
+    --osd <KIND>          volume | brightness | mic | layout | workspace | battery
+    --reveal              Simulate a hover on the Autohide reveal edge (shows islands)
+    --scale <N>           Logical to physical scale (default: 1.75)
+    --size <WxH>          Canvas for Stretch surfaces (default: 1920x1080)
+    --settle <MS>         Virtual settle budget before output (default: 800)
+    --reduce-motion       Use 120ms linear fades instead of springs
+    --transparent         Keep alpha in PNGs instead of a flat backdrop
 
 MSG SUBCOMMANDS:
     status                                 Show daemon status and active surfaces
@@ -49,6 +69,10 @@ pub enum CliError {
     InvalidValue { flag: String, value: String },
     #[error("missing subcommand for `triton msg`")]
     MissingMsgSubcommand,
+    #[error("{0} cannot be combined with headless dev flags (--snap/--tree/--script)")]
+    IncompatibleWithHeadless(String),
+    #[error("{0} only applies to a headless run; pass --snap, --tree, or --script")]
+    MissingHeadlessTarget(String),
 }
 
 /// Options for running the `triton` daemon.
@@ -71,6 +95,8 @@ pub struct MsgArgs {
 pub enum CliCommand {
     Daemon(DaemonArgs),
     Msg(MsgArgs),
+    /// Offscreen dev loop (`--snap`/`--tree`/`--script`) — no daemon, no Wayland.
+    Headless(HeadlessArgs),
     Help,
 }
 
@@ -96,38 +122,253 @@ where
         return parse_msg_args(&tokens[1..]).map(CliCommand::Msg);
     }
 
-    parse_daemon_args(&tokens).map(CliCommand::Daemon)
+    parse_daemon_args(&tokens)
 }
 
-fn parse_daemon_args(tokens: &[String]) -> Result<DaemonArgs, CliError> {
+/// Fetch a flag's value: inline `--flag=value`, or the next token `--flag v`.
+fn flag_value<'a>(
+    i: &mut usize,
+    tokens: &'a [String],
+    inline: Option<&'a str>,
+    flag: &str,
+) -> Result<&'a str, CliError> {
+    if let Some(value) = inline {
+        if value.is_empty() {
+            return Err(CliError::MissingValue(flag.to_owned()));
+        }
+        return Ok(value);
+    }
+    *i += 1;
+    tokens
+        .get(*i)
+        .map(String::as_str)
+        .ok_or_else(|| CliError::MissingValue(flag.to_owned()))
+}
+
+fn parse_daemon_args(tokens: &[String]) -> Result<CliCommand, CliError> {
     let mut backend = BackendMode::Fake;
     let mut socket = None;
+    let mut headless = HeadlessArgs::default();
+    let mut saw_headless_modifier: Option<String> = None;
     let mut i = 0;
     while i < tokens.len() {
-        match tokens[i].as_str() {
+        let arg = tokens[i].as_str();
+        let (name, inline) = match arg.split_once('=') {
+            Some((n, v)) if n.starts_with("--") => (n, Some(v)),
+            _ => (arg, None),
+        };
+        match name {
             "--real-services" => {
                 backend = BackendMode::RealServices;
-                i += 1;
             }
             "--socket" => {
-                let value = tokens
-                    .get(i + 1)
-                    .ok_or_else(|| CliError::MissingValue("--socket".to_owned()))?;
-                socket = Some(PathBuf::from(value));
-                i += 2;
+                socket = Some(PathBuf::from(flag_value(&mut i, tokens, inline, name)?));
             }
-            arg if arg.starts_with("--socket=") => {
-                let value = &arg["--socket=".len()..];
-                if value.is_empty() {
-                    return Err(CliError::MissingValue("--socket".to_owned()));
+            _ => {
+                let matched = parse_headless_flag(
+                    &mut i,
+                    tokens,
+                    name,
+                    inline,
+                    &mut headless,
+                    &mut saw_headless_modifier,
+                )?;
+                if !matched {
+                    return Err(CliError::UnknownArgument(name.to_owned()));
                 }
-                socket = Some(PathBuf::from(value));
-                i += 1;
             }
-            other => return Err(CliError::UnknownArgument(other.to_owned())),
         }
+        i += 1;
     }
-    Ok(DaemonArgs { backend, socket })
+
+    let headless_requested =
+        headless.snap.is_some() || headless.tree.is_some() || headless.script.is_some();
+    if !headless_requested {
+        if let Some(flag) = saw_headless_modifier {
+            return Err(CliError::MissingHeadlessTarget(flag));
+        }
+        return Ok(CliCommand::Daemon(DaemonArgs { backend, socket }));
+    }
+    if backend == BackendMode::RealServices {
+        return Err(CliError::IncompatibleWithHeadless(
+            "--real-services".to_owned(),
+        ));
+    }
+    if socket.is_some() {
+        return Err(CliError::IncompatibleWithHeadless("--socket".to_owned()));
+    }
+    Ok(CliCommand::Headless(headless))
+}
+
+/// Parse one headless dev flag (`--snap`, `--tree`, `--script`, and the
+/// modifiers that configure them) into `headless`. Returns `false` when
+/// `name` is not a headless flag so the caller can report it as unknown.
+/// `saw_modifier` records the first modifier flag seen so a bare
+/// `triton --surface bar` can fail with a targeted error.
+fn parse_headless_flag(
+    i: &mut usize,
+    tokens: &[String],
+    name: &str,
+    inline: Option<&str>,
+    headless: &mut HeadlessArgs,
+    saw_modifier: &mut Option<String>,
+) -> Result<bool, CliError> {
+    let mut modifier = || {
+        saw_modifier.get_or_insert_with(|| name.to_owned());
+    };
+    match name {
+        "--snap" => {
+            headless.snap = Some(PathBuf::from(flag_value(i, tokens, inline, name)?));
+        }
+        "--tree" => {
+            headless.tree = Some(PathBuf::from(flag_value(i, tokens, inline, name)?));
+        }
+        "--script" => {
+            headless.script = Some(PathBuf::from(flag_value(i, tokens, inline, name)?));
+        }
+        "--surface" => {
+            headless
+                .surfaces
+                .extend(parse_surface_flag(flag_value(i, tokens, inline, name)?)?);
+            modifier();
+        }
+        "--variant" => {
+            headless.variants = parse_variant_flag(flag_value(i, tokens, inline, name)?)?;
+            modifier();
+        }
+        "--mode" => {
+            headless.bar_mode = Some(parse_mode_flag(flag_value(i, tokens, inline, name)?)?);
+            modifier();
+        }
+        "--osd" => {
+            headless.osd = Some(parse_osd_flag(flag_value(i, tokens, inline, name)?)?);
+            modifier();
+        }
+        "--scale" => {
+            let raw = flag_value(i, tokens, inline, name)?;
+            headless.scale = raw.parse::<f32>().map_err(|_| CliError::InvalidValue {
+                flag: name.to_owned(),
+                value: raw.to_owned(),
+            })?;
+            if headless.scale <= 0.0 || !headless.scale.is_finite() {
+                return Err(CliError::InvalidValue {
+                    flag: name.to_owned(),
+                    value: raw.to_owned(),
+                });
+            }
+            modifier();
+        }
+        "--size" => {
+            headless.size = Some(parse_size_flag(flag_value(i, tokens, inline, name)?)?);
+            modifier();
+        }
+        "--settle" => {
+            let raw = flag_value(i, tokens, inline, name)?;
+            headless.settle_ms = raw.parse::<u64>().map_err(|_| CliError::InvalidValue {
+                flag: name.to_owned(),
+                value: raw.to_owned(),
+            })?;
+            modifier();
+        }
+        "--reduce-motion" => {
+            headless.reduce_motion = true;
+            modifier();
+        }
+        "--reveal" => {
+            headless.reveal = true;
+            modifier();
+        }
+        "--transparent" => {
+            headless.transparent = true;
+            modifier();
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// `--surface bar|osd|wallpaper|all`; `all` expands in `surfaces()` order.
+fn parse_surface_flag(raw: &str) -> Result<Vec<SurfaceRole>, CliError> {
+    match raw {
+        "all" => Ok(vec![
+            SurfaceRole::Background,
+            SurfaceRole::Bar,
+            SurfaceRole::Osd,
+        ]),
+        "bar" => Ok(vec![SurfaceRole::Bar]),
+        "osd" => Ok(vec![SurfaceRole::Osd]),
+        "wallpaper" | "background" => Ok(vec![SurfaceRole::Background]),
+        other => Err(CliError::InvalidValue {
+            flag: "--surface".to_owned(),
+            value: other.to_owned(),
+        }),
+    }
+}
+
+fn parse_variant_flag(raw: &str) -> Result<Vec<Variant>, CliError> {
+    match raw {
+        "dark" => Ok(vec![Variant::Dark]),
+        "light" => Ok(vec![Variant::Light]),
+        "both" => Ok(vec![Variant::Dark, Variant::Light]),
+        other => Err(CliError::InvalidValue {
+            flag: "--variant".to_owned(),
+            value: other.to_owned(),
+        }),
+    }
+}
+
+fn parse_mode_flag(raw: &str) -> Result<BarMode, CliError> {
+    match raw {
+        "autohide" => Ok(BarMode::Autohide),
+        "pinned" => Ok(BarMode::Pinned),
+        "hidden" => Ok(BarMode::Hidden),
+        other => Err(CliError::InvalidValue {
+            flag: "--mode".to_owned(),
+            value: other.to_owned(),
+        }),
+    }
+}
+
+/// `--osd <kind>`: a canned payload so the OSD pill has something to show.
+fn parse_osd_flag(raw: &str) -> Result<OsdPayload, CliError> {
+    match raw {
+        "volume" => Ok(OsdPayload::Volume {
+            level: 0.65,
+            muted: false,
+        }),
+        "volume-muted" | "muted" => Ok(OsdPayload::Volume {
+            level: 0.65,
+            muted: true,
+        }),
+        "brightness" => Ok(OsdPayload::Brightness { level: 0.7 }),
+        "mic" => Ok(OsdPayload::Mic { muted: true }),
+        "layout" => Ok(OsdPayload::KeyboardLayout {
+            name: "English (US)".to_owned(),
+        }),
+        "workspace" => Ok(OsdPayload::Workspace {
+            label: "3".to_owned(),
+        }),
+        "battery" => Ok(OsdPayload::LowBattery { percent: 14 }),
+        other => Err(CliError::InvalidValue {
+            flag: "--osd".to_owned(),
+            value: other.to_owned(),
+        }),
+    }
+}
+
+/// `--size 1920x1080` -> `(1920, 1080)`.
+fn parse_size_flag(raw: &str) -> Result<(u32, u32), CliError> {
+    let invalid = || CliError::InvalidValue {
+        flag: "--size".to_owned(),
+        value: raw.to_owned(),
+    };
+    let (w, h) = raw.split_once(['x', 'X']).ok_or_else(invalid)?;
+    let w = w.parse::<u32>().map_err(|_| invalid())?;
+    let h = h.parse::<u32>().map_err(|_| invalid())?;
+    if w == 0 || h == 0 {
+        return Err(invalid());
+    }
+    Ok((w, h))
 }
 
 fn parse_msg_args(tokens: &[String]) -> Result<MsgArgs, CliError> {
