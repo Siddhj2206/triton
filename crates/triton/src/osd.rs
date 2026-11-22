@@ -24,15 +24,16 @@ use triton_engine::{
 use triton_kit::{Progress, icon_disc_styled, panel, shadow_gutter, wavy_progress};
 
 use crate::state::SurfaceRole;
+use crate::timer::TimerTag;
 
 /// Timer tag for the 1.2 s hold deadline (re-armed on every OSD event).
-pub const TIMER_OSD_HIDE: u32 = 1;
+pub const TIMER_OSD_HIDE: u32 = TimerTag::OsdHide.to_u32();
 
 /// Timer tag polled while the exit morph settles before unmounting.
 ///
 /// Springs have no fixed duration, so `on_timer` re-arms this tag until
 /// [`OsdState::is_settled`] reports the exit morph is done.
-pub const TIMER_OSD_REAP: u32 = 3;
+pub const TIMER_OSD_REAP: u32 = TimerTag::OsdReap.to_u32();
 
 /// OSD hold duration after the latest event (`docs/design-spec.md`: 1.2 s).
 pub const OSD_HOLD_DURATION: Duration = Duration::from_millis(1200);

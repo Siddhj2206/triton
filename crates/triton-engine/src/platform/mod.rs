@@ -501,11 +501,7 @@ where
             .insert_source(events.rx, move |event, (), rt: &mut Runtime<A>| {
                 if let calloop_channel::Event::Msg(ev) = event {
                     let cmds = on_event(&mut rt.app, ev, Instant::now());
-                    rt.sync_app_images();
-                    if let Err(e) = rt.sync_surfaces(&qh_ev) {
-                        tracing::error!(%e, "sync_surfaces after external event failed");
-                    }
-                    rt.apply_commands(cmds, &qh_ev);
+                    rt.flush_app_commands(cmds, &qh_ev, "external event");
                 }
             })
             .map_err(|e| EngineError::EventLoop(format!("insert EventReceiver: {e}")))?;
@@ -724,11 +720,7 @@ impl<A: ShellApp> Runtime<A> {
         }
         self.last_outputs.clone_from(&outputs);
         let cmds = self.app.on_outputs_changed(&outputs, Instant::now());
-        self.sync_app_images();
-        if let Err(e) = self.sync_surfaces(qh) {
-            tracing::error!(%e, "sync_surfaces after output change failed");
-        }
-        self.apply_commands(cmds, qh);
+        self.flush_app_commands(cmds, qh, "output change");
     }
 
     fn destroy_surface(&mut self, id: A::SurfaceId) {
@@ -997,6 +989,21 @@ impl<A: ShellApp> Runtime<A> {
         }
     }
 
+    /// Flush app state changes after a callback: stage image updates, reconcile
+    /// surfaces, and execute returned [`AppCommand`]s.
+    fn flush_app_commands(
+        &mut self,
+        cmds: Vec<AppCommand<A::SurfaceId>>,
+        qh: &QueueHandle<Self>,
+        context: &'static str,
+    ) {
+        self.sync_app_images();
+        if let Err(e) = self.sync_surfaces(qh) {
+            tracing::error!(%e, context, "sync_surfaces failed");
+        }
+        self.apply_commands(cmds, qh);
+    }
+
     /// Stage any app image inserts/updates/removals and invalidate surface
     /// damage when GPU texture data changed (so same-`ImageId` updates like
     /// live screencopy frames are never skipped by `DrawList::diff_bounds`).
@@ -1032,9 +1039,7 @@ impl<A: ShellApp> Runtime<A> {
                 for tag in expired {
                     cmds.extend(rt.app.on_timer(tag, now));
                 }
-                rt.apply_commands(cmds, &qh_clone);
-                rt.sync_app_images();
-                let _ = rt.sync_surfaces(&qh_clone);
+                rt.flush_app_commands(cmds, &qh_clone, "timer");
                 if rt.timer_token.is_none() {
                     rt.rearm_timer(&qh_clone);
                 }
@@ -1337,11 +1342,7 @@ impl<A: ShellApp> Runtime<A> {
         for msg in msgs {
             all_cmds.extend(self.app.update(id, msg, now));
         }
-        self.sync_app_images();
-        if let Err(e) = self.sync_surfaces(qh) {
-            tracing::error!(%e, "sync_surfaces after input failed");
-        }
-        self.apply_commands(all_cmds, qh);
+        self.flush_app_commands(all_cmds, qh, "input");
 
         if let Some(host) = self.hosts.get_mut(&id)
             && (dirty || host.animator.is_animating() || self.app.is_animating(id, now))
@@ -1799,11 +1800,7 @@ impl<A: ShellApp> PointerHandler for Runtime<A> {
             let dirty = match event.kind {
                 PointerEventKind::Enter { .. } => {
                     let cmds = self.app.on_pointer_enter(id, (x, y), Instant::now());
-                    self.sync_app_images();
-                    if let Err(e) = self.sync_surfaces(qh) {
-                        tracing::error!(%e, "sync_surfaces after pointer enter failed");
-                    }
-                    self.apply_commands(cmds, qh);
+                    self.flush_app_commands(cmds, qh, "pointer enter");
                     self.dispatch_ui_event_deferred(id, &InputEvent::PointerMove { x, y }, qh)
                 }
                 PointerEventKind::Motion { .. } => {
@@ -1813,11 +1810,7 @@ impl<A: ShellApp> PointerHandler for Runtime<A> {
                     let ui_dirty =
                         self.dispatch_ui_event_deferred(id, &InputEvent::PointerLeave, qh);
                     let cmds = self.app.on_pointer_leave(id, Instant::now());
-                    self.sync_app_images();
-                    if let Err(e) = self.sync_surfaces(qh) {
-                        tracing::error!(%e, "sync_surfaces after pointer leave failed");
-                    }
-                    self.apply_commands(cmds, qh);
+                    self.flush_app_commands(cmds, qh, "pointer leave");
                     ui_dirty
                 }
                 PointerEventKind::Press { button, .. } => self.dispatch_ui_event_deferred(

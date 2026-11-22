@@ -15,18 +15,19 @@ use triton_engine::{
 
 use crate::bar::{BarClock, BarController};
 use crate::ipc::{BarCommand, IpcCommand, IpcResponse, OsdCommand, ThemeCommand};
+use crate::niri_config;
 use crate::niri_ipc::{NiriAction, NiriActionSender};
-use crate::osd::{self, OSD_HOLD_DURATION, OsdPayload, OsdState, TIMER_OSD_HIDE, TIMER_OSD_REAP};
+use crate::osd::{self, OSD_HOLD_DURATION, OsdPayload, OsdState};
 use crate::state::{
     BackendMode, BarMode, OutputKey, ShellEvent, ShellState, ShellStatusSnapshot, SurfaceRole,
     SurfaceSummary, variant_as_str,
 };
 use crate::theme_pipeline::{self, ThemeSyncConfig};
+use crate::timer::TimerTag;
 use crate::wallpaper::{WallpaperImage, WallpaperSet, crossfade_duration, view_background};
 
 /// Timer tag for releasing outgoing wallpaper textures once a crossfade settles.
-/// (Fixed tags: `TIMER_OSD_HIDE = 1`, `TIMER_BAR_CLOCK = 2`, `TIMER_OSD_REAP = 3`.)
-pub const TIMER_WALLPAPER_SETTLE: u32 = 4;
+pub const TIMER_WALLPAPER_SETTLE: u32 = TimerTag::WallpaperSettle.to_u32();
 
 /// Copyable surface identifier combining a [`SurfaceRole`] with a stable
 /// [`OutputKey`].
@@ -210,13 +211,21 @@ impl TritonShell {
                 cmds
             }
             ShellEvent::SetBarMode(mode) => {
+                let changed = mode != self.state.bar_mode;
                 self.state.set_bar_mode(mode);
+                if changed {
+                    self.sync_layer_rules();
+                }
                 let mut cmds = self.bar.on_mode_changed(mode, now);
                 cmds.push(AppCommand::RedrawAll);
                 cmds
             }
             ShellEvent::ToggleBarHidden => {
+                let prev = self.state.bar_mode;
                 let mode = self.state.toggle_bar_hidden();
+                if mode != prev {
+                    self.sync_layer_rules();
+                }
                 let mut cmds = self.bar.on_mode_changed(mode, now);
                 cmds.push(AppCommand::RedrawAll);
                 cmds
@@ -225,8 +234,8 @@ impl TritonShell {
             ShellEvent::HideOsd => {
                 self.state.osd = None;
                 vec![
-                    AppCommand::CancelTimer(TIMER_OSD_HIDE),
-                    AppCommand::CancelTimer(TIMER_OSD_REAP),
+                    AppCommand::CancelTimer(TimerTag::OsdHide.to_u32()),
+                    AppCommand::CancelTimer(TimerTag::OsdReap.to_u32()),
                     AppCommand::RedrawAll,
                 ]
             }
@@ -241,32 +250,7 @@ impl TritonShell {
                 scheme,
                 variant,
                 mean_luminance,
-            } => {
-                let next_variant = variant.unwrap_or(self.state.theme.variant);
-                let next_scheme = match scheme {
-                    Some(boxed) => *boxed,
-                    None if next_variant != self.state.theme.variant => {
-                        match self.state.wallpaper.active_image.as_ref() {
-                            Some(img) => theme_pipeline::extract_scheme(&img.data, next_variant),
-                            None => Scheme::reference(next_variant),
-                        }
-                    }
-                    None => self.state.theme.scheme,
-                };
-                let changed = next_scheme != self.state.theme.scheme
-                    || next_variant != self.state.theme.variant;
-                self.state.theme = Theme {
-                    scheme: next_scheme,
-                    variant: next_variant,
-                };
-                if let Some(lum) = mean_luminance {
-                    self.state.wallpaper.mean_luminance = lum;
-                }
-                if changed {
-                    self.sync_external_theme();
-                }
-                vec![AppCommand::RedrawAll]
-            }
+            } => self.apply_theme(scheme, variant, mean_luminance),
             ShellEvent::SetReduceMotion(enabled) => {
                 self.state.reduce_motion = enabled;
                 self.wallpapers.set_reduce_motion(enabled);
@@ -296,6 +280,41 @@ impl TritonShell {
             }
             ShellEvent::Quit => vec![AppCommand::Quit],
         }
+    }
+
+    fn apply_theme(
+        &mut self,
+        scheme: Option<Box<Scheme>>,
+        variant: Option<Variant>,
+        mean_luminance: Option<f32>,
+    ) -> Vec<AppCommand<SurfaceId>> {
+        let next_variant = variant.unwrap_or(self.state.theme.variant);
+        let next_scheme = match scheme {
+            Some(boxed) => *boxed,
+            None if next_variant != self.state.theme.variant => {
+                match self.state.wallpaper.active_image.as_ref() {
+                    Some(img) => theme_pipeline::extract_scheme(&img.data, next_variant),
+                    None => Scheme::reference(next_variant),
+                }
+            }
+            None => self.state.theme.scheme,
+        };
+        let scheme_changed = next_scheme != self.state.theme.scheme;
+        let variant_changed = next_variant != self.state.theme.variant;
+        self.state.theme = Theme {
+            scheme: next_scheme,
+            variant: next_variant,
+        };
+        if let Some(lum) = mean_luminance {
+            self.state.wallpaper.mean_luminance = lum;
+        }
+        if scheme_changed || variant_changed {
+            self.sync_external_theme();
+        }
+        if variant_changed {
+            self.sync_layer_rules();
+        }
+        vec![AppCommand::RedrawAll]
     }
 
     fn handle_ipc_command(
@@ -433,7 +452,7 @@ impl TritonShell {
         // Re-arming the same tag refreshes the hold deadline on every event.
         vec![
             AppCommand::ScheduleTimer {
-                tag: TIMER_OSD_HIDE,
+                tag: TimerTag::OsdHide.to_u32(),
                 delay: OSD_HOLD_DURATION,
             },
             AppCommand::RedrawAll,
@@ -625,6 +644,27 @@ impl TritonShell {
         }
     }
 
+    /// Regenerate `<config_root>/niri/triton/layer-rules.kdl` when bar mode
+    /// or theme variant changes. Strictly gated behind [`BackendMode::RealServices`].
+    fn sync_layer_rules(&self) {
+        if self.state.backend != BackendMode::RealServices {
+            return;
+        }
+        let Some(ref cfg) = self.theme_sync else {
+            return;
+        };
+        let niri_dir = cfg.config_root.join("niri");
+        if let Err(err) =
+            niri_config::write_layer_rules(&niri_dir, self.state.theme.variant, self.state.bar_mode)
+        {
+            warn!(
+                dir = %niri_dir.display(),
+                error = %err,
+                "failed to sync niri layer-rules.kdl"
+            );
+        }
+    }
+
     fn sync_output_registry(
         &mut self,
         outputs: &[OutputInfo],
@@ -646,6 +686,7 @@ impl TritonShell {
         }
 
         let active_keys: HashSet<OutputKey> = self.key_to_name.keys().copied().collect();
+        self.wallpapers.retain_outputs(|k| active_keys.contains(k));
         self.bar
             .sync_outputs(&active_keys, self.state.reduce_motion, now)
     }
@@ -806,21 +847,24 @@ impl ShellApp for TritonShell {
     }
 
     fn on_timer(&mut self, tag: u32, now: Instant) -> Vec<AppCommand<Self::SurfaceId>> {
-        if tag == TIMER_WALLPAPER_SETTLE {
-            // Release outgoing textures whose crossfade completed; re-arm
-            // if a later fade is still running.
-            let mut cmds = vec![AppCommand::RedrawAll];
-            if let Some(remaining) = self.wallpapers.settle(now) {
-                cmds.push(AppCommand::ScheduleTimer {
-                    tag: TIMER_WALLPAPER_SETTLE,
-                    delay: remaining,
-                });
+        let Some(timer_tag) = TimerTag::from_u32(tag) else {
+            return Vec::new();
+        };
+        match timer_tag {
+            TimerTag::WallpaperSettle => {
+                // Release outgoing textures whose crossfade completed; re-arm
+                // if a later fade is still running.
+                let mut cmds = vec![AppCommand::RedrawAll];
+                if let Some(remaining) = self.wallpapers.settle(now) {
+                    cmds.push(AppCommand::ScheduleTimer {
+                        tag: TimerTag::WallpaperSettle.to_u32(),
+                        delay: remaining,
+                    });
+                }
+                self.refresh_active_wallpaper();
+                cmds
             }
-            self.refresh_active_wallpaper();
-            return cmds;
-        }
-        match tag {
-            TIMER_OSD_HIDE => {
+            TimerTag::OsdHide => {
                 let Some(osd) = self.state.osd.as_mut() else {
                     return Vec::new();
                 };
@@ -830,13 +874,13 @@ impl ShellApp for TritonShell {
                 osd.dismiss(now);
                 vec![
                     AppCommand::ScheduleTimer {
-                        tag: TIMER_OSD_REAP,
+                        tag: TimerTag::OsdReap.to_u32(),
                         delay: osd::OSD_REAP_INTERVAL,
                     },
                     AppCommand::RedrawAll,
                 ]
             }
-            TIMER_OSD_REAP => {
+            TimerTag::OsdReap => {
                 let Some(osd) = self.state.osd.as_ref() else {
                     return Vec::new();
                 };
@@ -849,16 +893,13 @@ impl ShellApp for TritonShell {
                     vec![AppCommand::RedrawAll]
                 } else {
                     vec![AppCommand::ScheduleTimer {
-                        tag: TIMER_OSD_REAP,
+                        tag: TimerTag::OsdReap.to_u32(),
                         delay: osd::OSD_REAP_INTERVAL,
                     }]
                 }
             }
-            _ => {
-                if let Some(cmds) = self.bar.on_timer(tag, &self.state, now) {
-                    return cmds;
-                }
-                Vec::new()
+            TimerTag::BarClock | TimerTag::BarReveal(_) | TimerTag::BarHide(_) => {
+                self.bar.on_timer(tag, &self.state, now).unwrap_or_default()
             }
         }
     }

@@ -80,9 +80,17 @@ fn autohide_enforces_reveal_fullscreen_and_hide_delays_with_2px_edge() {
     session.advance(Duration::from_millis(900));
     assert!(!shell.is_animating(bar_id, session.now()));
     session.render_surface(&mut shell, bar_id, bar_spec.sizing);
+    assert_eq!(
+        session.frame().blur_rects.len(),
+        2,
+        "revealed autohide bar must mount exactly two floating Glass islands"
+    );
+    assert!(session.hit_rect("bar-island-left-eDP-1").is_some());
+    assert!(session.hit_rect("bar-island-right-eDP-1").is_some());
+    assert!(session.hit_rect("bar-island-center-eDP-1").is_none());
     assert!(
-        session.frame().blur_rects.len() >= 2,
-        "revealed autohide bar should emit Glass island blur rects"
+        session.hit_rect("bar-title-eDP-1").is_some(),
+        "focused window title should live inside the left Glass island"
     );
     for br in &session.frame().blur_rects {
         assert!(
@@ -588,7 +596,7 @@ fn multi_output_autohide_isolates_reveal_timers_per_output() {
     session.advance(Duration::from_millis(900));
 
     session.render_surface(&mut shell, *bar_a, spec_a.sizing);
-    assert!(session.frame().blur_rects.len() >= 2);
+    assert_eq!(session.frame().blur_rects.len(), 2);
 
     session.render_surface(&mut shell, *bar_b, spec_b.sizing);
     assert_eq!(session.frame().blur_rects.len(), 0);
