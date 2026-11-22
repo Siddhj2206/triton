@@ -21,6 +21,7 @@ mod button;
 mod chrome;
 mod control;
 mod input;
+mod overlay;
 mod progress;
 mod surface;
 
@@ -37,6 +38,10 @@ pub use control::{
     CheckState, SliderMode, SliderOptions, SliderSurface, checkbox, radio, slider, switch,
 };
 pub use input::{TextInputAction, TextInputState, text_input};
+pub use overlay::{
+    Menu, MenuEntry, MenuItem, ToastAction, ToastActionTone, ToastCard, ToastIdentity,
+    ToastVariant, menu, toast_card, toast_is_hovered, tooltip,
+};
 pub use progress::{MeterMode, Progress, level_meter, wavy_progress, wavy_ring};
 pub use surface::{
     Dialog, DividerStyle, ListFill, Orientation, ScrollAreaOptions, card, concentric_inner, dialog,
