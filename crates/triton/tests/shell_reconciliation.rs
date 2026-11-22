@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use triton::{
     BackendMode, BarMode, OsdPayload, ShellEvent, ShellMessage, SurfaceRole, TIMER_OSD_HIDE,
-    TritonShell,
+    TIMER_OSD_REAP, TritonShell,
 };
 use triton_engine::{
     AppCommand, HeadlessSession, OutputInfo, ShellApp, SurfaceKeyboard, SurfaceLayer, SurfaceSize,
@@ -174,14 +174,36 @@ fn osd_mounts_only_on_focused_output_and_unmounts_after_hold_timer() {
     assert_eq!(osd_spec.keyboard, SurfaceKeyboard::None);
     assert!(osd_spec.shaped_input);
 
-    // Render OSD through HeadlessSession.
+    // Render OSD through HeadlessSession (after the entry morph settles).
+    session.advance(Duration::from_millis(900));
     session.render_surface(&mut shell, *osd_id, osd_spec.sizing);
     assert!(!session.draw_list().batches.is_empty());
 
-    // Advance virtual clock and fire hold timer -> OSD unmounts cleanly.
+    // Advance virtual clock and fire hold timer -> exit morph begins; the
+    // surface stays mounted until the morph settles (see tests/osd.rs).
     session.advance(Duration::from_millis(1200));
     let timer_cmds = shell.on_timer(TIMER_OSD_HIDE, session.now());
     assert!(timer_cmds.contains(&AppCommand::RedrawAll));
+    assert!(
+        shell
+            .surfaces()
+            .iter()
+            .any(|(id, _)| id.role == SurfaceRole::Osd)
+    );
+
+    // Drive the reap deadline until the exit morph settles and the surface
+    // unmounts cleanly.
+    for _ in 0..40 {
+        if !shell
+            .surfaces()
+            .iter()
+            .any(|(id, _)| id.role == SurfaceRole::Osd)
+        {
+            break;
+        }
+        session.advance(Duration::from_millis(100));
+        let _ = shell.on_timer(TIMER_OSD_REAP, session.now());
+    }
     assert!(
         !shell
             .surfaces()
