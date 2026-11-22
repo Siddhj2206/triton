@@ -240,8 +240,6 @@ pub enum Message {
     ToastHover(u32, bool),
     /// A Wi-Fi page row: join that network (`nmcli dev wifi connect`).
     WifiJoin(String),
-    /// The live `org.freedesktop.ScreenSaver` inhibitor count.
-    Inhibitors(u32),
     /// The lock pid file confirmed the session is secure — suspend now.
     SuspendReady,
     /// A power-menu action was picked (click or digit jump); Enter re-picks the
@@ -279,8 +277,10 @@ pub enum Message {
 }
 
 /// Idle timeouts the shell registers (`wayl::idles`): stage 0 dims through
-/// gamma, 1 locks, 2 suspends. `org.freedesktop.ScreenSaver` inhibitors hold
-/// every stage (roadmap: "dim, then lock, then suspend, respecting inhibitors").
+/// gamma, 1 locks, 2 suspends (roadmap: "dim, then lock, then suspend,
+/// respecting inhibitors" — niri tracks `org.freedesktop.ScreenSaver` and
+/// `idle-inhibit` inhibitors itself and holds the notification, so the
+/// timers simply never fire while a client inhibits).
 const IDLE_TIMEOUTS: [std::time::Duration; 3] = [
     std::time::Duration::from_mins(4),
     std::time::Duration::from_mins(5),
@@ -392,9 +392,6 @@ pub struct Shell {
     night_gamma: Option<crate::wayl::Night>,
     /// Power saver is on (also fed by the services snapshot once it lands).
     saver: bool,
-    /// Live `org.freedesktop.ScreenSaver` inhibitor count — the idle stages
-    /// hold while any client inhibits.
-    inhibitors: u32,
     /// A wallpaper→scheme run is in flight; new picks queue in
     /// `wallpaper_pending` so two regenerations never race (last wins).
     pipeline_busy: bool,
@@ -757,10 +754,6 @@ impl Shell {
                 services::wifi_connect(&ssid);
                 Task::none()
             }
-            Message::Inhibitors(n) => {
-                self.inhibitors = n;
-                Task::none()
-            }
             Message::SuspendReady => {
                 services::suspend();
                 Task::none()
@@ -1091,11 +1084,9 @@ impl Shell {
 
     /// What happens at each idle stage (roadmap: dim → lock → suspend). The
     /// timeouts come from `wayl::idles` (`IDLE_TIMEOUTS`); resume resets.
-    /// `ScreenSaver` inhibitors hold every stage while a client inhibits.
+    /// `org.freedesktop.ScreenSaver`/`idle-inhibit` inhibitors are honored
+    /// for free: niri tracks them and holds the idle notification itself.
     fn idle(&mut self, event: crate::wayl::IdleEvent) -> Task<Message> {
-        if self.inhibitors > 0 {
-            return Task::none();
-        }
         match event {
             crate::wayl::IdleEvent::Idle(0) => {
                 self.idle_stage = 0;
@@ -1502,7 +1493,6 @@ impl Shell {
             "night": self.night,
             "notifications": self.notifs.len(),
             "toasts": self.notifs.toasts(std::time::Instant::now(), self.dnd).len(),
-            "inhibitors": self.inhibitors,
             "outputs": self.niri.outputs,
             "volume": self.volume,
             "brightness": self.brightness,
@@ -1976,7 +1966,6 @@ impl Shell {
             iced_runtime::window::close_events().map(Message::Closed),
             crate::notify::server().map(Message::Notify),
             crate::polkit::agent(shell.real_services).map(Message::Polkit),
-            crate::inhibit::server().map(Message::Inhibitors),
             crate::wayl::idles(&IDLE_TIMEOUTS).map(Message::Idle),
             // `listen_with` takes a plain fn, so modal scoping lives in
             // `update`: these messages no-op when their modal is closed.

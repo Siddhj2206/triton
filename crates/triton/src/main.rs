@@ -5,7 +5,6 @@
 mod app;
 mod doctor;
 mod host;
-mod inhibit;
 mod launch;
 mod msg;
 mod niri;

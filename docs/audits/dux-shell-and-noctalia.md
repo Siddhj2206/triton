@@ -35,6 +35,12 @@ the native architecture was auditable).
 - Toast hover-pause (`mouse_area` enter/exit → `Store::pause_toast`/`resume`)
 - Serialized last-wins wallpaper pipeline (`pipeline_busy`/`wallpaper_pending`)
 - `triton msg status` JSON dump + request/reply over the msg socket
+- **Removed** `inhibit.rs` after verification: niri owns
+  `org.freedesktop.ScreenSaver` itself (Inhibit/UnInhibit only) and gates
+  `ext-idle-notify` internally via `is_fdo_idle_inhibited` — inhibitors hold
+  every idle stage for free. Serving the API would collide; consuming is
+  impossible (no query surface). `doctor` now reports who owns
+  Notifications/ScreenSaver on the bus.
 
 ## Steal — backlog (next up)
 

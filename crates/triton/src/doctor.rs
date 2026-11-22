@@ -80,6 +80,7 @@ pub fn run() -> ! {
 
     // ── generated config + systemd ────────────────────────────────────
     config_and_systemd(&mut all_ok);
+    bus_owners(&mut all_ok);
     tools(&mut all_ok);
 
     exit(i32::from(!all_ok));
@@ -159,6 +160,53 @@ fn config_and_systemd(all_ok: &mut bool) {
         );
     } else {
         check(all_ok, Check::Warn, "triton.service", "not installed");
+    }
+}
+
+/// Who owns the D-Bus names triton serves? Another shell (qs, dms) or niri
+/// (`org.freedesktop.ScreenSaver`) holding them means the feature silently
+/// never works.
+fn bus_owners(all_ok: &mut bool) {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let Ok(mut child) = Command::new("busctl")
+        .args(["--user", "list", "--no-pager"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let mut buf = Vec::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_end(&mut buf);
+    }
+    let _ = child.wait();
+    let text = String::from_utf8_lossy(&buf);
+    for name in [
+        "org.freedesktop.Notifications",
+        "org.freedesktop.ScreenSaver",
+    ] {
+        match text.lines().find(|l| l.trim_start().starts_with(name)) {
+            Some(line) => {
+                // "org.freedesktop.Notifications <pid> <proc> …": flag anyone
+                // that isn't this triton instance.
+                let owner_is_us = line
+                    .split_whitespace()
+                    .nth(2)
+                    .is_some_and(|c| c == "triton");
+                check(
+                    all_ok,
+                    if owner_is_us { Check::Ok } else { Check::Warn },
+                    name,
+                    format!(
+                        "owned by: {}",
+                        line.split_whitespace().nth(2).unwrap_or("?")
+                    ),
+                );
+            }
+            None => check(all_ok, Check::Ok, name, "free"),
+        }
     }
 }
 
