@@ -43,8 +43,8 @@ description = "Run tests"
 run = "cargo test --workspace"
 
 [tasks.showcase]
-description = "Run the triton-engine showcase example (needs a Wayland session; dev/preview container)"
-run = "cargo run -p triton-engine --example showcase"
+description = "Run the triton-kit showcase example (needs a Wayland session)"
+run = "cargo run -p triton-kit --example showcase"
 
 # ── assets ───────────────────────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-//! Core Triton Material 3 Futura widgets built 100% in safe Rust on [`crate::ui`].
+//! Core Triton Material 3 Futura widgets built 100% in safe Rust on [`triton_engine::ui`].
 //!
 //! Includes:
 //! - [`panel`] & [`island`] (Glass / Thick / Solid containers with concentric radii + blur reporting)
@@ -16,10 +16,9 @@ use triton_design::material::{Material, ShadowToken};
 use triton_design::motion::{Animated, Motion, Spring};
 use triton_design::shape::{CORNER_SMOOTHING, RADII, SIZE, nested};
 use triton_design::typography::TypeStyle;
-
-use crate::style::{Corners, Edges, FontSpec, Rgba, Theme};
-use crate::text::TextEngine;
-use crate::ui::{
+use triton_engine::style::{Corners, Edges, FontSpec, Rgba, Theme};
+use triton_engine::text::TextEngine;
+use triton_engine::ui::{
     Element, InputEvent, InteractionState, Key, NodeKey, TextAlign, box_, col, icon, row, text,
 };
 

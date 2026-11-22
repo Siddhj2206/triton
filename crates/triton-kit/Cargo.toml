@@ -1,0 +1,19 @@
+[package]
+name = "triton-kit"
+version = "0.1.0"
+description = "Triton's shared Material 3 Futura component library built on triton-engine and triton-design."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+triton-design.workspace = true
+triton-engine.workspace = true
+
+[dev-dependencies]
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }

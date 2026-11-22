@@ -887,6 +887,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "triton-kit"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+ "triton-design",
+ "triton-engine",
+]
+
+[[package]]
 name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

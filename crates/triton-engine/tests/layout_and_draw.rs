@@ -16,7 +16,6 @@ use triton_engine::text::TextEngine;
 use triton_engine::ui::{
     Element, InputEvent, InteractionState, NodeKey, box_, col, image, layout_and_paint, row, text,
 };
-use triton_engine::widgets::{panel, scroll_area};
 
 const EPS: f32 = 1e-3;
 
@@ -310,15 +309,13 @@ fn scroll_area_emits_scissor_rect_and_offsets_children_by_scroll() {
 
     let scale = 1.5_f32;
     let root: Element<()> = col().w(200.0).h(140.0).p(20.0).child(
-        scroll_area(
-            scroller_key,
-            100.0,
-            0.0,
-            0.0,
-            (0..4).map(|_| box_().w(160.0).h(40.0).bg(Rgba::WHITE)),
-        )
-        .w(160.0)
-        .bg(Rgba::new(0.1, 0.1, 0.1, 1.0)),
+        col()
+            .id(scroller_key)
+            .w(160.0)
+            .h(100.0)
+            .scroll_y()
+            .bg(Rgba::new(0.1, 0.1, 0.1, 1.0))
+            .children((0..4).map(|_| box_().w(160.0).h(40.0).bg(Rgba::WHITE))),
     );
 
     layout_and_paint(
@@ -538,14 +535,22 @@ fn glass_and_thick_panels_collect_blur_and_input_rects_while_solid_only_collects
     let interaction = InteractionState::default();
     let theme = Theme::dark();
 
+    let make_panel = |material: Material, radius: f32| {
+        let mut el = col().material(material, &theme).rounded(radius);
+        if let Some(sh) = material.shadow() {
+            el = el.shadow(sh);
+        }
+        el
+    };
+
     let root: Element<()> = row()
         .w(400.0)
         .h(120.0)
         .p(12.0)
         .gap(16.0)
-        .child(panel(Material::Glass, 20.0, &theme).w(100.0).h(80.0))
-        .child(panel(Material::Thick, 24.0, &theme).w(120.0).h(80.0))
-        .child(panel(Material::Solid, 12.0, &theme).w(80.0).h(80.0));
+        .child(make_panel(Material::Glass, 20.0).w(100.0).h(80.0))
+        .child(make_panel(Material::Thick, 24.0).w(120.0).h(80.0))
+        .child(make_panel(Material::Solid, 12.0).w(80.0).h(80.0));
 
     let frame = layout_and_paint(
         root,

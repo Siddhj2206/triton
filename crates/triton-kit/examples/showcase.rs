@@ -22,11 +22,13 @@ use triton_design::motion::{Animated, Motion, Spring};
 use triton_design::shape::{CORNER_SMOOTHING, RADII, list_corners};
 use triton_design::typography::TypeStyle;
 use triton_engine::{
-    AppCommand, ButtonTone, Corners, DropShadow, Edges, Element, FontSpec, InputEvent, Key,
-    NodeKey, Rgba, ShellApp, SubtreeTransform, SurfaceAnchor, SurfaceKeyboard, SurfaceLayer,
-    SurfaceMetrics, SurfaceSize, SurfaceSpec, SwitchState, TextInputAction, TextInputState, Theme,
-    ViewContext, box_, button, col, concentric_inner, icon, icon_button, island, panel, pill, row,
-    run, scroll_area, slider, switch, text, text_input,
+    AppCommand, Corners, DropShadow, Edges, Element, FontSpec, InputEvent, Key, NodeKey, Rgba,
+    ShellApp, SubtreeTransform, SurfaceAnchor, SurfaceKeyboard, SurfaceLayer, SurfaceMetrics,
+    SurfaceSize, SurfaceSpec, Theme, ViewContext, box_, col, icon, row, run, text,
+};
+use triton_kit::{
+    ButtonTone, SwitchState, TextInputAction, TextInputState, button, concentric_inner,
+    icon_button, island, panel, pill, scroll_area, slider, switch, text_input,
 };
 
 const TIMER_OPEN_PANEL: u32 = 1;

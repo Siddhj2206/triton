@@ -9,11 +9,12 @@
 //!   `EGL_BUFFER_AGE_KHR` partial damage (`unsafe` quarantined in `gpu/mod.rs`).
 //! - [`text`]: `cosmic-text` + `swash` shaping and resettable/LRU shelf glyph atlas
 //!   (`unsafe` quarantined in `text/mod.rs` for texture upload).
-//! - [`ui`]: 100% safe declarative element builder API (`col`, `row`, `box_`, `text`, `icon`)
+//! - [`ui`]: 100% safe declarative element builder API (`col`, `row`, `box_`, `text`, `icon`, `image`)
 //!   backed by Taffy flexbox layout, automatic hit-testing, hover/press/drag/focus/scroll,
 //!   blur-region reporting, and subtree transform stack.
-//! - [`widgets`]: 100% safe Triton Material 3 Futura components (`panel`, `island`, `button`,
-//!   `icon_button`, `pill`, `text_input`, `slider`, `switch`, `scroll_area`).
+//!
+//! Styled Material 3 Futura components live in `triton-kit`, keeping `triton-engine`
+//! strictly shell-agnostic.
 //!
 //! ## Subtree transform design
 //! Animated panels apply a hierarchical [`style::SubtreeTransform`] (translate + scale + opacity)
@@ -33,7 +34,6 @@ pub mod style;
 pub mod text;
 pub mod timer;
 pub mod ui;
-pub mod widgets;
 
 pub use anim::{Animator, Presence};
 pub use damage::{DamageRect, DamageTracker};
@@ -49,8 +49,4 @@ pub use triton_design::motion::Spring;
 pub use ui::{
     BlurRect, BuiltFrame, Element, InputEvent, InteractionState, Key, NodeKey, TextAlign, box_,
     col, icon, image, row, text,
-};
-pub use widgets::{
-    ButtonTone, SwitchState, TextInputAction, TextInputState, button, concentric_inner,
-    icon_button, island, panel, pill, scroll_area, slider, switch, text_input,
 };
