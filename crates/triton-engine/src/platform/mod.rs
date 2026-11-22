@@ -243,6 +243,8 @@ pub enum AppCommand<Id> {
     PauseTimer(u32),
     /// Resume a paused timer for `tag` at `now + remaining`.
     ResumeTimer(u32),
+    /// Toggle global reduced-motion mode (swaps springs for 120 ms fades and disables shakes).
+    SetReduceMotion(bool),
     /// Exit the event loop cleanly.
     Quit,
 }
@@ -395,6 +397,8 @@ struct Runtime<A: ShellApp> {
     timers: TimerScheduler<u32>,
     /// The single armed calloop timer (earliest deadline), if any.
     timer_token: Option<RegistrationToken>,
+    /// Global reduced-motion flag forwarded to every surface's `Animator`.
+    reduce_motion: bool,
 }
 
 impl<A: ShellApp> Runtime<A> {
@@ -458,6 +462,7 @@ impl<A: ShellApp> Runtime<A> {
             signal,
             timers: TimerScheduler::new(),
             timer_token: None,
+            reduce_motion: false,
         })
     }
 
@@ -622,7 +627,7 @@ impl<A: ShellApp> Runtime<A> {
                 let now = Instant::now();
                 let interaction = InteractionState::default();
                 let mut anim = Animator::new();
-                anim.begin_frame(now, false);
+                anim.begin_frame(now, self.reduce_motion);
                 let mut ctx = ViewContext {
                     now,
                     logical_size: (max_w.unwrap_or(1200), max_h.unwrap_or(800)),
@@ -681,6 +686,15 @@ impl<A: ShellApp> Runtime<A> {
                 AppCommand::ResumeTimer(tag) => {
                     self.timers.resume(tag, Instant::now());
                     self.rearm_timer(qh);
+                }
+                AppCommand::SetReduceMotion(enabled) => {
+                    if self.reduce_motion != enabled {
+                        self.reduce_motion = enabled;
+                        for host in self.hosts.values_mut() {
+                            host.needs_redraw = true;
+                            queue_frame(host, qh);
+                        }
+                    }
                 }
                 AppCommand::Quit => {
                     self.signal.stop();
@@ -778,7 +792,7 @@ impl<A: ShellApp> Runtime<A> {
             let Some(host) = self.hosts.get_mut(&id) else {
                 return;
             };
-            host.animator.begin_frame(now, false);
+            host.animator.begin_frame(now, self.reduce_motion);
             let mut ctx = ViewContext {
                 now,
                 logical_size: logical,
