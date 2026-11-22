@@ -145,7 +145,7 @@ Bar (all modes, workspaces, title, clock, status, bell), wallpaper renderer and 
 - *Audio is `wpctl`/`pactl` spawn, not a PipeWire/Pulse FFI client* — neither library is linkable in the current dev environment (`nx` has no libpulse-devel/libpipewire). `pactl subscribe` provides the watcher. `TODO(pipewire)` in `services.rs`; replace when the deps exist (a decision-board item).
 - *Files scope `/`* is classified by `scope()` but has no search backend — the card shows nothing. Phase 2 at the earliest.
 - *Brightness watcher:* `backlight` is read once; `set_brightness` pushes a hint through `Update::Brightness`. sysfs has no notification mechanism; poll or inotify later.
-- *Toast hover-pause* is not implemented — expiry timers run regardless of pointer.
+- *Toast stable slots* — toasts reflow when one above them expires instead of holding a slot.
 - *Fullscreen 300 ms dwell* (BarStates) still waits on a fullscreen flag in niri's IPC (v26.4 has none) — carried over from Phase 0.
 - *Multi-seat:* the first `wl_seat` wins idle watches; re-register happens if the seat reappears.
 - *Polkit retry UX:* a failed authentication closes the dialog (`Event::Cancelled`); a `Failed` event for wrong-password retries needs app support (polkit.rs documents the seam). `PAM_ERROR_MSG`/`TEXT_INFO` are logged, not shown.

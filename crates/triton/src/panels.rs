@@ -680,6 +680,14 @@ fn notif_card(n: &NotifView, toast: bool) -> Element<'static, Message> {
         .width(Length::Fill),
     )
     .on_press(Message::NotifActivate(n.id));
+    // Toast hover-pause: the pointer holding a card keeps it alive (the
+    // notification board's hover rule).
+    if toast {
+        return card
+            .on_enter(Message::ToastHover(n.id, true))
+            .on_exit(Message::ToastHover(n.id, false))
+            .into();
+    }
     card.into()
 }
 

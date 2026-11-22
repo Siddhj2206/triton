@@ -191,7 +191,8 @@ pub enum Message {
     Dismiss,
     LauncherInput(String),
     /// A `triton msg …` line.
-    Cmd(String),
+    /// `(request id, command line)` — the id keys the pending reply.
+    Cmd(u64, String),
     /// The bell was pressed on this output: toggle the notification center.
     Bell(String),
     /// The center's DND toggle.
@@ -235,6 +236,8 @@ pub enum Message {
     LauncherReveal,
     /// Wallpaper load + scheme pipeline finished on its thread.
     Pipeline(Arc<PipelineDone>),
+    /// Toast hover-pause: the pointer entered/left a toast card.
+    ToastHover(u32, bool),
     /// A Wi-Fi page row: join that network (`nmcli dev wifi connect`).
     WifiJoin(String),
     /// The live `org.freedesktop.ScreenSaver` inhibitor count.
@@ -392,6 +395,10 @@ pub struct Shell {
     /// Live `org.freedesktop.ScreenSaver` inhibitor count — the idle stages
     /// hold while any client inhibits.
     inhibitors: u32,
+    /// A wallpaper→scheme run is in flight; new picks queue in
+    /// `wallpaper_pending` so two regenerations never race (last wins).
+    pipeline_busy: bool,
+    wallpaper_pending: Option<std::path::PathBuf>,
     /// How the bar presents (`BarStates`); `triton msg bar mode …` sets it.
     bar_mode: BarMode,
     /// Islands that are up right now (ignored while pinned). Keys carry the
@@ -414,13 +421,19 @@ pub struct Shell {
 
 impl Shell {
     pub fn boot(real_services: bool) -> (Self, Task<Message>) {
+        let settings = crate::settings::Settings::load();
         let mut shell = Self {
             real_services,
             night_gamma: crate::wayl::start(),
             volume: 0.62,
             brightness: 0.7,
+            dnd: settings.dnd,
+            bar_mode: settings.bar_mode(),
+            variant: settings.variant(),
+            night: settings.night,
             ..Self::default()
         };
+        shell.apply_night();
         shell.tick();
         let task = crate::pipeline::current_wallpaper()
             .map_or_else(Task::none, |path| shell.set_wallpaper(path));
@@ -570,7 +583,30 @@ impl Shell {
                 self.query = query;
                 self.search()
             }
-            Message::Cmd(line) => self.command(&line),
+            Message::Cmd(id, line) => {
+                // `status` is the one command with a payload reply; everything
+                // else just closes the connection.
+                if line.trim() == "status" {
+                    crate::msg::reply(id, &self.status_json());
+                    return Task::none();
+                }
+                let task = self.command(&line);
+                crate::msg::reply(id, "");
+                task
+            }
+            Message::ToastHover(id, enter) => {
+                let now = std::time::Instant::now();
+                if enter {
+                    self.notifs.pause_toast(id, now);
+                    Task::none()
+                } else {
+                    self.notifs
+                        .resume_toast(id, now)
+                        .map_or(Task::none(), |left| {
+                            Self::after(left, Message::NotifExpired(id))
+                        })
+                }
+            }
             Message::Bell(output) => {
                 self.notifications = if self.notifications.as_deref() == Some(output.as_str()) {
                     None
@@ -581,7 +617,8 @@ impl Shell {
             }
             Message::Dnd => {
                 self.dnd = !self.dnd;
-                Task::none()
+                self.persist();
+                self.reconcile()
             }
             Message::Notify(event) => match event {
                 crate::notify::Event::Arrived(n) => {
@@ -600,9 +637,19 @@ impl Shell {
                 }
             },
             Message::NotifExpired(id) => {
-                self.notifs.close(id);
-                crate::notify::closed(id, 1);
-                self.reconcile()
+                // A pause (or a rescheduled timer) can outlive this fire:
+                // re-arm while the toast is still alive instead of closing it.
+                let now = std::time::Instant::now();
+                match self.notifs.remaining(id, now) {
+                    Some(left) if left > std::time::Duration::ZERO => {
+                        Self::after(left, Message::NotifExpired(id))
+                    }
+                    _ => {
+                        self.notifs.close(id);
+                        crate::notify::closed(id, 1);
+                        self.reconcile()
+                    }
+                }
             }
             Message::NotifActivate(id) => {
                 self.notifs.close(id);
@@ -670,6 +717,7 @@ impl Shell {
             Message::QsToggleNight => {
                 self.night = !self.night;
                 self.apply_night();
+                self.persist();
                 Task::none()
             }
             Message::QsToggleDark => {
@@ -678,6 +726,7 @@ impl Shell {
                     triton_design::Variant::Light => triton_design::Variant::Dark,
                 };
                 self.apply_scheme();
+                self.persist();
                 Task::none()
             }
             Message::QsToggleSaver => {
@@ -849,6 +898,8 @@ impl Shell {
                 Task::none()
             }
             Message::Pipeline(done) => {
+                self.pipeline_busy = false;
+                let re_run = self.wallpaper_pending.take();
                 self.wallpaper.clone_from(&done.wallpaper);
                 self.wallpaper_luminance = done.luminance;
                 self.scheme = Some(match self.variant {
@@ -859,7 +910,10 @@ impl Shell {
                     let targets = done.applied.join(", ");
                     self.toast(format!("Scheme applied to {targets}"));
                 }
-                self.reconcile()
+                Task::batch([
+                    self.reconcile(),
+                    re_run.map_or_else(Task::none, |p| self.set_wallpaper(p)),
+                ])
             }
             // Bar hover and mode plumbing lives in `bar`.
             Message::BarEnter(_)
@@ -925,6 +979,7 @@ impl Shell {
                 if mode == BarMode::Pinned {
                     self.bar_shown.clear();
                 }
+                self.persist();
                 self.reconcile()
             }
             _ => Task::none(),
@@ -1030,6 +1085,7 @@ impl Shell {
             urgency: crate::notify::Urgency::Normal,
             timeout: std::time::Duration::from_secs(6),
             arrived: std::time::Instant::now(),
+            paused: false,
         });
     }
 
@@ -1405,12 +1461,56 @@ impl Shell {
     }
 
     /// Kick the wallpaper→scheme pipeline on a worker thread for `path`.
+    /// One run at a time — a pick made while busy queues as `wallpaper_pending`
+    /// and re-runs on completion (last wins).
     fn set_wallpaper(&mut self, path: std::path::PathBuf) -> Task<Message> {
+        if self.pipeline_busy {
+            self.wallpaper_pending = Some(path);
+            return Task::none();
+        }
+        self.pipeline_busy = true;
         let variant = self.variant;
         Task::perform(
             async move { crate::pipeline::run(&path, variant) },
             |done| Message::Pipeline(Arc::new(done)),
         )
+    }
+
+    /// Write the toggles that survive a restart to `settings.toml`.
+    fn persist(&self) {
+        let settings =
+            crate::settings::Settings::capture(self.bar_mode, self.dnd, self.variant, self.night);
+        if let Err(e) = settings.save() {
+            tracing::warn!(%e, "cannot write settings.toml");
+        }
+    }
+
+    /// `triton msg status` — the shell's live state as JSON (the
+    /// `dms ipc show`-style diagnostic surface).
+    fn status_json(&self) -> String {
+        serde_json::json!({
+            "bar_mode": match self.bar_mode {
+                BarMode::AutoHide => "autohide",
+                BarMode::Pinned => "pinned",
+                BarMode::Hidden => "hidden",
+            },
+            "dnd": self.dnd,
+            "variant": match self.variant {
+                triton_design::Variant::Dark => "dark",
+                triton_design::Variant::Light => "light",
+            },
+            "night": self.night,
+            "notifications": self.notifs.len(),
+            "toasts": self.notifs.toasts(std::time::Instant::now(), self.dnd).len(),
+            "inhibitors": self.inhibitors,
+            "outputs": self.niri.outputs,
+            "volume": self.volume,
+            "brightness": self.brightness,
+            "wallpaper": self.wallpaper.is_some(),
+            "idle_stage": self.idle_stage,
+            "real_services": self.real_services,
+        })
+        .to_string()
     }
 
     fn reconcile(&mut self) -> Task<Message> {
@@ -1871,7 +1971,7 @@ impl Shell {
         Subscription::batch([
             niri::snapshots().map(Message::Niri),
             niri::minutes().map(|()| Message::Minute),
-            msg::commands().map(Message::Cmd),
+            msg::commands().map(|(id, line)| Message::Cmd(id, line)),
             services::state(shell.real_services).map(Message::Services),
             iced_runtime::window::close_events().map(Message::Closed),
             crate::notify::server().map(Message::Notify),

@@ -15,6 +15,7 @@ mod panels;
 mod pipeline;
 mod polkit;
 mod services;
+mod settings;
 mod shell;
 mod util;
 mod wayl;

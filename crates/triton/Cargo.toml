@@ -30,6 +30,9 @@ iced_renderer = { workspace = true, features = [
 ] }
 iced_widget = { workspace = true, features = ["advanced", "canvas", "image"] }
 niri-ipc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
 anyhow.workspace = true
 # `quantize`: the wallpaper -> source color step of the scheme pipeline.
 material-colors = { workspace = true, features = ["std", "quantize"] }

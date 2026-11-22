@@ -30,20 +30,25 @@ the native architecture was auditable).
 - `triton doctor` diagnostics
 - Suspend waits for session-lock *secure* (locked pid file written by
   triton-lock on first mapped surface)
+- Persisted settings (`~/.config/triton/settings.toml`: bar mode, DND,
+  variant, night — Noctalia's "GUI overrides" layer)
+- Toast hover-pause (`mouse_area` enter/exit → `Store::pause_toast`/`resume`)
+- Serialized last-wins wallpaper pipeline (`pipeline_busy`/`wallpaper_pending`)
+- `triton msg status` JSON dump + request/reply over the msg socket
 
 ## Steal — backlog (next up)
 
 - **3-layer config** (hand config / GUI overrides in state dir / app-owned
-  runtime state; section-scoped change sets for hot reload). Design now while
-  we have almost no config; retrofitting is expensive.
+  runtime state; section-scoped change sets for hot reload). `settings.toml`
+  is the overrides layer; a hand-editable `config.toml` and inotify hot
+  reload are still open.
 - **One IPC schema** driving `msg` + `--help` + completions; caller-cwd
   forwarding so relative paths resolve against the client.
 - **Idle grace fade** (pre-lock warning window) + `dpms-off` → `dpms-on` pair.
-- **Toast hover-pause + stable slots**; notification history.
-- **Serialized last-wins pipeline queue** for wallpaper→scheme re-requests.
+- **Toast stable slots** + notification history file.
 - **Click-shield surface** for outside-dismiss (DMS `EdgeExclusion`); unload
   heavy panels with a grace timer for memory discipline.
-- **`status` JSON** dump; `config get/set` dotted paths.
+- **`config get/set`** dotted paths over the reply-capable msg socket.
 - **Plugin slot design** later — Noctalia's manifest-first (typed entry kinds
   + settings schema + API version, unsandboxed-by-policy) is the reference.
 - **PAM helper binary** for the greeter phase (Noctalia splits PAM into a

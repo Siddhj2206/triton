@@ -59,14 +59,20 @@ pub struct Notification {
     pub timeout: Duration,
     /// When the `Notify` call arrived; `toasts` and the "12 min" labels use it.
     pub arrived: Instant,
+    /// Toast hover-pause: `timeout` has been rewritten to the lifetime that
+    /// remained when the pointer entered; `alive_at` stays true until
+    /// [`Store::resume_toast`] re-arms it from a fresh `arrived`.
+    pub paused: bool,
 }
 
 impl Notification {
     fn alive_at(&self, now: Instant) -> bool {
         // Overflow means Duration::MAX — "never expires".
-        self.arrived
-            .checked_add(self.timeout)
-            .is_none_or(|end| end > now)
+        self.paused
+            || self
+                .arrived
+                .checked_add(self.timeout)
+                .is_none_or(|end| end > now)
     }
 }
 
@@ -127,6 +133,46 @@ impl Store {
             .rev()
             .filter(|n| n.alive_at(now) && (!dnd || n.urgency == Urgency::Critical))
             .collect()
+    }
+
+    /// Hover-pause a toast: freeze the lifetime it had left at `now` into
+    /// `timeout` and mark it paused, so the expiry pass leaves it up.
+    pub fn pause_toast(&mut self, id: u32, now: Instant) {
+        let Some(n) = self.items.get_mut(&id) else {
+            return;
+        };
+        if n.paused {
+            return;
+        }
+        if let Some(remaining) = n
+            .arrived
+            .checked_add(n.timeout)
+            .map(|end| end.saturating_duration_since(now))
+        {
+            n.timeout = remaining;
+            n.paused = true;
+        }
+    }
+
+    /// The pointer left: re-arm the frozen lifetime from a fresh `arrived`.
+    /// Returns the remaining lifetime so the caller can re-schedule expiry.
+    pub fn resume_toast(&mut self, id: u32, now: Instant) -> Option<Duration> {
+        let n = self.items.get_mut(&id)?;
+        if !n.paused {
+            return None;
+        }
+        n.paused = false;
+        n.arrived = now;
+        Some(n.timeout)
+    }
+
+    /// The lifetime a toast has left at `now` — for re-arming expiry after a
+    /// pause that outlived the original timer.
+    pub fn remaining(&self, id: u32, now: Instant) -> Option<Duration> {
+        let n = self.items.get(&id)?;
+        n.arrived
+            .checked_add(n.timeout)
+            .map(|end| end.saturating_duration_since(now))
     }
 }
 
@@ -197,6 +243,7 @@ impl Notifications {
             urgency,
             timeout,
             arrived: Instant::now(),
+            paused: false,
         }));
         id
     }
@@ -415,6 +462,7 @@ mod tests {
             urgency,
             timeout,
             arrived,
+            paused: false,
         }
     }
 
