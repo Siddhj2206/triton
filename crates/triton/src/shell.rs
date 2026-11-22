@@ -21,6 +21,7 @@ use crate::state::{
     BackendMode, BarMode, OutputKey, ShellEvent, ShellState, ShellStatusSnapshot, SurfaceRole,
     SurfaceSummary, variant_as_str,
 };
+use crate::theme_pipeline::{self, ThemeSyncConfig};
 use crate::wallpaper::{WallpaperImage, WallpaperSet, crossfade_duration, view_background};
 
 /// Timer tag for releasing outgoing wallpaper textures once a crossfade settles.
@@ -61,6 +62,9 @@ pub struct TritonShell {
     event_sender: Option<EventSender<ShellEvent>>,
     /// Non-blocking niri action dispatch (set only under `--real-services`).
     niri_sink: Option<NiriActionSender>,
+    /// External desktop theme sync target (GTK3/4 `gtk.css`, `colors.kdl`,
+    /// `gsettings`). Only honored when `state.backend == BackendMode::RealServices`.
+    theme_sync: Option<ThemeSyncConfig>,
 }
 
 impl TritonShell {
@@ -77,6 +81,7 @@ impl TritonShell {
             wallpapers: WallpaperSet::default(),
             event_sender: None,
             niri_sink: None,
+            theme_sync: None,
         };
         let initial_outputs = shell.state.outputs.clone();
         shell.sync_output_registry(&initial_outputs, now);
@@ -117,6 +122,18 @@ impl TritonShell {
     /// Current niri action sink, if live compositor integration is active.
     pub fn niri_action_sink(&self) -> Option<&NiriActionSender> {
         self.niri_sink.as_ref()
+    }
+
+    /// Configure external desktop theme syncing (GTK3/4 `gtk.css`,
+    /// `triton/colors.kdl`, and optionally `gsettings`). Only takes effect
+    /// when `self.state().backend == BackendMode::RealServices`.
+    pub fn set_theme_sync(&mut self, config: ThemeSyncConfig) {
+        self.theme_sync = Some(config);
+    }
+
+    /// Current external desktop theme sync configuration, if any.
+    pub fn theme_sync(&self) -> Option<&ThemeSyncConfig> {
+        self.theme_sync.as_ref()
     }
 
     /// Mutably borrow the current [`ShellState`].
@@ -226,22 +243,27 @@ impl TritonShell {
                 mean_luminance,
             } => {
                 let next_variant = variant.unwrap_or(self.state.theme.variant);
-                let next_scheme = scheme.map_or_else(
-                    || {
-                        if next_variant == self.state.theme.variant {
-                            self.state.theme.scheme
-                        } else {
-                            Scheme::reference(next_variant)
+                let next_scheme = match scheme {
+                    Some(boxed) => *boxed,
+                    None if next_variant != self.state.theme.variant => {
+                        match self.state.wallpaper.active_image.as_ref() {
+                            Some(img) => theme_pipeline::extract_scheme(&img.data, next_variant),
+                            None => Scheme::reference(next_variant),
                         }
-                    },
-                    |boxed| *boxed,
-                );
+                    }
+                    None => self.state.theme.scheme,
+                };
+                let changed = next_scheme != self.state.theme.scheme
+                    || next_variant != self.state.theme.variant;
                 self.state.theme = Theme {
                     scheme: next_scheme,
                     variant: next_variant,
                 };
                 if let Some(lum) = mean_luminance {
                     self.state.wallpaper.mean_luminance = lum;
+                }
+                if changed {
+                    self.sync_external_theme();
                 }
                 vec![AppCommand::RedrawAll]
             }
@@ -334,7 +356,7 @@ impl TritonShell {
                 ThemeCommand::Dark => {
                     let cmds = self.handle_event(
                         ShellEvent::ApplyTheme {
-                            scheme: Some(Box::new(Scheme::DARK)),
+                            scheme: None,
                             variant: Some(Variant::Dark),
                             mean_luminance: None,
                         },
@@ -345,7 +367,7 @@ impl TritonShell {
                 ThemeCommand::Light => {
                     let cmds = self.handle_event(
                         ShellEvent::ApplyTheme {
-                            scheme: Some(Box::new(Scheme::LIGHT)),
+                            scheme: None,
                             variant: Some(Variant::Light),
                             mean_luminance: None,
                         },
@@ -360,7 +382,7 @@ impl TritonShell {
                     };
                     let cmds = self.handle_event(
                         ShellEvent::ApplyTheme {
-                            scheme: Some(Box::new(Scheme::reference(next))),
+                            scheme: None,
                             variant: Some(next),
                             mean_luminance: None,
                         },
@@ -541,6 +563,10 @@ impl TritonShell {
     /// Refresh `mean_luminance` / `active_image` in shell state from the
     /// decoded image committed to the focused output — the freshest desired
     /// image once its decode landed, otherwise whatever is still displayed.
+    ///
+    /// When the active image changes, re-extracts the 28-role Material 3
+    /// [`Scheme`] in-process for the current [`Variant`] and syncs external
+    /// desktop theme outputs if [`BackendMode::RealServices`] is active.
     fn refresh_active_wallpaper(&mut self) {
         let target_key = self
             .state
@@ -551,8 +577,52 @@ impl TritonShell {
             .and_then(|path| self.wallpapers.image_for_path(&path));
         let image = desired_image
             .or_else(|| target_key.and_then(|key| self.wallpapers.displayed_image(key)));
+
+        let image_changed = match (&self.state.wallpaper.active_image, &image) {
+            (Some(prev), Some(next)) => !Arc::ptr_eq(prev, next),
+            (None, None) => false,
+            _ => true,
+        };
+
         self.state.wallpaper.mean_luminance = image.as_ref().map_or(0.0, |img| img.mean_luminance);
         self.state.wallpaper.active_image = image;
+
+        if image_changed && let Some(ref active) = self.state.wallpaper.active_image {
+            let next_scheme =
+                theme_pipeline::extract_scheme(&active.data, self.state.theme.variant);
+            if next_scheme != self.state.theme.scheme {
+                self.state.theme.scheme = next_scheme;
+                self.sync_external_theme();
+            }
+        }
+    }
+
+    /// Write GTK3/4 `gtk.css`, `triton/colors.kdl`, and (if enabled) invoke
+    /// `gsettings`. Strictly gated behind [`BackendMode::RealServices`].
+    fn sync_external_theme(&self) {
+        if self.state.backend != BackendMode::RealServices {
+            return;
+        }
+        let Some(ref cfg) = self.theme_sync else {
+            return;
+        };
+        if let Err(err) = theme_pipeline::sync_config_files(
+            &cfg.config_root,
+            &self.state.theme.scheme,
+            self.state.theme.variant,
+        ) {
+            warn!(
+                dir = %cfg.config_root.display(),
+                error = %err,
+                "failed to sync GTK/niri theme files"
+            );
+        }
+        if cfg.apply_gsettings
+            && let Err(err) =
+                theme_pipeline::apply_gsettings(self.state.theme.variant, self.state.backend)
+        {
+            warn!(error = %err, "failed to apply gsettings color-scheme");
+        }
     }
 
     fn sync_output_registry(

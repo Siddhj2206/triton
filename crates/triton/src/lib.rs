@@ -16,6 +16,7 @@ pub mod niri_ipc;
 pub mod osd;
 pub mod shell;
 pub mod state;
+pub mod theme_pipeline;
 pub mod wallpaper;
 
 pub use bar::{
@@ -42,6 +43,11 @@ pub use shell::{ShellMessage, SurfaceId, TIMER_WALLPAPER_SETTLE, TritonShell};
 pub use state::{
     BackendMode, BarMode, FocusedWindow, OutputKey, ShellEvent, ShellState, ShellStatusSnapshot,
     StatusSummary, SurfaceRole, SurfaceSummary, WallpaperState, WorkspaceInfo,
+};
+pub use theme_pipeline::{
+    ThemePipelineError, ThemeSyncConfig, ThemeSyncPaths, apply_gsettings, extract_scheme,
+    extract_source_color, gsettings_color_scheme_args, render_gtk3_css, render_gtk4_css,
+    scheme_from_seed, sync_config_files, write_gtk_css, xdg_config_home,
 };
 pub use wallpaper::{
     BRIGHT_BACKDROP_THRESHOLD, CROSSFADE_DURATION, CROSSFADE_DURATION_REDUCED, Crossfade,
