@@ -425,6 +425,47 @@ fn menu_open_submenu_renders_second_glass_panel_beside_it() {
     }
 }
 
+#[test]
+fn menu_open_submenu_parent_row_keeps_full_width() {
+    let mut text = TextEngine::new();
+    let mut dl = DrawList::default();
+    let theme = Theme::dark();
+    let spec = Menu {
+        key: NodeKey::named("ctx"),
+        width: 260.0,
+        open_submenu: Some(NodeKey::named("open_with")),
+        entries: vec![
+            MenuEntry::Item(item("open", "Open")),
+            MenuEntry::Item(MenuItem {
+                submenu: Some(Box::new(Menu {
+                    key: NodeKey::named("sub"),
+                    width: 200.0,
+                    open_submenu: None,
+                    entries: vec![MenuEntry::Item(item("editor", "Text Editor"))],
+                })),
+                ..item("open_with", "Open with")
+            }),
+        ],
+    };
+    let frame = paint::<Msg>(
+        menu(&theme, spec),
+        (600.0, 400.0),
+        1.0,
+        &InteractionState::default(),
+        &mut text,
+        &mut dl,
+    );
+    let parent = hit_rect(&frame, NodeKey::named("open_with"));
+    let sibling = hit_rect(&frame, NodeKey::named("open"));
+    // The row carrying an open submenu must not collapse to content width.
+    assert!(
+        (parent.w - sibling.w).abs() < EPS,
+        "submenu parent row w={} vs sibling w={}",
+        parent.w,
+        sibling.w
+    );
+}
+
 // ── tooltip ──────────────────────────────────────────────────────────────────
 
 #[test]

@@ -13,7 +13,7 @@ use triton_design::material::{Material, ShadowToken};
 use triton_design::shape::{CORNER_SMOOTHING, RADII, SIZE, nested};
 use triton_design::typography::TypeStyle;
 use triton_engine::anim::Animator;
-use triton_engine::style::{Corners, Edges, FontSpec, Rgba, Theme};
+use triton_engine::style::{Corners, DropShadow, Edges, FontSpec, Rgba, Theme};
 use triton_engine::ui::{
     ClickHandler, Element, InteractionState, NodeKey, box_, col, icon, row, text,
 };
@@ -205,6 +205,7 @@ fn menu_row<M: 'static>(
 
     let mut el = row()
         .id(key)
+        .w_full()
         .h(SIZE.control_l)
         .px(16.0)
         .gap(14.0)
@@ -261,13 +262,7 @@ pub fn tooltip<M>(label: impl Into<String>, theme: &Theme) -> Element<M> {
         .material(Material::Glass, theme)
         .rounded(RADII.sm)
         .smoothing(0.0) // pill reads as a pure radius, matching niri corners
-        .shadow(triton_engine::style::DropShadow {
-            offset_x: 0.0,
-            offset_y: 6.0,
-            blur: 16.0,
-            spread: 0.0,
-            color: Rgba::new(0.0, 0.0, 0.0, 0.4),
-        })
+        .shadow(DropShadow::from(ShadowToken::RAISED))
         .child(text(
             label,
             FontSpec::ui(13.0).weight(500),
@@ -331,7 +326,7 @@ pub enum ToastActionTone {
     Tonal,
     /// `error_container`/`on_error_container` — destructive actions.
     Destructive,
-    /// Call-accept green (`#8CD6A0`/`#00391B` on the board's `.b.pg`).
+    /// `tertiary`/`on_tertiary` — the call-accept action (board `.b.pg`).
     Accept,
 }
 
@@ -569,8 +564,8 @@ fn toast_action<M: 'static>(action: ToastAction<M>, content: Rgba, theme: &Theme
             Rgba::from_color(s.on_error_container),
         ),
         ToastActionTone::Accept => (
-            Rgba::new(0.549, 0.839, 0.627, 1.0), // #8CD6A0
-            Rgba::new(0.0, 0.224, 0.106, 1.0),   // #00391B
+            Rgba::from_color(s.tertiary),
+            Rgba::from_color(s.on_tertiary),
         ),
     };
 

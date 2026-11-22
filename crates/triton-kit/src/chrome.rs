@@ -21,13 +21,17 @@ use triton_engine::ui::{ClickHandler, Element, NodeKey, box_, col, icon, image, 
 /// Animation channel salts: XOR is a bijection, so channels derived from the
 /// caller's `NodeKey` can never collide with each other or across pills.
 const PILL_MORPH_SALT: u64 = 0x7773_5f6d_6f72_7068; // "ws_morph"
+const PILL_BG_SALT: u64 = 0x7773_5f62_675f_0001; // "ws_bg"
+const PILL_FG_SALT: u64 = 0x7773_5f66_675f_0002; // "ws_fg"
 const STAT_BG_SALT: u64 = 0x7374_6174_5f62_6700; // "stat_bg"
 const STAT_FG_SALT: u64 = 0x7374_6174_5f66_6700; // "stat_fg"
 
 /// `.ws` workspace pill: an idle 40px dot that spring-morphs into a 56px
-/// active pill — width, corner radius (h/2 → 12 squircle), smoothing, and
-/// `veil`/`on_surface_variant` → `primary`/`on_primary` all derive from one
-/// `SPATIAL_FAST` morph channel keyed by `key` inside `anim`.
+/// active pill — width, corner radius (h/2 → 12 squircle), and smoothing ride
+/// one `SPATIAL_FAST` morph channel keyed by `key` inside `anim`, while the
+/// `veil`/`on_surface_variant` → `primary`/`on_primary` color swap runs on
+/// non-overshooting `EFFECTS_FAST` channels (spatial springs may overshoot;
+/// colors must not).
 ///
 /// The label is Jost 17/600 (the board's numeric workspace grammar).
 pub fn pill<M: 'static>(
@@ -46,9 +50,19 @@ pub fn pill<M: 'static>(
     );
     let h = SIZE.control_m;
     let w = 40.0 + 16.0 * m;
-    let fg = Rgba::from_color(theme.scheme.on_surface_variant)
-        .lerp(Rgba::from_color(theme.scheme.on_primary), m);
-    let bg = theme.veil().lerp(Rgba::from_color(theme.scheme.primary), m);
+    let (bg_t, fg_t) = if active {
+        (
+            Rgba::from_color(theme.scheme.primary),
+            Rgba::from_color(theme.scheme.on_primary),
+        )
+    } else {
+        (
+            theme.veil(),
+            Rgba::from_color(theme.scheme.on_surface_variant),
+        )
+    };
+    let bg = anim.color(NodeKey(key.0 ^ PILL_BG_SALT), bg_t, Spring::EFFECTS_FAST);
+    let fg = anim.color(NodeKey(key.0 ^ PILL_FG_SALT), fg_t, Spring::EFFECTS_FAST);
     let radius = h * 0.5 - (h * 0.5 - RADII.sm) * m;
 
     box_()
@@ -344,7 +358,7 @@ pub fn keycap<M>(label: impl Into<String>, style: KeycapStyle, theme: &Theme) ->
                     .h(2.0)
                     .rounded([0.0, 0.0, 8.0, 8.0])
                     .smoothing(CORNER_SMOOTHING)
-                    .bg(Rgba::new(0.0, 0.0, 0.0, 0.35)),
+                    .bg(Rgba::from_color(theme.scheme.outline_variant)),
             ),
     }
 }

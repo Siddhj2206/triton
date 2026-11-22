@@ -312,15 +312,17 @@ impl<M> std::fmt::Debug for IconButton<M> {
 }
 
 const TOGGLE_SALT: u64 = 0xb770_c0de_0000_0002;
+const PRESS_SALT: u64 = 0xb770_c0de_0000_000d;
 
 /// `.t-ibtn` icon button: a circle at rest that morphs into a squircle when
 /// `toggled` (`.toggled` r12 at 40px, r14 at 48px — `diameter * 0.3`), flips
 /// the glyph to `IconStyle::Filled`, and takes the `primary` fill. The morph
 /// runs on one `Spring::SPATIAL` progress channel so radius and smoothing move
-/// together.
+/// together; a pointer press pre-tightens toward the same squircle on
+/// `Spring::SPATIAL_FAST` (the `.t-btn` press affordance).
 pub fn icon_button<M: 'static>(
     theme: &Theme,
-    _interaction: &InteractionState,
+    interaction: &InteractionState,
     anim: &mut Animator,
     spec: IconButton<M>,
 ) -> Element<M> {
@@ -330,23 +332,33 @@ pub fn icon_button<M: 'static>(
         f32::from(u8::from(spec.toggled)),
         Spring::SPATIAL,
     );
+    let press = anim.spring(
+        NodeKey(spec.key.0 ^ PRESS_SALT),
+        f32::from(u8::from(interaction.is_pressed(spec.key))),
+        Spring::SPATIAL_FAST,
+    );
+    let morph = p.max(press);
 
-    let (bg, fg) = if spec.disabled {
-        let (container, content, _) = disabled_colors(spec.tone, theme);
-        (container.unwrap_or(Rgba::TRANSPARENT), content)
+    let (bg, fg, border) = if spec.disabled {
+        let (container, content, outline) = disabled_colors(spec.tone, theme);
+        (container.unwrap_or(Rgba::TRANSPARENT), content, outline)
     } else if spec.toggled {
         (
             Rgba::from_color(theme.scheme.primary),
             Rgba::from_color(theme.scheme.on_primary),
+            None,
         )
     } else {
-        icon_tone_colors(spec.tone, theme)
+        let (bg, fg) = icon_tone_colors(spec.tone, theme);
+        let outline =
+            (spec.tone == ButtonTone::Outlined).then(|| Rgba::from_color(theme.scheme.outline));
+        (bg, fg, outline)
     };
 
     // r = d/2 at rest → d*0.3 toggled (12 @40px, ~14 @48px); 0 → 0.6 smoothing.
     let toggled_r = (d * 0.3).round();
-    let radius = (d * 0.5) + (toggled_r - d * 0.5) * p;
-    let smoothing = CORNER_SMOOTHING * p;
+    let radius = (d * 0.5) + (toggled_r - d * 0.5) * morph;
+    let smoothing = CORNER_SMOOTHING * morph;
     let glyph_style = if spec.toggled {
         IconStyle::Filled
     } else {
@@ -364,8 +376,8 @@ pub fn icon_button<M: 'static>(
         .bg(bg)
         .child(icon(spec.icon, glyph_style, glyph_size, fg));
 
-    if !spec.disabled && spec.tone == ButtonTone::Outlined && !spec.toggled {
-        el = el.border(1.0, Rgba::from_color(theme.scheme.outline));
+    if let Some(outline) = border {
+        el = el.border(1.0, outline);
     }
     if !spec.disabled && spec.on_click.is_some() {
         el = el
@@ -608,12 +620,12 @@ pub fn toggle_tile<M: 'static>(
     let bg = anim.color(
         NodeKey(spec.key.0 ^ TILE_BG_SALT),
         target_bg,
-        Spring::SPATIAL,
+        Spring::EFFECTS,
     );
     let fg = anim.color(
         NodeKey(spec.key.0 ^ TILE_FG_SALT),
         target_fg,
-        Spring::SPATIAL,
+        Spring::EFFECTS,
     );
 
     let mut texts =
@@ -681,27 +693,38 @@ pub enum SegmentedStyle {
     Large,
     /// `.t-seg.veil` — standard sizing, `theme.veil()` cells on Glass/scrim.
     Veil,
+    /// `.t-seg.l.veil` — Large sizing (h48, r24 ends, 15px labels) with
+    /// `theme.veil()` cells for Glass/Thick/scrim surfaces.
+    LargeVeil,
 }
 
 impl SegmentedStyle {
     fn height(self) -> f32 {
         match self {
-            Self::Large => SIZE.control_l,
+            Self::Large | Self::LargeVeil => SIZE.control_l,
             _ => 44.0,
         }
     }
 
     fn end_radius(self) -> f32 {
         match self {
-            Self::Large => 24.0,
+            Self::Large | Self::LargeVeil => 24.0,
             _ => RADII.connected_end,
         }
     }
 
     fn font(self) -> FontSpec {
         match self {
-            Self::Large => FontSpec::ui(15.0).weight(600),
+            Self::Large | Self::LargeVeil => FontSpec::ui(15.0).weight(600),
             _ => FontSpec::ui(14.0).weight(600),
+        }
+    }
+
+    /// Unselected-cell fill: veil on Glass/Thick/scrim, container elsewhere.
+    fn cell_fill(self, theme: &Theme) -> Rgba {
+        match self {
+            Self::Veil | Self::LargeVeil => theme.veil(),
+            _ => Rgba::from_color(theme.scheme.surface_container_high),
         }
     }
 }
@@ -749,13 +772,7 @@ pub fn segmented<M: 'static>(
         let (bg, fg) = if on {
             (Rgba::from_color(s.primary), Rgba::from_color(s.on_primary))
         } else {
-            match style {
-                SegmentedStyle::Veil => (theme.veil(), Rgba::from_color(s.on_surface)),
-                _ => (
-                    Rgba::from_color(s.surface_container_high),
-                    Rgba::from_color(s.on_surface),
-                ),
-            }
+            (style.cell_fill(theme), Rgba::from_color(s.on_surface))
         };
         let mut cell = row()
             .id(cell_key)
@@ -881,12 +898,12 @@ pub fn power_menu<M: 'static>(
         let bg = anim.color(
             NodeKey(cell_key.0 ^ POWER_BG_SALT),
             if on { expanded_bg } else { rest_bg },
-            Spring::SPATIAL,
+            Spring::EFFECTS,
         );
         let fg = anim.color(
             NodeKey(cell_key.0 ^ POWER_FG_SALT),
             if on { expanded_fg } else { rest_fg },
-            Spring::SPATIAL,
+            Spring::EFFECTS,
         );
 
         let width = POWER_CELL + (POWER_EXPANDED - POWER_CELL) * progress;

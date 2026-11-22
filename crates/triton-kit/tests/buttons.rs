@@ -738,6 +738,47 @@ fn icon_button_disabled_suppresses_click() {
 // ── chip: filter selection, status kinds, dismiss affordance ─────────────────
 
 #[test]
+fn icon_button_disabled_outlined_keeps_hairline_border() {
+    let mut text = TextEngine::new();
+    let mut dl = DrawList::default();
+    let interaction = InteractionState::default();
+    let theme = Theme::dark();
+
+    paint(
+        icon_button(
+            &theme,
+            &interaction,
+            &mut Animator::new(),
+            IconButton {
+                key: "ibo".into(),
+                icon: Icon::Lock,
+                tone: ButtonTone::Outlined,
+                disabled: true,
+                on_click: Some(Box::new(|| Msg::Click("ibo"))),
+                ..Default::default()
+            },
+        ),
+        (100.0, 100.0),
+        1.0,
+        &interaction,
+        &mut text,
+        &mut dl,
+    );
+    let q = quads(&dl)[0].2;
+    // Disabled Outlined keeps the 1px hairline at `on_surface`/`disabled_container`.
+    assert!((q.misc[2] - 1.0).abs() < EPS, "1px border width");
+    assert_rgba(
+        q.border,
+        Rgba::from_color(theme.scheme.on_surface)
+            .with_alpha(STATE_LAYER.disabled_container)
+            .to_array(),
+        "disabled outlined border",
+    );
+}
+
+// ── chip: filter selection, status kinds, dismiss affordance ─────────────────
+
+#[test]
 fn chip_filter_outlines_at_rest_and_fills_when_selected() {
     let mut text = TextEngine::new();
     for theme in [Theme::dark(), Theme::light()] {
@@ -1250,6 +1291,48 @@ fn segmented_large_and_veil_styles() {
         Rgba::from_color(theme.scheme.primary).to_array(),
         "selected over veil",
     );
+}
+
+#[test]
+fn segmented_large_veil_combines_large_metrics_and_veil_fill() {
+    let mut text = TextEngine::new();
+    for theme in [Theme::dark(), Theme::light()] {
+        let mut dl = DrawList::default();
+        paint(
+            seg(SegmentedStyle::LargeVeil, Some(1), &theme),
+            (400.0, 100.0),
+            1.0,
+            &InteractionState::default(),
+            &mut text,
+            &mut dl,
+        );
+        let cells: Vec<_> = quads(&dl)
+            .into_iter()
+            .map(|q| q.2)
+            .filter(|q| q.misc[0] == KIND_FILL && q.dst[3] > 40.0)
+            .collect();
+        assert_eq!(cells.len(), 3, "three LargeVeil cells");
+        // Large metrics: h48, 24px end radii.
+        assert!(
+            (cells[0].dst[3] - SIZE.control_l).abs() < EPS,
+            "LargeVeil h48"
+        );
+        assert!(
+            (cells[0].radii[0] - 24.0).abs() < EPS && (cells[0].radii[3] - 24.0).abs() < EPS,
+            "LargeVeil end r24"
+        );
+        assert!(
+            (cells[2].radii[1] - 24.0).abs() < EPS && (cells[2].radii[2] - 24.0).abs() < EPS,
+            "LargeVeil last-cell end r24"
+        );
+        // Veil fill on unselected cells; selection still primary.
+        assert_rgba(cells[0].fill, theme.veil().to_array(), "LargeVeil cell");
+        assert_rgba(
+            cells[1].fill,
+            Rgba::from_color(theme.scheme.primary).to_array(),
+            "LargeVeil selected",
+        );
+    }
 }
 
 // ── power_menu: expanding cell morph, compact corners, clicks ────────────────

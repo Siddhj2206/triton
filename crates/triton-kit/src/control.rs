@@ -190,7 +190,6 @@ pub enum CheckState {
 /// (`SIZE.touch_min`) hit target. Off = 2px `outline` border over transparent;
 /// checked/indeterminate = `primary` fill + `check`/`remove` mark that crossfades.
 /// The state layer is the 40px circle itself, faded through `anim`.
-#[allow(clippy::too_many_arguments)]
 pub fn checkbox<M: 'static>(
     key: impl Into<NodeKey>,
     state: CheckState,
@@ -298,7 +297,6 @@ pub fn checkbox<M: 'static>(
 /// (`SIZE.touch_min`) hit target. Off = 2px `outline` ring; selected = `primary`
 /// ring + a `10px` inner dot that springs in. The state layer is the 40px
 /// circle itself, faded through `anim`.
-#[allow(clippy::too_many_arguments)]
 pub fn radio<M: 'static>(
     key: impl Into<NodeKey>,
     selected: bool,
@@ -384,8 +382,8 @@ pub enum SliderMode {
 pub enum SliderSurface {
     /// `surface_container_highest` — standard slider on opaque surfaces.
     Standard,
-    /// Higher-contrast inactive track for Glass/Thick panels (board uses
-    /// `white@.20` on dark Glass; `black@.16` is the light analogue).
+    /// Higher-contrast inactive track for Glass/Thick panels: `on_surface` at
+    /// the `STATE_LAYER.drag` alpha so it reads over the translucent fill.
     OnGlass,
 }
 
@@ -459,7 +457,12 @@ fn stop_dots<M>(
 /// captures the pointer outside horizontal bounds. While dragging the handle
 /// tracks 1:1; programmatic value changes spring via `anim`. The 40px
 /// hover/press/drag state-layer halo behind the handle fades through `anim`.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "widget fn signature mirrors the element contract: identity, value, \
+              layout, options, theme, live interaction + animator, and the message \
+              sink are all independent axes the caller owns"
+)]
 pub fn slider<M: 'static>(
     key: impl Into<NodeKey>,
     value: f32,
@@ -509,10 +512,7 @@ pub fn slider<M: 'static>(
     } else {
         let inactive = match options.surface {
             SliderSurface::Standard => Rgba::from_color(theme.scheme.surface_container_highest),
-            SliderSurface::OnGlass => match theme.variant {
-                triton_design::color::Variant::Dark => Rgba::new(1.0, 1.0, 1.0, 0.20),
-                triton_design::color::Variant::Light => Rgba::new(0.0, 0.0, 0.0, 0.16),
-            },
+            SliderSurface::OnGlass => on_surface.with_alpha(STATE_LAYER.drag),
         };
         (primary, inactive, primary, primary)
     };

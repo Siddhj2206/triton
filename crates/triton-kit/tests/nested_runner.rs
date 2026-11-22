@@ -117,8 +117,31 @@ fn session_script_never_uses_niri_session() {
         "niri --session is forbidden in the nested runner"
     );
     assert!(
-        code.contains("exec niri -c"),
-        "expected `exec niri -c <config> -- <bin>` launch"
+        code.contains("niri -c"),
+        "expected `niri -c <config> -- <bin>` launch"
+    );
+}
+
+#[test]
+fn session_script_runs_niri_as_a_child_so_cleanup_trap_fires() {
+    // `exec niri` would replace the shell entirely, so the `trap cleanup EXIT`
+    // would never run and the private runtime dir would leak into target/.
+    // The contract is a foreground child + `wait` so EXIT/INT/TERM traps fire.
+    let code: String = SESSION_SH
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or_default())
+        .collect();
+    assert!(
+        !code.contains("exec niri"),
+        "exec replaces the shell — the cleanup trap can never run"
+    );
+    assert!(
+        code.contains("trap cleanup"),
+        "missing `trap cleanup` for the private runtime dir"
+    );
+    assert!(
+        code.contains("wait"),
+        "niri must be awaited so the script (and its traps) outlives it"
     );
 }
 

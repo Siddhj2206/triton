@@ -111,7 +111,11 @@ fn pill_spring_morphs_40_to_56_and_dispatches_click() {
             (q.radii[0] - 20.0 * scale).abs() < EPS,
             "idle radius {scale}x"
         );
-        assert_eq!(q.fill, theme.veil().to_array(), "idle veil fill");
+        assert!(
+            fill_is(&q, theme.veil().to_array()),
+            "idle veil fill: {:?}",
+            q.fill
+        );
 
         // Click dispatches the message.
         let cx = 40.0 * 0.5 + 0.0;
@@ -180,10 +184,10 @@ fn pill_spring_morphs_40_to_56_and_dispatches_click() {
             (q.radii[0] - 12.0 * scale).abs() < 0.5,
             "settled r12 squircle"
         );
-        assert_eq!(
-            q.fill,
-            Rgba::from_color(theme.scheme.primary).to_array(),
-            "active primary fill"
+        assert!(
+            fill_is(&q, Rgba::from_color(theme.scheme.primary).to_array()),
+            "active primary fill: {:?}",
+            q.fill
         );
         assert!(q.misc[1] > 0.3, "settled smoothing > 0");
     }
@@ -999,4 +1003,132 @@ fn level_meter_playing_animates_and_freezes_under_reduce_motion() {
         rm.push(heights(&dl));
     }
     assert_eq!(rm[0], rm[1], "reduce_motion holds gentle static bars");
+}
+
+// ── clock-driven continuous frames ───────────────────────────────────────────
+
+#[test]
+fn clock_driven_indicators_drive_is_animating() {
+    let mut text = TextEngine::new();
+    let mut anim = Animator::new();
+    let theme = Theme::dark();
+    let interaction = InteractionState::default();
+    let t0 = Instant::now();
+    let mut dl = DrawList::default();
+
+    // Active clock-driven indicators keep `is_animating` true so the host
+    // repaints every frame — no app-level workaround needed.
+    anim.begin_frame(t0, false);
+    paint::<Msg>(
+        wavy_progress("p", 200.0, 4.0, Progress::Indeterminate, &theme, &mut anim),
+        (300.0, 40.0),
+        1.0,
+        &interaction,
+        &mut text,
+        &mut dl,
+    );
+    assert!(anim.is_animating(), "indeterminate progress animates");
+
+    anim.begin_frame(t0 + Duration::from_millis(16), false);
+    paint::<Msg>(
+        wavy_ring(96.0, 4.0, 0.5, &theme, &mut anim),
+        (120.0, 120.0),
+        1.0,
+        &interaction,
+        &mut text,
+        &mut dl,
+    );
+    assert!(anim.is_animating(), "draining ring animates");
+
+    anim.begin_frame(t0 + Duration::from_millis(32), false);
+    paint::<Msg>(
+        level_meter("eq", MeterMode::Playing, (24.0, 16.0), &theme, &mut anim),
+        (80.0, 40.0),
+        1.0,
+        &interaction,
+        &mut text,
+        &mut dl,
+    );
+    assert!(anim.is_animating(), "playing meter animates");
+
+    // A completed ring requests nothing.
+    anim.begin_frame(t0 + Duration::from_millis(48), false);
+    paint::<Msg>(
+        wavy_ring(96.0, 4.0, 0.0, &theme, &mut anim),
+        (120.0, 120.0),
+        1.0,
+        &interaction,
+        &mut text,
+        &mut dl,
+    );
+    assert!(!anim.is_animating(), "empty ring is static");
+
+    // Under reduce_motion the same indicators go static: run enough frames for
+    // the meter's 120ms fade to settle, then nothing requests repaint.
+    anim.begin_frame(t0 + Duration::from_millis(64), true);
+    paint::<Msg>(
+        wavy_progress("p", 200.0, 4.0, Progress::Indeterminate, &theme, &mut anim),
+        (300.0, 40.0),
+        1.0,
+        &interaction,
+        &mut text,
+        &mut dl,
+    );
+    assert!(
+        !anim.is_animating(),
+        "reduce_motion freezes the indeterminate bar"
+    );
+
+    for ms in [80u64, 300, 500] {
+        anim.begin_frame(t0 + Duration::from_millis(ms), true);
+        paint::<Msg>(
+            level_meter("eq", MeterMode::Playing, (24.0, 16.0), &theme, &mut anim),
+            (80.0, 40.0),
+            1.0,
+            &interaction,
+            &mut text,
+            &mut dl,
+        );
+    }
+    assert!(
+        !anim.is_animating(),
+        "reduce_motion settles the meter to static bars"
+    );
+}
+
+#[test]
+fn clock_uses_animator_epoch_so_prewarm_timestamps_are_deterministic() {
+    // `elapsed_secs` anchors on the FIRST begin_frame; a frame timestamped
+    // before that epoch saturates to 0 rather than panicking or drifting —
+    // headless callers can rewind the clock freely.
+    let mut text = TextEngine::new();
+    let mut anim = Animator::new();
+    let theme = Theme::dark();
+    let interaction = InteractionState::default();
+    let mut dl = DrawList::default();
+    let epoch = Instant::now() + Duration::from_secs(60);
+
+    anim.begin_frame(epoch, false);
+    assert!(anim.elapsed_secs().abs() < EPS);
+    anim.begin_frame(
+        epoch
+            .checked_sub(Duration::from_secs(30))
+            .expect("epoch is +60s"),
+        false,
+    );
+    assert!(
+        anim.elapsed_secs().abs() < EPS,
+        "pre-epoch timestamp saturates to 0: {}",
+        anim.elapsed_secs()
+    );
+    // Painting at that timestamp still produces a deterministic frame.
+    paint::<Msg>(
+        wavy_progress("p", 200.0, 4.0, Progress::Indeterminate, &theme, &mut anim),
+        (300.0, 40.0),
+        1.0,
+        &interaction,
+        &mut text,
+        &mut dl,
+    );
+    assert!(anim.is_animating());
 }

@@ -653,7 +653,11 @@ fn masked_view(value: &str, cursor: usize) -> (String, usize) {
 /// the action — `visibility` while masked, `visibility_off` once revealed)
 /// and the `arrow_forward` submit disc, disabled at M3 alphas while the
 /// password is empty.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "helper packs the field key, two state flags, both click handlers, \
+              theme, interaction and animator — each a distinct caller-owned input"
+)]
 fn password_trailing<M: 'static>(
     key: NodeKey,
     masked: bool,

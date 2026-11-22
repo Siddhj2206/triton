@@ -4,7 +4,7 @@
 //! Numbers come from `triton-design` tokens and the board reference
 //! (`references/Triton Shell-project/triton/components.css`, `.t-*` classes).
 
-use triton_design::color::{STATE_LAYER, Variant};
+use triton_design::color::{Color, STATE_LAYER};
 use triton_design::icon::{Icon, IconStyle};
 use triton_design::material::{Material, ShadowToken};
 use triton_design::motion::Spring;
@@ -19,12 +19,21 @@ use triton_engine::ui::{
 // ── Panels & islands ─────────────────────────────────────────────────────────
 
 /// Floating or solid Triton panel with automatic material tint, 1px top highlight,
-/// continuous smooth corners, optional soft shadow, and compositor blur reporting.
+/// optional soft shadow, and compositor blur reporting.
+///
+/// Floating materials (Glass, Thick) stay circular (`smoothing 0`) to match
+/// niri's window corners; grounded materials (Solid, Mica) keep the in-shell
+/// `CORNER_SMOOTHING` (design spec: "floating panels and windows stay
+/// circular").
 pub fn panel<M>(material: Material, radius: f32, theme: &Theme) -> Element<M> {
     let mut el = col()
         .material(material, theme)
         .rounded(radius)
-        .smoothing(CORNER_SMOOTHING);
+        .smoothing(if material.floats() {
+            0.0
+        } else {
+            CORNER_SMOOTHING
+        });
     if let Some(sh) = material.shadow() {
         el = el.shadow(sh);
     }
@@ -75,11 +84,16 @@ pub fn card<M>(theme: &Theme) -> Element<M> {
 
 // ── Scrim & dialog ───────────────────────────────────────────────────────────
 
-/// Full-surface modal dim at 45% black (Containers board: "scrim 45%").
-/// Fills its parent and captures pointer input so nothing below is reachable;
-/// chain `.on_click(..)` for a tap-to-dismiss affordance.
+/// Full-surface modal dim: `BLACK` at 45% (Containers board "scrim 45%",
+/// `docs/design-spec.md` scrim rule). Fills its parent and is `input_opaque`,
+/// so clicks, wheel scrolls, and hover queries can never reach content below
+/// — even without the optional tap-to-dismiss `.on_click(..)`.
 pub fn scrim<M>() -> Element<M> {
-    box_().w_full().h_full().bg(Rgba::new(0.0, 0.0, 0.0, 0.45))
+    box_()
+        .w_full()
+        .h_full()
+        .input_opaque()
+        .bg(Rgba::from_color(Color::BLACK).with_alpha(0.45))
 }
 
 /// Content and behavior of a [`dialog`] layer.
@@ -232,10 +246,9 @@ pub enum DividerStyle {
 pub fn divider<M>(orientation: Orientation, style: DividerStyle, theme: &Theme) -> Element<M> {
     let color = match style {
         DividerStyle::Standard => Rgba::from_color(theme.scheme.outline_variant),
-        DividerStyle::OnGlass => match theme.variant {
-            Variant::Dark => Rgba::new(1.0, 1.0, 1.0, 0.12),
-            Variant::Light => Rgba::new(0.0, 0.0, 0.0, 0.10),
-        },
+        DividerStyle::OnGlass => {
+            Rgba::from_color(theme.scheme.on_surface).with_alpha(STATE_LAYER.disabled_container)
+        }
     };
     let el = match orientation {
         Orientation::Horizontal => box_().w_full().h(1.0),

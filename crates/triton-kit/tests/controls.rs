@@ -6,6 +6,7 @@
 
 use std::time::{Duration, Instant};
 
+use triton_design::color::STATE_LAYER;
 use triton_engine::anim::Animator;
 use triton_engine::gpu::{DrawBatch, DrawList, QuadInstance};
 use triton_engine::image::ImageStore;
@@ -990,7 +991,12 @@ fn slider_on_glass_track_contrast_differs_from_standard() {
             SliderSurface::Standard,
             Rgba::from_color(theme.scheme.surface_container_highest).to_array(),
         ),
-        (SliderSurface::OnGlass, [1.0, 1.0, 1.0, 0.20]),
+        (
+            SliderSurface::OnGlass,
+            Rgba::from_color(theme.scheme.on_surface)
+                .with_alpha(STATE_LAYER.drag)
+                .to_array(),
+        ),
     ] {
         let mut dl = DrawList::default();
         slider_frame(

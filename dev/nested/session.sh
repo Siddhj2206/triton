@@ -62,4 +62,8 @@ export XDG_CACHE_HOME="$SCRATCH_HOME/.cache"
 export XDG_STATE_HOME="$SCRATCH_HOME/.local/state"
 export WAYLAND_DISPLAY="$HOST_SOCKET"
 
-exec niri -c "$XDG_CONFIG_HOME/niri/config.kdl" -- "$BIN" "$@"
+# Foreground child + `wait`, never `exec`: `exec` would replace this shell so
+# the EXIT trap above would never run and $RT would leak into target/.
+niri -c "$XDG_CONFIG_HOME/niri/config.kdl" -- "$BIN" "$@" &
+pid=$!
+wait "$pid"

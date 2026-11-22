@@ -475,7 +475,10 @@ impl ShowcaseApp {
         shadow_gutter(bar)
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "gallery section enumerates every demo inline; splitting per-widget helpers would scatter the showcase narrative"
+    )]
     fn view_right_island(&self, ctx: &mut ViewContext<'_>) -> Element<Msg> {
         let t = &self.theme;
         let clock = row()
@@ -788,7 +791,10 @@ impl ShowcaseApp {
 
     // ── Section 1: Surfaces ──────────────────────────────────────────────────
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "gallery section enumerates every demo inline; splitting per-widget helpers would scatter the showcase narrative"
+    )]
     fn sec_surfaces(&self, ctx: &mut ViewContext<'_>) -> Vec<Element<Msg>> {
         let t = &self.theme;
         let mats = [
@@ -1055,7 +1061,10 @@ impl ShowcaseApp {
         ]
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "gallery section enumerates every demo inline; splitting per-widget helpers would scatter the showcase narrative"
+    )]
     fn button_groups_extras(&self, ctx: &mut ViewContext<'_>) -> Element<Msg> {
         let t = &self.theme;
         let ib_icons = [
@@ -1291,7 +1300,10 @@ impl ShowcaseApp {
 
     // ── Section 3: Controls ──────────────────────────────────────────────────
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "gallery section enumerates every demo inline; splitting per-widget helpers would scatter the showcase narrative"
+    )]
     fn sec_controls(&self, ctx: &mut ViewContext<'_>) -> Vec<Element<Msg>> {
         let t = &self.theme;
         let switch_row = row().gap(28.0).wrap().children([
@@ -1418,7 +1430,6 @@ impl ShowcaseApp {
         ]
     }
 
-    #[allow(clippy::too_many_lines)]
     fn slider_demos(&self, ctx: &mut ViewContext<'_>) -> Element<Msg> {
         let t = &self.theme;
         let caption = |name: &str, value: f32| {
@@ -1497,7 +1508,10 @@ impl ShowcaseApp {
 
     // ── Section 4: Inputs ────────────────────────────────────────────────────
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "gallery section enumerates every demo inline; splitting per-widget helpers would scatter the showcase narrative"
+    )]
     fn sec_inputs(&self, ctx: &mut ViewContext<'_>) -> Vec<Element<Msg>> {
         let t = &self.theme;
         // Fire the wrong-password shake exactly once per failed submit — the
@@ -1669,7 +1683,6 @@ impl ShowcaseApp {
         ]
     }
 
-    #[allow(clippy::too_many_lines)]
     fn status_pill_row(&self, ctx: &mut ViewContext<'_>) -> Element<Msg> {
         let t = &self.theme;
         let mut mk = |status: PillStatus, key: &'static str, glyph: Icon, label: &'static str| {
@@ -1751,8 +1764,8 @@ impl ShowcaseApp {
             .child(icon_disc_styled(
                 Icon::Call,
                 48.0,
-                Rgba::new(0.549, 0.839, 0.627, 1.0), // call-accept green
-                Rgba::new(0.0, 0.224, 0.106, 1.0),
+                t.scheme.tertiary,
+                t.scheme.on_tertiary,
             ))
             .child(wave_avatar("SK", 48.0, t))
             .child_opt(
@@ -1984,7 +1997,10 @@ impl ShowcaseApp {
             ))
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "gallery section enumerates every demo inline; splitting per-widget helpers would scatter the showcase narrative"
+    )]
     fn toast_row(&self, ctx: &mut ViewContext<'_>) -> Element<Msg> {
         let t = &self.theme;
         let mut cards = col().w_full().gap(12.0);
@@ -2138,21 +2154,33 @@ impl ShellApp for ShowcaseApp {
 
     fn surfaces(&self) -> Vec<(SurfaceId, SurfaceSpec)> {
         let now = Instant::now();
+        // `SurfaceSpec::island`'s default max_h (120) would clip the FLOATING
+        // shadow gutter (blur 40 → pad 80, offset 16 → 64 top / 96 bottom);
+        // grow it to fit the 56px pill plus gutter, and use the spec's 8px
+        // top offset (docs/design-spec.md).
+        let island_spec = |namespace: &str, anchor: SurfaceAnchor, margin: (i32, i32, i32, i32)| {
+            let mut spec = SurfaceSpec::island(namespace, anchor, margin);
+            spec.sizing = SurfaceSize::FitContent {
+                max_w: Some(1400),
+                max_h: Some(56 + 64 + 96),
+            };
+            spec
+        };
         let mut out = vec![
             (
                 SurfaceId::LeftIsland,
-                SurfaceSpec::island(
+                island_spec(
                     "triton-bar-left",
                     SurfaceAnchor::TOP | SurfaceAnchor::LEFT,
-                    (4, 0, 0, 0),
+                    (8, 0, 0, 0),
                 ),
             ),
             (
                 SurfaceId::RightIsland,
-                SurfaceSpec::island(
+                island_spec(
                     "triton-bar-right",
                     SurfaceAnchor::TOP | SurfaceAnchor::RIGHT,
-                    (0, 4, 0, 0),
+                    (8, 4, 0, 0),
                 ),
             ),
         ];
@@ -2167,9 +2195,11 @@ impl ShellApp for ShowcaseApp {
                     margin: (0, 0, 0, 0),
                     keyboard: SurfaceKeyboard::Exclusive,
                     exclusive_zone: -1,
+                    // 1000px card + FLOATING_LARGE gutter (blur 80 → 160 sides,
+                    // offset 30 → 130 top / 190 bottom) so the shadow never clips.
                     sizing: SurfaceSize::FitContent {
-                        max_w: Some(1200),
-                        max_h: Some(880),
+                        max_w: Some(1000 + 2 * 160),
+                        max_h: Some(960 + 130 + 190),
                     },
                     shaped_input: true,
                 },
@@ -2187,7 +2217,10 @@ impl ShellApp for ShowcaseApp {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "gallery section enumerates every demo inline; splitting per-widget helpers would scatter the showcase narrative"
+    )]
     fn update(&mut self, _id: SurfaceId, msg: Msg, now: Instant) -> Vec<AppCommand<SurfaceId>> {
         match msg {
             Msg::ToggleGallery => {
@@ -2379,17 +2412,11 @@ impl ShellApp for ShowcaseApp {
 
     fn is_animating(&self, id: SurfaceId, now: Instant) -> bool {
         match id {
-            SurfaceId::LeftIsland => self.media_playing && !self.reduce_motion,
-            SurfaceId::RightIsland => false,
-            // Waves, the meter, and the indeterminate bar all derive from the
-            // animator clock — repaint every frame while the gallery is open
-            // (engine Animator separately keeps springs + the shake alive).
-            // Under reduce_motion those freeze to static forms, so only the
-            // functional countdown drain keeps repainting.
-            SurfaceId::Gallery => {
-                self.gallery_visible(now)
-                    && (!self.reduce_motion || self.countdown_progress(now) > 0.0)
-            }
+            // Clock-driven indicators (media meter, indeterminate progress,
+            // countdown ring) register continuous frames on the host Animator
+            // themselves — the app only drives its own gallery open/close spring.
+            SurfaceId::Gallery => self.gallery_visible(now) && !self.gallery_anim.is_settled(now),
+            _ => false,
         }
     }
 
@@ -2582,22 +2609,6 @@ mod tests {
             &mut dl,
         );
         (frame, interaction, dl)
-    }
-
-    /// Click center of the hit entry keyed `key`.
-    fn click(frame: &BuiltFrame<Msg>, interaction: &mut InteractionState, key: &str) -> Vec<Msg> {
-        let rect = frame
-            .hits
-            .iter()
-            .find(|e| e.key == Some(NodeKey::named(key)))
-            .map(|e| e.rect)
-            .unwrap_or_else(|| panic!("hit target {key} missing"));
-        let (x, y) = (rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
-        frame.dispatch_event(&InputEvent::PointerMove { x, y }, interaction);
-        frame.dispatch_event(&InputEvent::PointerDown { x, y, button: 272 }, interaction);
-        frame
-            .dispatch_event(&InputEvent::PointerUp { x, y, button: 272 }, interaction)
-            .0
     }
 
     #[test]

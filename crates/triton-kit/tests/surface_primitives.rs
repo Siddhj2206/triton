@@ -5,7 +5,9 @@
 
 use std::time::{Duration, Instant};
 
+use triton_design::color::STATE_LAYER;
 use triton_design::material::{Material, ShadowToken};
+use triton_design::shape::CORNER_SMOOTHING;
 use triton_engine::anim::Animator;
 use triton_engine::gpu::{
     DrawBatch, DrawList, EdgeFade, KIND_FILL, KIND_SHADOW, KIND_TOP_HIGHLIGHT, QuadInstance,
@@ -152,6 +154,39 @@ fn panel_paints_highlight_shadow_and_border_per_material() {
 }
 
 #[test]
+fn panel_smoothing_matches_material_float_state() {
+    // Floating materials (Glass, Thick) stay circular to match niri's window
+    // corners; grounded materials (Solid, Mica) keep CORNER_SMOOTHING.
+    let mut text = TextEngine::new();
+    for (mat, smoothing) in [
+        (Material::Solid, CORNER_SMOOTHING),
+        (Material::Mica, CORNER_SMOOTHING),
+        (Material::Glass, 0.0),
+        (Material::Thick, 0.0),
+    ] {
+        let mut dl = DrawList::default();
+        paint::<Msg>(
+            panel(mat, 16.0, &Theme::dark()).w(80.0).h(50.0),
+            (80.0, 50.0),
+            1.0,
+            &InteractionState::default(),
+            &mut text,
+            &mut dl,
+        );
+        let body = quads(&dl)
+            .into_iter()
+            .map(|q| q.2)
+            .find(|q| q.misc[0] == KIND_FILL || q.misc[0] == KIND_TOP_HIGHLIGHT)
+            .expect("panel body quad");
+        assert!(
+            (body.misc[1] - smoothing).abs() < EPS,
+            "{mat:?} smoothing {} (expected {smoothing})",
+            body.misc[1]
+        );
+    }
+}
+
+#[test]
 fn material_fill_matches_theme_tints() {
     let mut text = TextEngine::new();
     let mut dl = DrawList::default();
@@ -274,6 +309,164 @@ fn action_button(
             ..Default::default()
         },
     )
+}
+
+#[test]
+fn scrim_blocks_clicks_scrolls_and_hover_below() {
+    let mut text = TextEngine::new();
+    let mut dl = DrawList::default();
+    let mut interaction = InteractionState::default();
+    let mut anim = Animator::new();
+    let theme = Theme::dark();
+    let t0 = Instant::now();
+
+    // A clickable button and a scrollable column sit *below* the scrim.
+    let below = triton_kit::button(
+        &theme,
+        &interaction,
+        &mut anim,
+        triton_kit::Button {
+            key: "below".into(),
+            label: "Below".into(),
+            on_click: Some(Box::new(|| Msg::Action("below"))),
+            ..Default::default()
+        },
+    );
+    let scroller = scroll_area::<Msg>(
+        "sa-below",
+        120.0,
+        ScrollAreaOptions::default(),
+        &theme,
+        &interaction,
+        &mut anim,
+        (0..8).map(|_| box_().w(160.0).h(40.0).bg(Rgba::WHITE)),
+    );
+    anim.begin_frame(t0, false);
+    let frame = paint(
+        box_().w_full().h_full().children([
+            col().children([below, scroller]),
+            scrim().absolute().inset_all(0.0),
+        ]),
+        (300.0, 200.0),
+        1.0,
+        &interaction,
+        &mut text,
+        &mut dl,
+    );
+
+    // Hover: the covered button key is invisible to hover queries.
+    frame.dispatch_event(
+        &InputEvent::PointerMove { x: 40.0, y: 30.0 },
+        &mut interaction,
+    );
+    assert!(
+        !interaction.hovered_keys.contains(&NodeKey::named("below")),
+        "hover must not reach through the scrim: {:?}",
+        interaction.hovered_keys
+    );
+    // Click: press+release on the scrim never fires the button below.
+    frame.dispatch_event(
+        &InputEvent::PointerDown {
+            x: 40.0,
+            y: 30.0,
+            button: 272,
+        },
+        &mut interaction,
+    );
+    let (msgs, _) = frame.dispatch_event(
+        &InputEvent::PointerUp {
+            x: 40.0,
+            y: 30.0,
+            button: 272,
+        },
+        &mut interaction,
+    );
+    assert!(msgs.is_empty(), "scrim swallows clicks: {msgs:?}");
+    // Wheel: the scroll container below receives nothing.
+    frame.dispatch_event(
+        &InputEvent::Scroll {
+            x: 40.0,
+            y: 80.0,
+            delta_y: 60.0,
+        },
+        &mut interaction,
+    );
+    assert!(
+        interaction.scroll_offset(NodeKey::named("sa-below")).abs() < EPS,
+        "wheel must not scroll content behind the scrim"
+    );
+}
+
+#[test]
+fn dialog_without_dismiss_still_blocks_input_below() {
+    let mut text = TextEngine::new();
+    let mut dl = DrawList::default();
+    let mut interaction = InteractionState::default();
+    let theme = Theme::dark();
+
+    // Non-dismissable dialog (on_dismiss: None): the scrim still has to eat
+    // every click/scroll so nothing beneath is reachable.
+    let below = triton_kit::button(
+        &theme,
+        &interaction,
+        &mut Animator::new(),
+        triton_kit::Button {
+            key: "below".into(),
+            label: "Below".into(),
+            on_click: Some(Box::new(|| Msg::Action("below"))),
+            ..Default::default()
+        },
+    );
+    let frame = paint(
+        box_().w_full().h_full().children([
+            box_().p(Edges::all(20.0)).child(below),
+            dialog(
+                &theme,
+                Dialog {
+                    title: Some("Working".into()),
+                    on_dismiss: None,
+                    ..Default::default()
+                },
+            )
+            .absolute()
+            .inset_all(0.0),
+        ]),
+        (600.0, 400.0),
+        1.0,
+        &interaction,
+        &mut text,
+        &mut dl,
+    );
+
+    frame.dispatch_event(
+        &InputEvent::PointerMove { x: 30.0, y: 30.0 },
+        &mut interaction,
+    );
+    assert!(
+        !interaction.hovered_keys.contains(&NodeKey::named("below")),
+        "hover must stop at the scrim: {:?}",
+        interaction.hovered_keys
+    );
+    frame.dispatch_event(
+        &InputEvent::PointerDown {
+            x: 30.0,
+            y: 30.0,
+            button: 272,
+        },
+        &mut interaction,
+    );
+    let (msgs, _) = frame.dispatch_event(
+        &InputEvent::PointerUp {
+            x: 30.0,
+            y: 30.0,
+            button: 272,
+        },
+        &mut interaction,
+    );
+    assert!(
+        msgs.is_empty(),
+        "non-dismissable scrim still swallows clicks: {msgs:?}"
+    );
 }
 
 #[test]
@@ -428,7 +621,9 @@ fn divider_is_1px_outline_variant_hairline() {
     assert!((qs[0].2.dst[2] - 350.0).abs() < EPS, "w_full");
     assert_eq!(
         qs[1].2.fill,
-        [1.0, 1.0, 1.0, 0.12],
+        Rgba::from_color(theme.scheme.on_surface)
+            .with_alpha(STATE_LAYER.disabled_container)
+            .to_array(),
         "on-glass dark hairline"
     );
     assert!((qs[1].2.dst[2] - 1.75).abs() < EPS);

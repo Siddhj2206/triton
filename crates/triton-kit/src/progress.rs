@@ -8,8 +8,6 @@
 //! degrades to the standard 120ms fades and static indicators globally.
 
 use std::f32::consts::{FRAC_PI_2, TAU};
-use std::sync::OnceLock;
-use std::time::Instant;
 
 use triton_design::motion::Spring;
 use triton_design::shape::Point;
@@ -17,15 +15,6 @@ use triton_design::wave::{self, CIRCULAR_AMPLITUDE_AT_34, LINEAR_AMPLITUDE};
 use triton_engine::anim::Animator;
 use triton_engine::style::{Rgba, Theme};
 use triton_engine::ui::{Element, NodeKey, box_, polyline, row};
-
-/// Seconds since the first clock-driven indicator painted. Anchored once per
-/// process so `anim.now()` maps to deterministic seconds — animation is a
-/// pure function of the animator clock, never a free-running wall clock.
-fn clock_secs(now: Instant) -> f32 {
-    static EPOCH: OnceLock<Instant> = OnceLock::new();
-    now.saturating_duration_since(*EPOCH.get_or_init(Instant::now))
-        .as_secs_f32()
-}
 
 /// Wave phase drift while work is in flight (rad/s).
 const PHASE_SPEED: f32 = 4.0;
@@ -73,7 +62,7 @@ pub fn wavy_progress<M>(
     let phase = if anim.reduce_motion() {
         0.0
     } else {
-        clock_secs(anim.now()) * PHASE_SPEED
+        anim.elapsed_secs() * PHASE_SPEED
     };
 
     let track_el = polyline(
@@ -98,15 +87,18 @@ pub fn wavy_progress<M>(
                 // Complete: the wave flattens into a solid line.
                 (vec![Point::new(0.0, cy), Point::new(width, cy)], 0.0)
             } else {
+                // Phase drifts while work is in flight.
+                anim.request_continuous_frame();
                 (wave::wavy_line(Point::new(0.0, cy), width, p, phase), 0.0)
             }
         }
         Progress::Indeterminate => {
+            anim.request_continuous_frame();
             let window = width * INDETERMINATE_WINDOW;
             let x = if anim.reduce_motion() {
                 (width - window) * 0.5
             } else {
-                let frac = (clock_secs(anim.now()) / INDETERMINATE_PERIOD).fract();
+                let frac = (anim.elapsed_secs() / INDETERMINATE_PERIOD).fract();
                 (width + window).mul_add(frac, -window)
             };
             (wave::wavy_line(Point::new(0.0, cy), window, 1.0, phase), x)
@@ -159,8 +151,12 @@ pub fn wavy_ring<M>(
     let phase = if anim.reduce_motion() {
         0.0
     } else {
-        clock_secs(anim.now()) * PHASE_SPEED
+        anim.elapsed_secs() * PHASE_SPEED
     };
+    // Lobes ripple while the ring is non-trivial.
+    if progress > f32::EPSILON && progress < 1.0 {
+        anim.request_continuous_frame();
+    }
 
     let track_el = polyline(
         ring_track_points(center, wave_r),
@@ -218,7 +214,8 @@ pub fn level_meter<M>(
         MeterMode::Levels(levels) => levels.map(|v| v.clamp(0.0, 1.0)),
         MeterMode::Playing if anim.reduce_motion() => [0.4, 0.65, 0.5],
         MeterMode::Playing => {
-            let t = clock_secs(anim.now());
+            anim.request_continuous_frame();
+            let t = anim.elapsed_secs();
             [0.3, 1.0, 2.0]
                 .map(|i| 0.3 + 0.55 * (0.5 + 0.5 * (t * (2.4 + i * 1.1) + i * 2.1).sin()))
         }
