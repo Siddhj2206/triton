@@ -17,6 +17,7 @@ triton-ui = { path = "crates/triton-ui" }
 anyhow = "1"
 chrono = { version = "0.4.45", default-features = false }
 cosmic-text = { version = "0.15", default-features = false }
+etagere = { version = "0.2", default-features = false }
 freedesktop-desktop-entry = { version = "0.8.4", default-features = false }
 glow = { version = "0.16", default-features = false }
 image = { version = "0.25", default-features = false }

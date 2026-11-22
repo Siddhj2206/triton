@@ -578,3 +578,92 @@ fn glass_and_thick_panels_collect_blur_and_input_rects_while_solid_only_collects
     assert_eq!(shadow_count, 2, "Glass + Thick floating shadows");
     assert_eq!(fill_count, 1, "Solid fill quad");
 }
+
+// ── 7. DropShadow cutout flag and gutter() calculation ───────────────────────
+
+#[test]
+fn drop_shadow_cutout_flag_and_gutter_margins() {
+    let shadow = DropShadow {
+        offset_x: 2.0,
+        offset_y: 8.0,
+        blur: 14.0,
+        spread: 1.0,
+        color: Rgba::new(0.0, 0.0, 0.0, 0.35),
+    };
+
+    // Gutter covers blur*2 + spread plus directional offsets, never negative.
+    let g = shadow.gutter();
+    // pad = 14*2 + 1 = 29; top = 29-8 = 21, right = 29+2 = 31, bottom = 29+8 = 37, left = 29-2 = 27
+    assert_approx(g.top, 21.0, "gutter top");
+    assert_approx(g.right, 31.0, "gutter right");
+    assert_approx(g.bottom, 37.0, "gutter bottom");
+    assert_approx(g.left, 27.0, "gutter left");
+    assert!(g.top >= 0.0 && g.right >= 0.0 && g.bottom >= 0.0 && g.left >= 0.0);
+
+    // Extreme offset clamps opposite side to 0.0 rather than going negative.
+    let extreme = DropShadow {
+        offset_x: 100.0,
+        offset_y: -100.0,
+        blur: 4.0,
+        spread: 0.0,
+        color: Rgba::new(0.0, 0.0, 0.0, 0.5),
+    };
+    let eg = extreme.gutter();
+    assert_approx(eg.left, 0.0, "extreme gutter left clamped");
+    assert_approx(eg.bottom, 0.0, "extreme gutter bottom clamped");
+    assert!(eg.right >= 108.0 && eg.top >= 108.0);
+
+    // Translucent fill (a < 0.99) enables interior shadow cutout (border[3] == 1.0);
+    // opaque fill (a == 1.0) disables cutout (border[3] == 0.0).
+    let mut text = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+
+    let root: Element<()> = row()
+        .w(300.0)
+        .h(120.0)
+        .p(20.0)
+        .gap(20.0)
+        .child(
+            box_()
+                .w(80.0)
+                .h(60.0)
+                .rounded(12.0)
+                .bg(Rgba::new(0.2, 0.2, 0.2, 0.72))
+                .shadow(shadow),
+        )
+        .child(
+            box_()
+                .w(80.0)
+                .h(60.0)
+                .rounded(12.0)
+                .bg(Rgba::new(0.2, 0.2, 0.2, 1.0))
+                .shadow(shadow),
+        );
+
+    layout_and_paint(
+        root,
+        (Some(300.0), Some(120.0)),
+        1.0,
+        &interaction,
+        &mut text,
+        &mut draw_list,
+    );
+
+    let shadow_quads: Vec<QuadInstance> = collect_quads(&draw_list)
+        .into_iter()
+        .map(|(_, q)| q)
+        .filter(|q| (q.misc[0] - KIND_SHADOW).abs() < EPS)
+        .collect();
+    assert_eq!(shadow_quads.len(), 2, "two shadow quads emitted");
+    assert_approx(
+        shadow_quads[0].border[3],
+        1.0,
+        "translucent fill enables cutout",
+    );
+    assert_approx(
+        shadow_quads[1].border[3],
+        0.0,
+        "opaque fill disables cutout",
+    );
+}

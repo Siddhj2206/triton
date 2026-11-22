@@ -17,16 +17,16 @@ use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 use triton_design::icon::{Icon, IconStyle};
-use triton_design::material::Material;
+use triton_design::material::{Material, ShadowToken};
 use triton_design::motion::{Animated, Motion, Spring};
 use triton_design::shape::{CORNER_SMOOTHING, RADII, list_corners};
 use triton_design::typography::TypeStyle;
 use triton_engine::{
-    AppCommand, ButtonTone, Corners, Edges, Element, FontSpec, InputEvent, Key, NodeKey, Rgba,
-    ShellApp, SubtreeTransform, SurfaceAnchor, SurfaceKeyboard, SurfaceLayer, SurfaceMetrics,
-    SurfaceSize, SurfaceSpec, SwitchState, TextInputAction, TextInputState, Theme, ViewContext,
-    box_, button, col, concentric_inner, icon, icon_button, island, panel, pill, row, run,
-    scroll_area, slider, switch, text, text_input,
+    AppCommand, ButtonTone, Corners, DropShadow, Edges, Element, FontSpec, InputEvent, Key,
+    NodeKey, Rgba, ShellApp, SubtreeTransform, SurfaceAnchor, SurfaceKeyboard, SurfaceLayer,
+    SurfaceMetrics, SurfaceSize, SurfaceSpec, SwitchState, TextInputAction, TextInputState, Theme,
+    ViewContext, box_, button, col, concentric_inner, icon, icon_button, island, panel, pill, row,
+    run, scroll_area, slider, switch, text, text_input,
 };
 
 const TIMER_OPEN_PANEL: u32 = 1;
@@ -131,7 +131,6 @@ enum Msg {
 struct ShowcaseApp {
     theme: Theme,
     active_ws: usize,
-    ws_morph: [Animated; WORKSPACES],
     launcher_open: bool,
     launcher_anim: Animated,
     search: TextInputState,
@@ -149,10 +148,6 @@ struct ShowcaseApp {
 
 impl ShowcaseApp {
     fn new(now: Instant) -> Self {
-        let proto = Animated::new(0.0, Motion::Spring(Spring::SPATIAL_FAST), 0.005, now);
-        let mut ws_morph = [proto; WORKSPACES];
-        ws_morph[0].snap(1.0, now);
-
         let auto_open = std::env::var_os("SHOWCASE_OPEN").is_some();
         let quit_ms = std::env::var("SHOWCASE_QUIT_MS")
             .ok()
@@ -166,7 +161,6 @@ impl ShowcaseApp {
         Self {
             theme: Theme::dark(),
             active_ws: 0,
-            ws_morph,
             launcher_open: false,
             launcher_anim: Animated::new(0.0, Motion::Spring(Spring::SPATIAL), 0.002, now),
             search: TextInputState::new(initial_query),
@@ -223,19 +217,16 @@ impl ShowcaseApp {
         vec![AppCommand::Redraw(SurfaceId::Launcher)]
     }
 
-    fn select_workspace(&mut self, idx: usize, now: Instant) {
+    fn select_workspace(&mut self, idx: usize) {
         if idx >= WORKSPACES || idx == self.active_ws {
             return;
         }
         self.active_ws = idx;
-        for (i, anim) in self.ws_morph.iter_mut().enumerate() {
-            anim.set_target(f32::from(u8::from(i == idx)), now);
-        }
     }
 
     // ── Views ────────────────────────────────────────────────────────────────
 
-    fn view_left_island(&self, now: Instant) -> Element<Msg> {
+    fn view_left_island(&self, ctx: &mut ViewContext<'_>) -> Element<Msg> {
         let t = &self.theme;
         // Shadow pad around the island ensures drop shadow never clips at the surface edge!
         let mut bar = island(t).child(icon_button(
@@ -251,10 +242,12 @@ impl ShowcaseApp {
 
         bar = bar.child(box_().w(6.0).h(1.0));
 
-        for (i, anim) in self.ws_morph.iter().enumerate() {
-            let m = anim.value(now);
+        for i in 0..WORKSPACES {
+            let key = NodeKey::from_pair("ws", i);
+            let target = f32::from(u8::from(i == self.active_ws));
+            let m = ctx.anim.spring(key, target, Spring::SPATIAL_FAST);
             bar = bar.child(pill(
-                NodeKey::from_pair("ws", i),
+                key,
                 (i + 1).to_string(),
                 m,
                 40.0,
@@ -293,21 +286,29 @@ impl ShowcaseApp {
             );
 
         // Wrap in transparent shadow gutter so the island's soft shadow is never clipped.
-        box_().p(Edges::new(8.0, 24.0, 32.0, 16.0)).child(bar)
+        box_()
+            .p(DropShadow::from(ShadowToken::FLOATING).gutter())
+            .child(bar)
     }
 
-    fn view_right_island(&self) -> Element<Msg> {
+    fn view_right_island(&self, ctx: &mut ViewContext<'_>) -> Element<Msg> {
         let t = &self.theme;
-        let status_bg = if self.wifi.checked {
+        let target_bg = if self.wifi.checked {
             Rgba::from_color(t.scheme.primary_container)
         } else {
             Rgba::from_color(t.scheme.tertiary_container)
         };
-        let status_fg = if self.wifi.checked {
+        let target_fg = if self.wifi.checked {
             Rgba::from_color(t.scheme.on_primary_container)
         } else {
             Rgba::from_color(t.scheme.on_tertiary_container)
         };
+        let status_bg = ctx
+            .anim
+            .color("status-pill-bg", target_bg, Spring::EFFECTS_FAST);
+        let status_fg = ctx
+            .anim
+            .color("status-pill-fg", target_fg, Spring::EFFECTS_FAST);
 
         let clock = row()
             .px(14.0)
@@ -388,7 +389,9 @@ impl ShowcaseApp {
         );
 
         let bar = island(t).child(clock).child(status_pill).child(bell);
-        box_().p(Edges::new(8.0, 16.0, 32.0, 24.0)).child(bar)
+        box_()
+            .p(DropShadow::from(ShadowToken::FLOATING).gutter())
+            .child(bar)
     }
 
     fn view_launcher(&self, ctx: &mut ViewContext<'_>) -> Element<Msg> {
@@ -467,7 +470,9 @@ impl ShowcaseApp {
             .child(footer);
 
         // Transparent shadow gutter around the Thick panel — no broken fullscreen dark scrim!
-        box_().p(Edges::new(40.0, 56.0, 72.0, 56.0)).child(card)
+        box_()
+            .p(DropShadow::from(ShadowToken::FLOATING).gutter())
+            .child(card)
     }
 
     fn view_app_list(&self) -> Element<Msg> {
@@ -846,8 +851,8 @@ impl ShellApp for ShowcaseApp {
 
     fn view(&self, id: SurfaceId, ctx: &mut ViewContext<'_>) -> Element<Msg> {
         match id {
-            SurfaceId::LeftIsland => self.view_left_island(ctx.now),
-            SurfaceId::RightIsland => self.view_right_island(),
+            SurfaceId::LeftIsland => self.view_left_island(ctx),
+            SurfaceId::RightIsland => self.view_right_island(ctx),
             SurfaceId::Launcher => self.view_launcher(ctx),
         }
     }
@@ -869,7 +874,7 @@ impl ShellApp for ShowcaseApp {
                 cmds
             }
             Msg::SelectWorkspace(i) => {
-                self.select_workspace(i, now);
+                self.select_workspace(i);
                 vec![AppCommand::Redraw(SurfaceId::LeftIsland)]
             }
             Msg::SearchEvent(ev) => {
@@ -942,7 +947,7 @@ impl ShellApp for ShowcaseApp {
 
     fn is_animating(&self, id: SurfaceId, now: Instant) -> bool {
         match id {
-            SurfaceId::LeftIsland => self.ws_morph.iter().any(|a| !a.is_settled(now)),
+            SurfaceId::LeftIsland => false,
             SurfaceId::RightIsland => self.dnd.is_animating(now),
             SurfaceId::Launcher => {
                 !self.launcher_anim.is_settled(now)
@@ -980,7 +985,7 @@ impl ShellApp for ShowcaseApp {
     fn on_timer(&mut self, tag: u32, now: Instant) -> Vec<AppCommand<SurfaceId>> {
         match tag {
             TIMER_SELECT_WS => {
-                self.select_workspace(1, now);
+                self.select_workspace(1);
                 vec![AppCommand::Redraw(SurfaceId::LeftIsland)]
             }
             TIMER_OPEN_PANEL => {

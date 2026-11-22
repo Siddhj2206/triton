@@ -13,6 +13,7 @@ use std::hash::{Hash, Hasher};
 use cosmic_text::{
     Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, SwashCache, SwashContent, Weight,
 };
+use etagere::{AllocId, AtlasAllocator, size2};
 use glow::HasContext;
 
 use crate::gpu::GlyphInstance;
@@ -49,6 +50,7 @@ impl std::fmt::Debug for CachedRun {
 
 #[derive(Debug, Clone, Copy)]
 struct GlyphSlot {
+    alloc_id: AllocId,
     texel: [u32; 4],
     left: i32,
     top: i32,
@@ -56,15 +58,12 @@ struct GlyphSlot {
     last_frame: u64,
 }
 
-#[derive(Debug)]
-struct ShelfAtlas {
+struct GlyphAtlas {
     size: u32,
     bpp: usize,
     tex: Option<glow::Texture>,
     pixels: Vec<u8>,
-    cursor_x: u32,
-    cursor_y: u32,
-    shelf_h: u32,
+    allocator: AtlasAllocator,
     slots: HashMap<CacheKey, GlyphSlot>,
     dirty: Vec<[u32; 4]>,
     full_upload_needed: bool,
@@ -72,16 +71,29 @@ struct ShelfAtlas {
     resets: u64,
 }
 
-impl ShelfAtlas {
+impl std::fmt::Debug for GlyphAtlas {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GlyphAtlas")
+            .field("size", &self.size)
+            .field("bpp", &self.bpp)
+            .field("tex", &self.tex)
+            .field("slots", &self.slots.len())
+            .field("dirty", &self.dirty.len())
+            .field("full_upload_needed", &self.full_upload_needed)
+            .field("resets", &self.resets)
+            .finish_non_exhaustive()
+    }
+}
+
+impl GlyphAtlas {
     fn new(size: u32, bpp: usize) -> Self {
+        let size_i32 = size.cast_signed();
         Self {
             size,
             bpp,
             tex: None,
             pixels: vec![0; (size * size) as usize * bpp],
-            cursor_x: ATLAS_PAD,
-            cursor_y: ATLAS_PAD,
-            shelf_h: 0,
+            allocator: AtlasAllocator::new(size2(size_i32, size_i32)),
             slots: HashMap::new(),
             dirty: Vec::new(),
             full_upload_needed: true,
@@ -89,32 +101,84 @@ impl ShelfAtlas {
         }
     }
 
-    fn alloc(&mut self, w: u32, h: u32) -> Option<[u32; 4]> {
+    fn alloc(&mut self, w: u32, h: u32) -> Option<(AllocId, [u32; 4])> {
         if w == 0 || h == 0 || w + 2 * ATLAS_PAD > self.size || h + 2 * ATLAS_PAD > self.size {
             return None;
         }
-        if self.cursor_x + w + ATLAS_PAD > self.size {
-            self.cursor_x = ATLAS_PAD;
-            self.cursor_y += self.shelf_h + ATLAS_PAD;
-            self.shelf_h = 0;
-        }
-        if self.cursor_y + h + ATLAS_PAD > self.size {
-            return None;
-        }
-        let rect = [self.cursor_x, self.cursor_y, w, h];
-        self.cursor_x += w + ATLAS_PAD;
-        self.shelf_h = self.shelf_h.max(h);
+        let alloc_w = (w + 2 * ATLAS_PAD).cast_signed();
+        let alloc_h = (h + 2 * ATLAS_PAD).cast_signed();
+        let alloc = self.allocator.allocate(size2(alloc_w, alloc_h))?;
+        let rect = [
+            alloc.rectangle.min.x.cast_unsigned() + ATLAS_PAD,
+            alloc.rectangle.min.y.cast_unsigned() + ATLAS_PAD,
+            w,
+            h,
+        ];
         self.dirty.push(rect);
-        Some(rect)
+        Some((alloc.id, rect))
     }
 
-    /// Clear all cold slots and reset the shelf packer. Keeps the GL texture
+    /// Allocate space for a glyph, trying targeted LRU eviction of cold slots
+    /// (`last_frame < current_frame`) in batches before falling back to a full
+    /// atlas reset.
+    fn alloc_with_eviction(
+        &mut self,
+        w: u32,
+        h: u32,
+        current_frame: u64,
+        is_color: bool,
+    ) -> Option<(AllocId, [u32; 4])> {
+        if let Some(res) = self.alloc(w, h) {
+            return Some(res);
+        }
+
+        // Targeted LRU eviction: collect cold slots sorted oldest-first and evict
+        // in 25% batches until allocation succeeds or no cold slots remain.
+        let mut cold: Vec<(CacheKey, u64)> = self
+            .slots
+            .iter()
+            .filter(|(_, slot)| slot.last_frame < current_frame)
+            .map(|(&key, slot)| (key, slot.last_frame))
+            .collect();
+        cold.sort_unstable_by_key(|&(_, last_frame)| last_frame);
+
+        if !cold.is_empty() {
+            let batch_size = (cold.len() / 4).max(1);
+            let mut evicted = 0usize;
+            for chunk in cold.chunks(batch_size) {
+                for &(key, _) in chunk {
+                    if let Some(slot) = self.slots.remove(&key) {
+                        self.allocator.deallocate(slot.alloc_id);
+                        evicted += 1;
+                    }
+                }
+                if let Some(res) = self.alloc(w, h) {
+                    tracing::debug!(
+                        is_color,
+                        evicted,
+                        remaining = self.slots.len(),
+                        "evicted cold glyphs from atlas"
+                    );
+                    return Some(res);
+                }
+            }
+        }
+
+        // Fallback: fragmentation or every slot was used in `current_frame`.
+        tracing::debug!(
+            is_color,
+            resets = self.resets + 1,
+            "glyph atlas full; resetting allocator"
+        );
+        self.reset();
+        self.alloc(w, h)
+    }
+
+    /// Clear all slots and reset the atlas allocator. Keeps the GL texture
     /// allocation intact and marks it for a clean re-upload.
     fn reset(&mut self) {
         self.pixels.fill(0);
-        self.cursor_x = ATLAS_PAD;
-        self.cursor_y = ATLAS_PAD;
-        self.shelf_h = 0;
+        self.allocator.clear();
         self.slots.clear();
         self.dirty.clear();
         self.full_upload_needed = true;
@@ -270,8 +334,8 @@ pub struct TextEngine {
     font_system: FontSystem,
     swash: SwashCache,
     runs: HashMap<u64, CachedRun>,
-    mask: ShelfAtlas,
-    bitmap: ShelfAtlas,
+    mask: GlyphAtlas,
+    bitmap: GlyphAtlas,
     frame_gen: u64,
 }
 
@@ -293,8 +357,8 @@ impl TextEngine {
             font_system,
             swash: SwashCache::new(),
             runs: HashMap::new(),
-            mask: ShelfAtlas::new(MASK_ATLAS_SIZE, 1),
-            bitmap: ShelfAtlas::new(BITMAP_ATLAS_SIZE, 4),
+            mask: GlyphAtlas::new(MASK_ATLAS_SIZE, 1),
+            bitmap: GlyphAtlas::new(BITMAP_ATLAS_SIZE, 4),
             frame_gen: 1,
         }
     }
@@ -516,21 +580,11 @@ impl TextEngine {
             &mut self.mask
         };
 
-        let texel = if let Some(rect) = atlas.alloc(w, h) {
-            rect
-        } else {
-            // Atlas full: reset and re-allocate so long sessions never drop glyphs.
-            tracing::debug!(
-                is_color,
-                resets = atlas.resets + 1,
-                "glyph atlas full; resetting shelf packer"
-            );
-            atlas.reset();
-            atlas.alloc(w, h)?
-        };
+        let (alloc_id, texel) = atlas.alloc_with_eviction(w, h, self.frame_gen, is_color)?;
 
         atlas.write_pixels(texel, &image.data, is_color);
         let slot = GlyphSlot {
+            alloc_id,
             texel,
             left: image.placement.left,
             top: image.placement.top,
@@ -559,19 +613,110 @@ fn run_hash(text: &str, spec: &FontSpec, max_width: Option<f32>) -> u64 {
 mod tests {
     use super::*;
 
+    fn synthetic_key(id: u16) -> CacheKey {
+        CacheKey::new(
+            cosmic_text::fontdb::ID::dummy(),
+            id,
+            16.0,
+            (0.0, 0.0),
+            Weight::NORMAL,
+            cosmic_text::CacheKeyFlags::empty(),
+        )
+        .0
+    }
+
     #[test]
-    fn shelf_atlas_resets_when_exhausted() {
-        let mut atlas = ShelfAtlas::new(64, 1);
-        let mut allocated = 0;
-        for _ in 0..200 {
-            if atlas.alloc(16, 16).is_none() {
-                atlas.reset();
-                assert!(atlas.alloc(16, 16).is_some());
-            }
-            allocated += 1;
+    fn lru_eviction_frees_cold_glyphs_without_reset() {
+        let mut atlas = GlyphAtlas::new(64, 1);
+
+        // Fill the atlas across frames 1..=N so all existing glyphs are cold in frame 100.
+        let mut initial_count = 0u16;
+        while let Some((alloc_id, texel)) = atlas.alloc(16, 16) {
+            let key = synthetic_key(initial_count);
+            atlas.slots.insert(
+                key,
+                GlyphSlot {
+                    alloc_id,
+                    texel,
+                    left: 0,
+                    top: 0,
+                    is_color: false,
+                    last_frame: u64::from(initial_count) + 1,
+                },
+            );
+            initial_count += 1;
         }
-        assert_eq!(allocated, 200);
-        assert!(atlas.resets > 0);
+        assert!(initial_count > 0, "atlas should fit at least one glyph");
+
+        // Advance to a new frame: all existing glyphs are cold (last_frame < 100).
+        // Allocating new glyphs should evict cold slots without triggering a full reset.
+        let current_frame = 100;
+        let (alloc_id, texel) = atlas
+            .alloc_with_eviction(16, 16, current_frame, false)
+            .expect("eviction should free space for a new glyph");
+        let new_key = synthetic_key(1000);
+        atlas.slots.insert(
+            new_key,
+            GlyphSlot {
+                alloc_id,
+                texel,
+                left: 0,
+                top: 0,
+                is_color: false,
+                last_frame: current_frame,
+            },
+        );
+
+        assert_eq!(atlas.resets, 0, "cold eviction must not reset the atlas");
+        // The oldest glyph (frame 1) must have been evicted.
+        assert!(!atlas.slots.contains_key(&synthetic_key(0)));
+        // The newly allocated glyph must be present.
+        assert!(atlas.slots.contains_key(&new_key));
+    }
+
+    #[test]
+    fn hot_atlas_falls_back_to_reset() {
+        let mut atlas = GlyphAtlas::new(64, 1);
+        let current_frame = 10;
+
+        // Fill the atlas with glyphs all hot in `current_frame`.
+        let mut count = 0u16;
+        while let Some((alloc_id, texel)) = atlas.alloc(16, 16) {
+            let key = synthetic_key(count);
+            atlas.slots.insert(
+                key,
+                GlyphSlot {
+                    alloc_id,
+                    texel,
+                    left: 0,
+                    top: 0,
+                    is_color: false,
+                    last_frame: current_frame,
+                },
+            );
+            count += 1;
+        }
+        assert!(count > 0);
+        assert_eq!(atlas.resets, 0);
+
+        // Requesting another glyph in the same frame has no cold slots to evict,
+        // so it must fall back cleanly to `reset()`.
+        let (alloc_id, texel) = atlas
+            .alloc_with_eviction(16, 16, current_frame, false)
+            .expect("reset fallback should allocate the glyph");
+        atlas.slots.insert(
+            synthetic_key(999),
+            GlyphSlot {
+                alloc_id,
+                texel,
+                left: 0,
+                top: 0,
+                is_color: false,
+                last_frame: current_frame,
+            },
+        );
+        assert!(atlas.resets >= 1);
+        assert_eq!(atlas.slots.len(), 1);
     }
 
     #[test]

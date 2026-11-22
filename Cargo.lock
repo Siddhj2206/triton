@@ -2995,6 +2995,7 @@ name = "triton-engine"
 version = "0.1.0"
 dependencies = [
  "cosmic-text",
+ "etagere",
  "glow",
  "iced_core",
  "khronos-egl",
