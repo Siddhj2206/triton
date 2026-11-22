@@ -129,6 +129,8 @@ fn binds() -> String {
 
 /// niri's own colors, from the active scheme: the focus ring takes primary,
 /// the backdrop a darkened surface (color pipeline → niri, roadmap §4).
+/// `backdrop-color` moved into `overview {}` in niri 25.11 — keep it out of
+/// `layout` or niri fails the parse (`niri validate` is the probe).
 fn colors(scheme: &triton_design::Scheme) -> String {
     let hex8 = |c: iced_core::Color| hex(c);
     format!(
@@ -137,6 +139,8 @@ fn colors(scheme: &triton_design::Scheme) -> String {
         active-color \"{active}\"
         inactive-color \"{inactive}\"
     }}
+}}
+overview {{
     backdrop-color \"{backdrop}\"
 }}
 ",
@@ -257,12 +261,60 @@ pub fn install(scheme: &triton_design::Scheme) -> io::Result<()> {
     for (name, text) in render(scheme).into_iter().rev() {
         crate::util::write_if_changed(&dir, name, &text)?;
     }
+    // Capability probe (the audit's "niri validate" gate): a generated file
+    // niri can't parse would break the user's whole config — the include is
+    // `optional=true`, so deleting the bad file is strictly safer than
+    // leaving it. This is what `backdrop-color` in `layout` taught us.
+    for (name, _) in render(scheme) {
+        validate(&dir, name);
+    }
     ensure_include_line(&niri)
+}
+
+/// `niri validate` on a generated file. A parse failure deletes the file —
+/// the `optional=true` include then skips it instead of failing the config.
+/// Missing niri binary is fine; there is just nothing to probe with.
+fn validate(dir: &Path, name: &str) {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let Ok(mut child) = Command::new("niri")
+        .args(["validate", "-c"])
+        .arg(dir.join(name))
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    else {
+        return;
+    };
+    let mut err = Vec::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let _ = stderr.read_to_end(&mut err);
+    }
+    if !matches!(child.wait(), Ok(status) if status.success()) {
+        let detail = String::from_utf8_lossy(&err);
+        tracing::warn!(file = name, %detail, "niri validate failed; removing generated file");
+        let _ = fs::remove_file(dir.join(name));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backdrop_color_lives_in_overview_not_layout() {
+        // niri ≥25.11: `backdrop-color` inside `layout` fails validation.
+        let (_, colors) = render(&triton_design::Scheme::DARK)
+            .into_iter()
+            .find(|(n, _)| *n == "colors.kdl")
+            .expect("colors.kdl");
+        let before_overview = colors.split("overview {").next().expect("layout");
+        assert!(!before_overview.contains("backdrop-color"), "{colors}");
+        assert!(
+            colors.contains("overview {\n    backdrop-color"),
+            "{colors}"
+        );
+    }
 
     #[test]
     fn index_includes_every_other_file() {
