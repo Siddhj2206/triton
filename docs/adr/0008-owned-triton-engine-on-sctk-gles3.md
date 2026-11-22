@@ -1,10 +1,10 @@
 # 0008. Owned UI engine on SCTK and GLES3
 
-Status: accepted, November 2026. Supersedes ADR-0007.
+Status: accepted, November 2026.
 
 ## Context
 
-ADR-0007 moved rendering to iced's wgpu backend with MSAA ×4. That hit 90 fps, but carried two compounding costs:
+Earlier prototypes used `iced` (first tiny-skia, then wgpu with MSAA ×4). That carried two compounding costs:
 
 - **Footprint:** the bar alone used ~100 MB (47 MB PSS + 54 MB GPU memory) under Vulkan with MSAA ×4. Each additional shell process (`triton-lock`, `triton-greeter`) paid the same baseline.
 - **Framework friction:** iced's retained widget tree and redraw model fought the shell's motion and surface design. Spring-animated corner morphs, per-surface shadow gutters, exit animations on unmounting panels, and continuous 90–144 Hz motion all required working around iced rather than expressing them directly.
