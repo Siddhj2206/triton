@@ -101,6 +101,15 @@ fn session_script_uses_private_runtime_and_scratch_xdg_dirs() {
         SESSION_SH.contains("trap"),
         "missing trap cleanup for the private runtime dir"
     );
+    // Never inherit the host compositor's NIRI_SOCKET or real D-Bus session bus.
+    assert!(
+        SESSION_SH.contains("unset NIRI_SOCKET"),
+        "must unset NIRI_SOCKET so nested apps never talk to host niri"
+    );
+    assert!(
+        SESSION_SH.contains("unset DBUS_SESSION_BUS_ADDRESS"),
+        "must unset DBUS_SESSION_BUS_ADDRESS when dbus-run-session is absent"
+    );
 }
 
 #[test]
@@ -188,10 +197,10 @@ fn mise_dev_task_runs_the_nested_session() {
         MISE_TOML.contains("example showcase"),
         "dev task must build the showcase example"
     );
-    // The nested session gets its own bus so it never touches the real
-    // session's org.freedesktop namespace.
+    // Use dbus-run-session when installed, with graceful fallback on hosts
+    // (such as Fedora Atomic / dbus-broker) where dbus-run-session is absent.
     assert!(
-        MISE_TOML.contains("dbus-run-session"),
-        "dev task must run under a private session bus"
+        MISE_TOML.contains("command -v dbus-run-session"),
+        "dev task should guard dbus-run-session so hosts without dbus-daemon still work"
     );
 }

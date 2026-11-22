@@ -62,6 +62,14 @@ export XDG_CACHE_HOME="$SCRATCH_HOME/.cache"
 export XDG_STATE_HOME="$SCRATCH_HOME/.local/state"
 export WAYLAND_DISPLAY="$HOST_SOCKET"
 
+# Never inherit the host's niri IPC socket or real session D-Bus. When launched
+# under `dbus-run-session` (TRITON_NESTED_PRIVATE_BUS=1), keep that private bus;
+# otherwise (e.g. Fedora Atomic with dbus-broker), detach from the host bus.
+unset NIRI_SOCKET
+if [ "${TRITON_NESTED_PRIVATE_BUS:-0}" != "1" ]; then
+    unset DBUS_SESSION_BUS_ADDRESS
+fi
+
 # Foreground child + `wait`, never `exec`: `exec` would replace this shell so
 # the EXIT trap above would never run and $RT would leak into target/.
 niri -c "$XDG_CONFIG_HOME/niri/config.kdl" -- "$BIN" "$@" &

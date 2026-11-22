@@ -57,7 +57,11 @@ run = "cargo run -p triton-kit --example showcase"
 description = "Nested niri dev session running the showcase gallery (isolated)"
 run = """
 cargo build -p triton-kit --example showcase
-REPO="$PWD" dbus-run-session -- sh dev/nested/session.sh "$PWD/target/debug/examples/showcase"
+if command -v dbus-run-session >/dev/null 2>&1; then
+  REPO="$PWD" TRITON_NESTED_PRIVATE_BUS=1 dbus-run-session -- sh dev/nested/session.sh "$PWD/target/debug/examples/showcase"
+else
+  REPO="$PWD" sh dev/nested/session.sh "$PWD/target/debug/examples/showcase"
+fi
 """
 
 # ── assets ───────────────────────────────────────────────────────────────────
