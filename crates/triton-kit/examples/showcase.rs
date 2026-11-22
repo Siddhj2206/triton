@@ -27,7 +27,7 @@ use triton_engine::{
     SurfaceSize, SurfaceSpec, Theme, ViewContext, box_, col, icon, row, run, text,
 };
 use triton_kit::{
-    Button, ButtonTone, IconButton, ScrollAreaOptions, SliderOptions, TextInputAction,
+    Button, ButtonTone, IconButton, ScrollAreaOptions, SliderOptions, TextInput, TextInputAction,
     TextInputState, button, concentric_inner, icon_button, island, panel, pill, scroll_area,
     slider, switch, text_input,
 };
@@ -406,15 +406,18 @@ impl ShowcaseApp {
         };
 
         let search_field = text_input(
-            "launcher-search",
             &self.search,
-            "Search apps, settings, commands...",
-            Some(Icon::Search),
-            INNER_RADIUS, // Concentric: 28px panel - 14px pad = 14px!
+            TextInput {
+                key: "launcher-search".into(),
+                placeholder: "Search apps, settings, commands...".to_owned(),
+                lead_icon: Some(Icon::Search),
+                radius: INNER_RADIUS, // Concentric: 28px panel - 14px pad = 14px!
+                on_event: Some(Box::new(|ev| Some(Msg::SearchEvent(ev.clone())))),
+                ..Default::default()
+            },
             t,
             ctx.interaction,
             ctx.text,
-            Msg::SearchEvent,
         );
 
         let header = row()

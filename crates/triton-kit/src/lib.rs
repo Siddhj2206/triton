@@ -8,7 +8,9 @@
 //! - [`button`]: [`button`], [`icon_button`], [`chip`], [`toggle_tile`],
 //!   [`segmented`], [`power_menu`], and their spec structs.
 //! - [`control`]: [`switch`], [`checkbox`], [`radio`], [`slider`] (`Animator`-driven).
-//! - [`input`]: [`TextInputState`] + [`text_input`].
+//! - [`input`]: [`TextInputState`] + [`text_input`], [`search_field`]
+//!   (mode-aware Wave disc), and [`password_field`] (masked dots, reveal
+//!   toggle, submit disc, Caps Lock chip, [`trigger_password_shake`]).
 //! - [`chrome`]: [`pill`], [`status_pill`], [`overflow_pill`], [`icon_disc`],
 //!   [`wave_avatar`], [`badge`], [`keycap`], [`hint_bar`].
 //! - [`progress`]: [`wavy_progress`], [`wavy_ring`], [`level_meter`].
@@ -36,7 +38,10 @@ pub use chrome::{
 pub use control::{
     CheckState, SliderMode, SliderOptions, SliderSurface, checkbox, radio, slider, switch,
 };
-pub use input::{TextInputAction, TextInputState, text_input};
+pub use input::{
+    PASSWORD_SHAKE_AMPLITUDE, PasswordField, SearchField, SearchMode, TextInput, TextInputAction,
+    TextInputState, password_field, search_field, text_input, trigger_password_shake,
+};
 pub use progress::{MeterMode, Progress, level_meter, wavy_progress, wavy_ring};
 pub use surface::{
     Dialog, DividerStyle, ListFill, Orientation, ScrollAreaOptions, card, concentric_inner, dialog,
