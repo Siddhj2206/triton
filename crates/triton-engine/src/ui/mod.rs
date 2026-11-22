@@ -125,6 +125,10 @@ pub struct InteractionState {
     pub pressed: Option<NodeKey>,
     pub dragging: Option<NodeKey>,
     pub focused: Option<NodeKey>,
+    /// The topmost scroll container under the pointer, if any. Unlike
+    /// [`Self::hovered`] this also tracks non-interactive children, so it is
+    /// always set while the pointer is anywhere over a scroll viewport.
+    pub scroll_hovered: Option<NodeKey>,
     pub scroll_offsets: HashMap<NodeKey, f32>,
     pub pointer_pos: Option<(f32, f32)>,
 }
@@ -132,6 +136,12 @@ pub struct InteractionState {
 impl InteractionState {
     pub fn is_hovered(&self, key: NodeKey) -> bool {
         self.hovered == Some(key)
+    }
+
+    /// Whether the pointer is anywhere over the scroll viewport of `key`,
+    /// including over interactive children inside it.
+    pub fn is_scroll_hovered(&self, key: NodeKey) -> bool {
+        self.scroll_hovered == Some(key)
     }
 
     pub fn is_pressed(&self, key: NodeKey) -> bool {
@@ -156,6 +166,37 @@ impl InteractionState {
 pub struct BlurRect {
     pub rect: Rect,
     pub radius: f32,
+}
+
+/// Scrollbar appearance for a `scroll_y()` container.
+///
+/// The default reproduces the engine's subtle always-on thumb; widgets restyle
+/// it (width, color, track geometry) without touching renderer internals.
+/// Set `width` to `0.0` to hide the scrollbar entirely.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollbarStyle {
+    /// Thumb width in logical px; `0.0` hides the scrollbar.
+    pub width: f32,
+    /// Gap between the thumb and the container's right edge in logical px.
+    pub margin: f32,
+    /// Inset of the thumb track from the container's top and bottom edges.
+    pub track_inset: f32,
+    /// Smallest thumb length for very tall content in logical px.
+    pub min_thumb: f32,
+    /// Thumb fill color.
+    pub color: Rgba,
+}
+
+impl Default for ScrollbarStyle {
+    fn default() -> Self {
+        Self {
+            width: 3.5,
+            margin: 2.0,
+            track_inset: 6.0,
+            min_thumb: 24.0,
+            color: Rgba::new(1.0, 1.0, 1.0, 0.24),
+        }
+    }
 }
 
 pub type ClickHandler<M> = Box<dyn Fn() -> M>;
@@ -248,6 +289,10 @@ pub enum ElementContent {
 /// hit-test regions automatically.
 #[must_use]
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "flat per-element flags are the builder API; a state machine would obscure them"
+)]
 pub struct Element<M> {
     pub key: Option<NodeKey>,
     pub layout: Style,
@@ -256,7 +301,14 @@ pub struct Element<M> {
     pub children: Vec<Element<M>>,
     pub handlers: Handlers<M>,
     pub scrollable: bool,
+    /// Scrollbar appearance when [`Self::scrollable`] (see [`ScrollbarStyle`]).
+    pub scrollbar: ScrollbarStyle,
     pub focusable: bool,
+    /// Hit-testing treats this element as opaque: interactive elements painted
+    /// beneath it cannot be reached through it (modal card over a scrim).
+    /// Pair with [`Element::id`] so a press started here cannot release onto a
+    /// lower interactive element.
+    pub input_opaque: bool,
     /// Marks whether this element claims pointer input for Wayland input regions
     /// (defaults to true when it has a fill or interaction handler).
     pub captures_input: bool,
@@ -283,7 +335,9 @@ impl<M> Element<M> {
             children: Vec::new(),
             handlers: Handlers::default(),
             scrollable: false,
+            scrollbar: ScrollbarStyle::default(),
             focusable: false,
+            input_opaque: false,
             captures_input: false,
             wave: None,
             edge_fade: None,
@@ -307,7 +361,10 @@ impl<M> Element<M> {
     }
 
     pub fn child_opt(mut self, child: Option<Element<M>>) -> Self {
-        if let Some(c) = child {
+        if let Some(mut c) = child {
+            if self.scrollable {
+                c.layout.flex_shrink = 0.0;
+            }
             self.children.push(c);
         }
         self
@@ -581,6 +638,12 @@ impl<M> Element<M> {
         self
     }
 
+    /// Restyle the scrollbar thumb of a `scroll_y()` container.
+    pub fn scrollbar_style(mut self, style: ScrollbarStyle) -> Self {
+        self.scrollbar = style;
+        self
+    }
+
     pub fn transform(mut self, tf: SubtreeTransform) -> Self {
         self.visual.transform = tf;
         self
@@ -646,6 +709,16 @@ impl<M> Element<M> {
         self.captures_input = true;
         self
     }
+
+    /// Make this element opaque to hit-testing: pointer events cannot reach
+    /// interactive elements painted beneath it (e.g. a modal card over a
+    /// dismiss scrim). Give the element an [`Element::id`] so a press started
+    /// here cannot release onto a lower interactive element.
+    pub fn input_opaque(mut self) -> Self {
+        self.input_opaque = true;
+        self.captures_input = true;
+        self
+    }
 }
 
 // ── ergonomic constructors ───────────────────────────────────────────────────
@@ -688,7 +761,9 @@ pub fn text<M>(
         children: Vec::new(),
         handlers: Handlers::default(),
         scrollable: false,
+        scrollbar: ScrollbarStyle::default(),
         focusable: false,
+        input_opaque: false,
         captures_input: false,
         wave: None,
         edge_fade: None,
@@ -727,7 +802,9 @@ pub fn image<M>(id: ImageId, style: ImageStyle) -> Element<M> {
         children: Vec::new(),
         handlers: Handlers::default(),
         scrollable: false,
+        scrollbar: ScrollbarStyle::default(),
         focusable: false,
+        input_opaque: false,
         captures_input: false,
         wave: None,
         edge_fade: None,
@@ -759,6 +836,9 @@ pub struct HitEntry<M> {
     pub rect: Rect,
     pub clip: Option<Rect>,
     pub scrollable: bool,
+    /// Element is opaque to hit-testing: interactive entries painted beneath
+    /// it (earlier in the hit list) cannot receive pointer events.
+    pub input_opaque: bool,
     pub content_height: f32,
     pub focusable: bool,
     pub on_click: Option<ClickHandler<M>>,
@@ -834,11 +914,20 @@ impl<M> BuiltFrame<M> {
                     interaction.hovered = new_hover;
                     dirty = true;
                 }
+                let new_scroll_hover = self.top_scrollable_at(x, y).and_then(|e| e.key);
+                if new_scroll_hover != interaction.scroll_hovered {
+                    interaction.scroll_hovered = new_scroll_hover;
+                    dirty = true;
+                }
             }
             InputEvent::PointerLeave => {
                 interaction.pointer_pos = None;
                 if interaction.hovered.is_some() {
                     interaction.hovered = None;
+                    dirty = true;
+                }
+                if interaction.scroll_hovered.is_some() {
+                    interaction.scroll_hovered = None;
                     dirty = true;
                 }
             }
@@ -856,7 +945,10 @@ impl<M> BuiltFrame<M> {
                             msgs.push(on_drag(x, y, entry.rect));
                         }
                         dirty = true;
-                    } else if entry.on_click.is_some() {
+                    } else if entry.on_click.is_some() || entry.input_opaque {
+                        // `input_opaque` with no handlers still records the
+                        // press so a release over a lower interactive element
+                        // cannot fire it (scrim-safe modal surfaces).
                         interaction.pressed = entry.key;
                         dirty = true;
                     }
@@ -880,9 +972,8 @@ impl<M> BuiltFrame<M> {
                 }
             }
             InputEvent::Scroll { x, y, delta_y } => {
-                if let Some(entry) = self.hits.iter().rev().find(|e| {
-                    e.scrollable && e.rect.contains(x, y) && e.clip.is_none_or(|c| c.contains(x, y))
-                }) && let Some(key) = entry.key
+                if let Some(entry) = self.top_scrollable_at(x, y)
+                    && let Some(key) = entry.key
                 {
                     let max_scroll = (entry.content_height - entry.rect.h).max(0.0);
                     let cur = interaction.scroll_offset(key);
@@ -925,10 +1016,24 @@ impl<M> BuiltFrame<M> {
 
     fn top_interactive_at(&self, x: f32, y: f32) -> Option<&HitEntry<M>> {
         self.hits.iter().rev().find(|e| {
-            (e.on_click.is_some() || e.on_drag.is_some() || e.focusable)
+            (e.on_click.is_some() || e.on_drag.is_some() || e.focusable || e.input_opaque)
                 && e.rect.contains(x, y)
                 && e.clip.is_none_or(|c| c.contains(x, y))
         })
+    }
+
+    /// Topmost scrollable entry under `(x, y)`; an `input_opaque` entry above a
+    /// scroll container blocks wheel events from reaching it.
+    fn top_scrollable_at(&self, x: f32, y: f32) -> Option<&HitEntry<M>> {
+        for e in self.hits.iter().rev() {
+            if !e.rect.contains(x, y) || e.clip.is_some_and(|c| !c.contains(x, y)) {
+                continue;
+            }
+            if e.scrollable || e.input_opaque {
+                return if e.scrollable { Some(e) } else { None };
+            }
+        }
+        None
     }
 }
 
@@ -1537,12 +1642,14 @@ fn paint_node<M>(
         || elem.handlers.on_key.is_some()
         || elem.scrollable
         || elem.focusable
+        || elem.input_opaque
     {
         frame.hits.push(HitEntry {
             key: elem.key,
             rect: screen_rect,
             clip: clip_rect,
             scrollable: elem.scrollable,
+            input_opaque: elem.input_opaque,
             content_height,
             focusable: elem.focusable,
             on_click: elem.handlers.on_click,
@@ -1572,16 +1679,21 @@ fn paint_node<M>(
         );
     }
 
-    // 8. Overlay subtle scrollbar thumb when scrollable content overflows viewport
-    if elem.scrollable && content_height > local_rect.h + 1.0 {
-        let track_inset = 6.0;
-        let track_h = (local_rect.h - track_inset * 2.0).max(8.0);
-        let thumb_h = ((local_rect.h / content_height) * track_h).clamp(24.0, track_h);
+    // 8. Overlay scrollbar thumb when scrollable content overflows the viewport.
+    if elem.scrollable
+        && content_height > local_rect.h + 1.0
+        && elem.scrollbar.width > 0.0
+        && elem.scrollbar.color.a > 0.0
+    {
+        let sb = elem.scrollbar;
+        let track_h = (local_rect.h - sb.track_inset * 2.0).max(8.0);
+        let thumb_h =
+            ((local_rect.h / content_height) * track_h).clamp(sb.min_thumb.min(track_h), track_h);
         let max_scroll = (content_height - local_rect.h).max(1.0);
         let progress = (scroll_y / max_scroll).clamp(0.0, 1.0);
-        let thumb_y = screen_rect.y + (track_inset + progress * (track_h - thumb_h)) * tf.scale;
-        let thumb_w = 3.5;
-        let thumb_x = screen_rect.x + screen_rect.w - (thumb_w + 2.0) * tf.scale;
+        let thumb_y = screen_rect.y + (sb.track_inset + progress * (track_h - thumb_h)) * tf.scale;
+        let thumb_w = sb.width;
+        let thumb_x = screen_rect.x + screen_rect.w - (thumb_w + sb.margin) * tf.scale;
         let scroll_scissor = child_clip.map(|c| rect_to_scissor(c, scale));
         draw_list.push_quad_faded(
             scroll_scissor,
@@ -1594,7 +1706,7 @@ fn paint_node<M>(
                     thumb_h * eff_scale,
                 ],
                 radii: [thumb_w * 0.5 * eff_scale; 4],
-                fill: [1.0, 1.0, 1.0, 0.24],
+                fill: sb.color.to_array(),
                 border: [0.0; 4],
                 misc: [KIND_FILL, 0.0, 0.0, tf.opacity],
             },

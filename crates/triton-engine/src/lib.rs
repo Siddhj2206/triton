@@ -47,6 +47,6 @@ pub use style::{Corners, DropShadow, Edges, FontSpec, Rect, Rgba, SubtreeTransfo
 pub use timer::TimerScheduler;
 pub use triton_design::motion::Spring;
 pub use ui::{
-    BlurRect, BuiltFrame, Element, InputEvent, InteractionState, Key, NodeKey, TextAlign, box_,
-    col, icon, image, row, text,
+    BlurRect, BuiltFrame, Element, InputEvent, InteractionState, Key, NodeKey, ScrollbarStyle,
+    TextAlign, box_, col, icon, image, row, text,
 };

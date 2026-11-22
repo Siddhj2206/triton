@@ -14,7 +14,8 @@ use triton_engine::image::{ImageData, ImageFit, ImageId, ImageStore, ImageStyle}
 use triton_engine::style::{DropShadow, Edges, FontSpec, Rect, Rgba, SubtreeTransform, Theme};
 use triton_engine::text::TextEngine;
 use triton_engine::ui::{
-    Element, InputEvent, InteractionState, NodeKey, box_, col, image, layout_and_paint, row, text,
+    Element, InputEvent, InteractionState, NodeKey, ScrollbarStyle, box_, col, image,
+    layout_and_paint, row, text,
 };
 
 const EPS: f32 = 1e-3;
@@ -1720,4 +1721,385 @@ fn diff_bounds_cached_layer_dst_change_unions_old_and_new() {
             h: 54,
         })
     );
+}
+
+// ── 15. ScrollbarStyle: custom thumb geometry/color, hidden thumb ────────────
+
+fn styled_scroll_tree() -> Element<()> {
+    col().w(200.0).h(140.0).p(20.0).child(
+        col()
+            .id("list")
+            .w(160.0)
+            .h(100.0)
+            .scroll_y()
+            .bg(Rgba::new(0.1, 0.1, 0.1, 1.0))
+            .scrollbar_style(ScrollbarStyle {
+                width: 10.0,
+                margin: 4.0,
+                track_inset: 8.0,
+                min_thumb: 24.0,
+                color: Rgba::new(1.0, 0.0, 0.0, 0.75),
+            })
+            .children((0..4).map(|_| box_().w(160.0).h(40.0).bg(Rgba::WHITE))),
+    )
+}
+
+#[test]
+fn scroll_area_uses_custom_scrollbar_style_for_thumb() {
+    let mut text = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+    let scale = 1.0_f32;
+
+    layout_and_paint(
+        styled_scroll_tree(),
+        (Some(200.0), Some(140.0)),
+        scale,
+        &interaction,
+        &mut text,
+        &ImageStore::new(),
+        &mut draw_list,
+    );
+
+    let quads = collect_quads(&draw_list);
+    // bg + 4 children + 1 thumb = 6
+    assert_eq!(quads.len(), 6);
+    let thumb = quads[5].1;
+
+    // Scroll rect (20,20,160,100): thumb_x = 20 + 160 - (10 + 4) = 166.
+    assert_rect_approx(
+        thumb.dst,
+        [166.0, thumb.dst[1], 10.0, thumb.dst[3]],
+        "thumb dst",
+    );
+    assert_eq!(thumb.fill, [1.0, 0.0, 0.0, 0.75]);
+    // Pill radii = width / 2.
+    assert_rect_approx(thumb.radii, [5.0; 4], "thumb radii");
+
+    // Track: h=100, content=160 → thumb_h = (100/160) * (100 - 16) = 52.5.
+    assert_approx(thumb.dst[3], 52.5, "thumb length from track_inset");
+    assert_approx(thumb.dst[1], 28.0, "thumb y = rect.y + track_inset");
+}
+
+#[test]
+fn scroll_area_default_scrollbar_matches_legacy_geometry() {
+    let mut text = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+
+    layout_and_paint(
+        col::<()>().w(200.0).h(140.0).p(20.0).child(
+            col()
+                .id("list")
+                .w(160.0)
+                .h(100.0)
+                .scroll_y()
+                .bg(Rgba::new(0.1, 0.1, 0.1, 1.0))
+                .children((0..4).map(|_| box_().w(160.0).h(40.0).bg(Rgba::WHITE))),
+        ),
+        (Some(200.0), Some(140.0)),
+        1.0,
+        &interaction,
+        &mut text,
+        &ImageStore::new(),
+        &mut draw_list,
+    );
+
+    let quads = collect_quads(&draw_list);
+    assert_eq!(quads.len(), 6);
+    let thumb = quads[5].1;
+    // Legacy: w 3.5, margin 2 → x = 20 + 160 - 5.5 = 174.5; alpha 0.24.
+    assert_approx(thumb.dst[2], 3.5, "default thumb width");
+    assert_approx(thumb.dst[0], 174.5, "default thumb x");
+    assert_approx(thumb.fill[3], 0.24, "default thumb alpha");
+}
+
+#[test]
+fn scroll_area_hides_thumb_when_scrollbar_width_is_zero() {
+    let mut text = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+
+    layout_and_paint(
+        col::<()>().w(200.0).h(140.0).p(20.0).child(
+            col()
+                .id("list")
+                .w(160.0)
+                .h(100.0)
+                .scroll_y()
+                .bg(Rgba::new(0.1, 0.1, 0.1, 1.0))
+                .scrollbar_style(ScrollbarStyle {
+                    width: 0.0,
+                    ..ScrollbarStyle::default()
+                })
+                .children((0..4).map(|_| box_().w(160.0).h(40.0).bg(Rgba::WHITE))),
+        ),
+        (Some(200.0), Some(140.0)),
+        1.0,
+        &interaction,
+        &mut text,
+        &ImageStore::new(),
+        &mut draw_list,
+    );
+
+    // bg + 4 children, no thumb.
+    assert_eq!(collect_quads(&draw_list).len(), 5);
+}
+
+// ── 16. child_opt inside a scroll container keeps intrinsic height ────────────
+
+#[test]
+fn scroll_area_child_opt_does_not_shrink_child() {
+    let mut text = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+
+    let root: Element<()> = col()
+        .id("scroller")
+        .w(100.0)
+        .h(30.0)
+        .scroll_y()
+        .child_opt(Some(box_().w(100.0).h(40.0).bg(Rgba::WHITE)));
+
+    layout_and_paint(
+        root,
+        (Some(100.0), Some(30.0)),
+        1.0,
+        &interaction,
+        &mut text,
+        &ImageStore::new(),
+        &mut draw_list,
+    );
+
+    let quads = collect_quads(&draw_list);
+    // The 40px child must not be flex-shrunk into the 30px viewport.
+    assert!(
+        quads
+            .iter()
+            .any(|(_, q)| { (q.dst[3] - 40.0).abs() < 1e-3 }),
+        "child_opt child should keep its 40px height inside a scroll container"
+    );
+}
+
+// ── 17. scroll_hovered: pointer-over tracking for scroll containers ───────────
+
+#[test]
+fn scroll_hovered_tracks_pointer_over_scrollable_and_children() {
+    let mut text = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let mut interaction = InteractionState::default();
+    let scroller = NodeKey::named("scroller");
+
+    let root: Element<Msg> = col().w(200.0).h(140.0).child(
+        col()
+            .id(scroller)
+            .w(200.0)
+            .h(100.0)
+            .scroll_y()
+            .child(box_().w(200.0).h(60.0))
+            .child(
+                box_()
+                    .id("row")
+                    .w(200.0)
+                    .h(60.0)
+                    .on_click(|| Msg::Click("row")),
+            ),
+    );
+
+    let frame = layout_and_paint(
+        root,
+        (Some(200.0), Some(140.0)),
+        1.0,
+        &interaction,
+        &mut text,
+        &ImageStore::new(),
+        &mut draw_list,
+    );
+
+    // Over the plain (non-interactive) child region: scroll container is hovered.
+    frame.dispatch_event(
+        &InputEvent::PointerMove { x: 50.0, y: 30.0 },
+        &mut interaction,
+    );
+    assert!(interaction.is_scroll_hovered(scroller));
+    assert_eq!(interaction.hovered, None);
+
+    // Over the interactive child: row is hovered AND the scroll viewport counts.
+    frame.dispatch_event(
+        &InputEvent::PointerMove { x: 50.0, y: 90.0 },
+        &mut interaction,
+    );
+    assert!(interaction.is_scroll_hovered(scroller));
+    assert_eq!(interaction.hovered, Some(NodeKey::named("row")));
+
+    // Outside the scroll viewport entirely.
+    frame.dispatch_event(
+        &InputEvent::PointerMove { x: 50.0, y: 130.0 },
+        &mut interaction,
+    );
+    assert!(!interaction.is_scroll_hovered(scroller));
+
+    // Re-hover then leave: state clears.
+    frame.dispatch_event(
+        &InputEvent::PointerMove { x: 50.0, y: 30.0 },
+        &mut interaction,
+    );
+    assert!(interaction.is_scroll_hovered(scroller));
+    frame.dispatch_event(&InputEvent::PointerLeave, &mut interaction);
+    assert!(!interaction.is_scroll_hovered(scroller));
+}
+
+// ── 18. input_opaque: modal hit-blocking for elements painted on top ──────────
+
+#[test]
+fn input_opaque_blocks_click_and_scroll_to_elements_beneath() {
+    let mut text = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let mut interaction = InteractionState::default();
+    let scroller = NodeKey::named("scroller");
+
+    // A button and a scroll area sit beneath an opaque modal card.
+    let root: Element<Msg> = col().w(200.0).h(200.0).child(
+        box_().w(200.0).h(200.0).children([
+            col()
+                .w(200.0)
+                .h(200.0)
+                .child(
+                    box_()
+                        .id("under-btn")
+                        .absolute()
+                        .inset_xy(10.0, 10.0)
+                        .w(80.0)
+                        .h(40.0)
+                        .on_click(|| Msg::Click("under")),
+                )
+                .child(
+                    col()
+                        .id(scroller)
+                        .absolute()
+                        .inset_xy(10.0, 60.0)
+                        .w(80.0)
+                        .h(60.0)
+                        .scroll_y()
+                        .children((0..4).map(|_| box_().w(80.0).h(40.0).bg(Rgba::WHITE))),
+                ),
+            box_()
+                .id("modal-card")
+                .absolute()
+                .inset_xy(0.0, 0.0)
+                .w(200.0)
+                .h(200.0)
+                .bg(Rgba::new(0.2, 0.2, 0.2, 0.9))
+                .input_opaque(),
+        ]),
+    );
+
+    let frame = layout_and_paint(
+        root,
+        (Some(200.0), Some(200.0)),
+        1.0,
+        &interaction,
+        &mut text,
+        &ImageStore::new(),
+        &mut draw_list,
+    );
+
+    // Click through the modal card onto the hidden button: swallowed.
+    let (m_down, _) = frame.dispatch_event(
+        &InputEvent::PointerDown {
+            x: 30.0,
+            y: 20.0,
+            button: 272,
+        },
+        &mut interaction,
+    );
+    assert_eq!(m_down, Vec::<Msg>::new());
+    assert_eq!(interaction.pressed, Some(NodeKey::named("modal-card")));
+    let (m_up, _) = frame.dispatch_event(
+        &InputEvent::PointerUp {
+            x: 30.0,
+            y: 20.0,
+            button: 272,
+        },
+        &mut interaction,
+    );
+    assert_eq!(
+        m_up,
+        Vec::<Msg>::new(),
+        "opaque card must swallow the click"
+    );
+
+    // Wheel over the modal card must not scroll the covered scroll area.
+    let (m_scroll, _) = frame.dispatch_event(
+        &InputEvent::Scroll {
+            x: 30.0,
+            y: 80.0,
+            delta_y: 50.0,
+        },
+        &mut interaction,
+    );
+    assert_eq!(m_scroll, Vec::<Msg>::new());
+    assert_eq!(interaction.scroll_offset(scroller), 0.0);
+
+    // The covered button is also not hoverable.
+    frame.dispatch_event(
+        &InputEvent::PointerMove { x: 30.0, y: 20.0 },
+        &mut interaction,
+    );
+    assert_eq!(interaction.hovered, Some(NodeKey::named("modal-card")));
+}
+
+#[test]
+fn input_opaque_does_not_block_elements_painted_after_it() {
+    let mut text = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let mut interaction = InteractionState::default();
+
+    let root: Element<Msg> = col().w(200.0).h(200.0).child(
+        box_().w(200.0).h(200.0).children([
+            box_()
+                .id("modal-card")
+                .absolute()
+                .inset_xy(0.0, 0.0)
+                .w(200.0)
+                .h(200.0)
+                .bg(Rgba::new(0.2, 0.2, 0.2, 0.9))
+                .input_opaque(),
+            box_()
+                .id("on-top-btn")
+                .absolute()
+                .inset_xy(50.0, 50.0)
+                .w(80.0)
+                .h(40.0)
+                .on_click(|| Msg::Click("top")),
+        ]),
+    );
+
+    let frame = layout_and_paint(
+        root,
+        (Some(200.0), Some(200.0)),
+        1.0,
+        &interaction,
+        &mut text,
+        &ImageStore::new(),
+        &mut draw_list,
+    );
+
+    frame.dispatch_event(
+        &InputEvent::PointerDown {
+            x: 60.0,
+            y: 60.0,
+            button: 272,
+        },
+        &mut interaction,
+    );
+    let (m, _) = frame.dispatch_event(
+        &InputEvent::PointerUp {
+            x: 60.0,
+            y: 60.0,
+            button: 272,
+        },
+        &mut interaction,
+    );
+    assert_eq!(m, vec![Msg::Click("top")]);
 }

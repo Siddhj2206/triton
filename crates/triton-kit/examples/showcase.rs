@@ -27,8 +27,8 @@ use triton_engine::{
     SurfaceSize, SurfaceSpec, Theme, ViewContext, box_, col, icon, row, run, text,
 };
 use triton_kit::{
-    ButtonTone, SwitchState, TextInputAction, TextInputState, button, concentric_inner,
-    icon_button, island, panel, pill, scroll_area, slider, switch, text_input,
+    ButtonTone, ScrollAreaOptions, SwitchState, TextInputAction, TextInputState, button,
+    concentric_inner, icon_button, island, panel, pill, scroll_area, slider, switch, text_input,
 };
 
 const TIMER_OPEN_PANEL: u32 = 1;
@@ -465,7 +465,7 @@ impl ShowcaseApp {
                 row()
                     .w_full()
                     .gap(14.0)
-                    .child(self.view_app_list())
+                    .child(self.view_app_list(ctx.interaction, ctx.anim))
                     .child(self.view_quick_controls(ctx.now)),
             )
             .child(box_().w_full().h(1.0).bg(Rgba::new(1.0, 1.0, 1.0, 0.10)))
@@ -477,7 +477,11 @@ impl ShowcaseApp {
             .child(card)
     }
 
-    fn view_app_list(&self) -> Element<Msg> {
+    fn view_app_list(
+        &self,
+        interaction: &triton_engine::InteractionState,
+        anim: &mut triton_engine::Animator,
+    ) -> Element<Msg> {
         let t = &self.theme;
         let filtered = self.filtered_apps();
         let list_count = filtered.len().max(1);
@@ -513,8 +517,14 @@ impl ShowcaseApp {
             .child(scroll_area(
                 "launcher-scroll",
                 336.0,
-                3.0,
-                Edges::new(0.0, 10.0, 0.0, 0.0),
+                ScrollAreaOptions {
+                    gap: 3.0,
+                    padding: Edges::new(0.0, 10.0, 0.0, 0.0),
+                    edge_fade: Some(Edges::xy(0.0, 20.0)),
+                },
+                t,
+                interaction,
+                anim,
                 list_items,
             ))
     }
@@ -907,7 +917,7 @@ impl ShellApp for ShowcaseApp {
                         }
                         self.close_launcher(now)
                     }
-                    Some(TextInputAction::Changed) => {
+                    Some(_) => {
                         self.selected_app = 0;
                         vec![AppCommand::Redraw(SurfaceId::Launcher)]
                     }
