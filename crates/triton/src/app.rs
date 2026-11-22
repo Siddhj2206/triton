@@ -239,6 +239,8 @@ pub enum Message {
     WifiJoin(String),
     /// The live `org.freedesktop.ScreenSaver` inhibitor count.
     Inhibitors(u32),
+    /// The lock pid file confirmed the session is secure — suspend now.
+    SuspendReady,
     /// A power-menu action was picked (click or digit jump); Enter re-picks the
     /// focused one through `PowerConfirm`.
     PowerPick(crate::panels::PowerAction),
@@ -710,6 +712,10 @@ impl Shell {
                 self.inhibitors = n;
                 Task::none()
             }
+            Message::SuspendReady => {
+                services::suspend();
+                Task::none()
+            }
             Message::QsAllSettings => {
                 // Phase 3: open triton-settings on the right page.
                 tracing::info!("quick settings hand-off waits for triton-settings");
@@ -1046,7 +1052,24 @@ impl Shell {
             }
             crate::wayl::IdleEvent::Idle(i) if i >= 2 => {
                 self.idle_stage = 2;
-                services::suspend();
+                if locked() {
+                    services::suspend();
+                } else {
+                    // Suspending before the lock is secure would expose the
+                    // session on resume — lock now, suspend when it lands.
+                    self.lock();
+                    return Task::perform(
+                        async move {
+                            for _ in 0..25 {
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                if locked() {
+                                    break;
+                                }
+                            }
+                        },
+                        |()| Message::SuspendReady,
+                    );
+                }
             }
             crate::wayl::IdleEvent::Resumed(_) => {
                 self.idle_stage = 0;
@@ -1910,4 +1933,21 @@ impl Shell {
             text_color: theme.scheme.on_surface,
         }
     }
+}
+
+/// Is the session actually locked? `triton-lock` leaves its pid in
+/// `$XDG_RUNTIME_DIR/triton/locked` once a lock surface maps; a live pid means
+/// secure. A stale file from a killed lock process fails the pid check —
+/// suspending before the lock was secure would expose the session on resume.
+fn locked() -> bool {
+    let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from) else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(dir.join("triton").join("locked")) else {
+        return false;
+    };
+    let Ok(pid) = text.trim().parse::<u32>() else {
+        return false;
+    };
+    std::path::Path::new(&format!("/proc/{pid}")).exists()
 }

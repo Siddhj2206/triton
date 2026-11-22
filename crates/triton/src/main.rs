@@ -3,6 +3,7 @@
 //! renders with wgpu on Vulkan, falling back to tiny-skia (ADR-0007).
 
 mod app;
+mod doctor;
 mod host;
 mod inhibit;
 mod launch;
@@ -40,15 +41,20 @@ fn prefer_vulkan() {
 fn main() -> Result<(), iced_layershell::Error> {
     // `triton msg …`: a command line to the running shell, for niri binds.
     let mut args = std::env::args().skip(1);
-    if args.next().as_deref() == Some("msg") {
-        let command = args.collect::<Vec<_>>().join(" ");
-        return match msg::send(&command) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                eprintln!("triton msg {command}: {e} (is the shell running?)");
-                std::process::exit(1);
-            }
-        };
+    if let Some(cmd) = args.next() {
+        if cmd == "msg" {
+            let command = args.collect::<Vec<_>>().join(" ");
+            return match msg::send(&command) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    eprintln!("triton msg {command}: {e} (is the shell running?)");
+                    std::process::exit(1);
+                }
+            };
+        }
+        if cmd == "doctor" {
+            doctor::run();
+        }
     }
     prefer_vulkan();
     tracing_subscriber::fmt()
@@ -65,6 +71,7 @@ fn main() -> Result<(), iced_layershell::Error> {
     // Dev and preview run `Services::fake`; this opts into the real read-only
     // UPower and NetworkManager watchers.
     let real_services = std::env::args().any(|a| a == "--real-services");
+    util::sd_notify_ready();
     let base = triton_ui::settings();
     iced_layershell::daemon(
         move || Shell::boot(real_services),

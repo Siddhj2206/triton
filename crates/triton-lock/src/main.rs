@@ -90,4 +90,11 @@ fn main() -> iced_sessionlock::Result {
         // nonzero; niri/systemd sees the failure.
         tracing::error!("cannot start the session lock: {e}");
     })
+    .inspect(|()| {
+        // Clean exit (unlocked): the shell's lock-secure check reads this.
+        if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+            let _ =
+                std::fs::remove_file(std::path::PathBuf::from(dir).join("triton").join("locked"));
+        }
+    })
 }

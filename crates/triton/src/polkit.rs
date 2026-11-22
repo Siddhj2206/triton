@@ -493,7 +493,7 @@ fn converse<R: BufRead, W: Write>(mut out: R, stdin: &mut W, secret: &[u8]) -> O
 }
 
 /// The setuid helper's usual libexec paths; it is never on `PATH`.
-fn helper_path() -> Option<PathBuf> {
+pub(crate) fn helper_path() -> Option<PathBuf> {
     const CANDIDATES: &[&str] = &[
         // Fedora, RHEL, openSUSE, Arch.
         "/usr/libexec/polkit-agent-helper-1",

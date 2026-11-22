@@ -145,12 +145,13 @@ fn colors(scheme: &triton_design::Scheme) -> String {
     )
 }
 
-/// The systemd user unit: niri-session runs `graphical-session.target`, so a
-/// `WantedBy` on it starts the shell with the session (roadmap §2). `ExecStart`
-/// is this binary — whatever installed the unit — with `--real-services` on:
-/// dev and preview runs invoke the binary directly and stay on the fake
-/// backend, but a unit that runs the fake would have no real battery, no
-/// power actions and no polkit agent.
+/// The systemd user unit, bound to `niri.service` (the DMS pattern): the shell
+/// starts only in niri sessions, never under another DE. `Type=notify` +
+/// `BusName=` means readiness = the notification server is up (`sd_notify` in
+/// `main`). `ExecStart` is this binary — whatever installed the unit — with
+/// `--real-services` on: dev and preview runs invoke the binary directly and
+/// stay on the fake backend, but a unit that runs the fake would have no real
+/// battery, no power actions and no polkit agent.
 fn unit() -> String {
     let exe =
         std::env::current_exe().map_or_else(|_| "triton".to_owned(), |p| p.display().to_string());
@@ -158,16 +159,18 @@ fn unit() -> String {
         "# Written by triton. Changes here are overwritten.
 [Unit]
 Description=Triton shell (bar, panels, OSD, notifications)
-PartOf=graphical-session.target
-After=graphical-session.target
+PartOf=niri.service
+After=niri.service
 
 [Service]
+Type=notify
+BusName=org.freedesktop.Notifications
 ExecStart={exe} --real-services
 Restart=on-failure
 Slice=session.slice
 
 [Install]
-WantedBy=graphical-session.target
+WantedBy=niri.service
 "
     )
 }
@@ -182,12 +185,19 @@ fn install_unit() -> io::Result<()> {
     let dir = base.join("systemd/user");
     fs::create_dir_all(&dir)?;
     let mut changed = crate::util::write_if_changed(&dir, "triton.service", &unit())?;
-    let wants = dir.join("graphical-session.target.wants");
+    let wants = dir.join("niri.service.wants");
     fs::create_dir_all(&wants)?;
     let link = wants.join("triton.service");
     if !link.exists() {
         std::os::unix::fs::symlink("../triton.service", &link)?;
         tracing::info!(path = %link.display(), "enabled triton.service");
+        changed = true;
+    }
+    // Migrate off the old graphical-session binding: it started triton under
+    // every session, not just niri.
+    let stale = dir.join("graphical-session.target.wants/triton.service");
+    if stale.exists() || stale.is_symlink() {
+        let _ = fs::remove_file(&stale);
         changed = true;
     }
     if changed {
@@ -207,7 +217,7 @@ fn niri_dir() -> Option<PathBuf> {
 
 /// `config.kdl` already hands off to triton when some `include` line names our
 /// index (any spelling). Comments never count.
-fn has_include(config: &str) -> bool {
+pub(crate) fn has_include(config: &str) -> bool {
     config.lines().any(|line| {
         let line = line.trim();
         line.starts_with("include") && line.contains("triton/index.kdl")

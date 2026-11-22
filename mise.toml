@@ -43,6 +43,14 @@ run = "cargo fmt --all"
 description = "Run tests"
 run = "cargo test --workspace"
 
+[tasks.install]
+description = "Install release binaries to ~/.local/bin (re-run 'triton' after to refresh the unit's ExecStart path)"
+run = '''
+cargo build --release
+install -Dm755 target/release/triton ~/.local/bin/triton
+install -Dm755 target/release/triton-lock ~/.local/bin/triton-lock
+'''
+
 # ── preview (container: headless sway -> nested niri -> triton) ─────────────
 # Never touches the real session: private runtime dir, scratch home, private
 # session bus. See docs/roadmap.md section 7 and dev/preview/.

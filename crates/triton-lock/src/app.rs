@@ -126,7 +126,17 @@ impl Lock {
                 self.now = chrono::Local::now();
                 Task::none()
             }
-            Message::Opened => iced_runtime::task::widget(focusable::focus(field_id())),
+            Message::Opened => {
+                // A mapped lock surface means the session is locked: leave our
+                // pid so the shell's suspend can tell locked from "spawned".
+                if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
+                    let dir = dir.join("triton");
+                    if std::fs::create_dir_all(&dir).is_ok() {
+                        let _ = std::fs::write(dir.join("locked"), std::process::id().to_string());
+                    }
+                }
+                iced_runtime::task::widget(focusable::focus(field_id()))
+            }
             Message::PasswordChanged(password) => {
                 self.password = password;
                 self.error = None;
