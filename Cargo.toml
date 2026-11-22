@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+default-members = ["crates/triton", "crates/triton-lock"]
 
 [workspace.package]
 edition = "2024"
@@ -38,6 +39,7 @@ wayland-client = { version = "0.31", default-features = false }
 wayland-protocols = { version = "0.32", default-features = false, features = ["client", "staging"] }
 wayland-protocols-wlr = { version = "0.3", default-features = false, features = ["client"] }
 tracing-subscriber = { version = "0.3.23", default-features = false }
+zbus = { version = "6", default-features = false }
 # Pinned: iced_layershell 0.19.1 (via iced_exdevtools) breaks on winit-core beta.4,
 # which added a NativeKeyCode variant. Drop once waycrate releases a fix.
 winit-common = "=0.31.0-beta.2"

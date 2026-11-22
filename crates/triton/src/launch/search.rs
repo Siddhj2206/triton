@@ -361,6 +361,7 @@ mod tests {
             keywords: keywords.iter().map(|s| (*s).to_owned()).collect(),
             actions: Vec::new(),
             terminal: false,
+            path: format!("/usr/share/applications/{name}.desktop").into(),
         }
     }
 

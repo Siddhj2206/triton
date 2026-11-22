@@ -9,6 +9,7 @@ use iced_core::alignment::Vertical;
 use iced_core::font::Weight;
 use iced_core::{Color, Length, Padding};
 use iced_widget::Row;
+use iced_widget::text::IntoFragment;
 use triton_design::color::{STATE_LAYER, over, with_alpha};
 use triton_design::material::{veil, veil_hi};
 use triton_design::shape::connected_corners;
@@ -372,7 +373,7 @@ use crate::press::pressable;
 
 /// `.t-btn`: a label, optionally led by an icon.
 pub fn button<'a, M: 'a>(
-    label: &'a str,
+    label: impl IntoFragment<'a>,
     leading: Option<Icon>,
     kind: Kind,
     size: Size,

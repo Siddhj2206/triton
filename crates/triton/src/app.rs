@@ -64,16 +64,8 @@ fn notif_gen() -> u32 {
 }
 
 /// What the pipeline worker hands back: the wallpaper image and both schemes.
-#[derive(Debug)]
-pub struct PipelineDone {
-    pub wallpaper: Option<iced_widget::image::Handle>,
-    /// Mean wallpaper luminance → Mica's adaptive tint.
-    pub luminance: f32,
-    pub dark: triton_design::Scheme,
-    pub light: triton_design::Scheme,
-    /// Targets the last `apply` finished (for its toast).
-    pub applied: Vec<&'static str>,
-}
+/// Lives in `pipeline` so the worker's return type has no app dependency.
+pub type PipelineDone = crate::pipeline::PipelineDone;
 
 /// The `>`-scope command palette — the shell's own actions as hits.
 /// `id` is the `triton msg` line each runs.
@@ -105,8 +97,8 @@ const LAUNCH_COMMANDS: &[crate::launch::CommandRef<'static>] = &[
     },
 ];
 
-/// The Thick panel's inner padding; the field's radius is `nested` against it.
-const LAUNCHER_PAD: f32 = 14.0;
+/// The Thick panel's inner padding; nested fields use it as their inset.
+pub(crate) const LAUNCHER_PAD: f32 = 14.0;
 
 /// An empty results set for the launcher's pre-search frame.
 static EMPTY_RESULTS: crate::launch::Results = crate::launch::Results { groups: Vec::new() };
@@ -117,16 +109,28 @@ static EMPTY_RESULTS: crate::launch::Results = crate::launch::Results { groups: 
 const REVEAL_DELAY: Duration = Duration::from_millis(120);
 const HIDE_DELAY: Duration = Duration::from_millis(600);
 
-/// The result groups, as list sections under eyebrow labels.
-fn launcher_results(results: &crate::launch::Results) -> Column<'_, Message, Theme, Renderer> {
+/// The result groups, as list sections under eyebrow labels. `sel` is the
+/// keyboard selection's index into the flattened hits (the `↑↓` keys move it).
+fn launcher_results(
+    results: &crate::launch::Results,
+    sel: usize,
+) -> Column<'_, Message, Theme, Renderer> {
     let mut col = Column::new().spacing(6);
+    let mut flat = 0;
     for (group, hits) in &results.groups {
         let label = match group {
             crate::launch::Group::Apps => "Apps",
             crate::launch::Group::Windows => "Windows",
             crate::launch::Group::Commands => "Commands",
         };
-        let items: Vec<surface::ListItem<'_, Message>> = hits.iter().map(|h| hit_row(h)).collect();
+        let items: Vec<surface::ListItem<'_, Message>> = hits
+            .iter()
+            .map(|h| {
+                let row = hit_row(h, flat == sel);
+                flat += 1;
+                row
+            })
+            .collect();
         col = col
             .push(text::eyebrow(label))
             .push(surface::list(items, false));
@@ -134,7 +138,7 @@ fn launcher_results(results: &crate::launch::Results) -> Column<'_, Message, The
     col
 }
 
-fn hit_row(h: &crate::launch::Hit) -> surface::ListItem<'_, Message> {
+fn hit_row(h: &crate::launch::Hit, selected: bool) -> surface::ListItem<'_, Message> {
     let icon = match h.kind {
         crate::launch::HitKind::App { .. } => Icon::Apps,
         crate::launch::HitKind::Window { .. } | crate::launch::HitKind::Command(_) => {
@@ -147,7 +151,7 @@ fn hit_row(h: &crate::launch::Hit) -> surface::ListItem<'_, Message> {
         title: h.title.as_str(),
         supporting: h.supporting.as_deref(),
         trailing: h.tag.as_deref().map(|t| surface::kbd(t).into()),
-        selected: false,
+        selected,
         on_press: Some(Message::LaunchHit(h.kind.clone())),
     }
 }
@@ -221,12 +225,20 @@ pub enum Message {
     Launch(Arc<crate::launch::Results>),
     /// A result row was pressed, or Enter picked the top hit.
     LaunchHit(crate::launch::HitKind),
-    /// Enter in the launcher field: activate the first hit (or the math row).
+    /// Enter in the launcher field: activate the selected hit (or the math row).
     LauncherEnter,
+    /// `↑`/`↓` in the launcher: move the selection through the flat hits.
+    LauncherMove(i8),
+    /// Tab in the launcher: cycle the top-hit card's desktop actions.
+    LauncherTab,
+    /// Alt+Enter in the launcher: reveal the app's desktop file.
+    LauncherReveal,
     /// Wallpaper load + scheme pipeline finished on its thread.
     Pipeline(Arc<PipelineDone>),
-    /// The battery-low OSD's action: power saver on.
-    OsdSaver,
+    /// A Wi-Fi page row: join that network (`nmcli dev wifi connect`).
+    WifiJoin(String),
+    /// The live `org.freedesktop.ScreenSaver` inhibitor count.
+    Inhibitors(u32),
     /// A power-menu action was picked (click or digit jump); Enter re-picks the
     /// focused one through `PowerConfirm`.
     PowerPick(crate::panels::PowerAction),
@@ -261,9 +273,11 @@ pub enum Message {
     PolkitCancel,
 }
 
-/// Idle timeouts the shell registers (`wayl::idles`): stage 1 locks, 2 suspends.
-/// Stage 0 (dim) is reserved for a gamma dim that needs `wayl` first.
-const IDLE_TIMEOUTS: [std::time::Duration; 2] = [
+/// Idle timeouts the shell registers (`wayl::idles`): stage 0 dims through
+/// gamma, 1 locks, 2 suspends. `org.freedesktop.ScreenSaver` inhibitors hold
+/// every stage (roadmap: "dim, then lock, then suspend, respecting inhibitors").
+const IDLE_TIMEOUTS: [std::time::Duration; 3] = [
+    std::time::Duration::from_mins(4),
     std::time::Duration::from_mins(5),
     std::time::Duration::from_mins(10),
 ];
@@ -355,20 +369,27 @@ pub struct Shell {
     osd_gen: u64,
     /// The launcher's last search results.
     results: Option<Arc<crate::launch::Results>>,
+    /// The `↑↓` selection: index into the flattened hits.
+    sel: usize,
+    /// The top-hit action Tab focused, if any (`action_sel` cycles 0..n).
+    action_sel: Option<usize>,
     /// Desktop entries, scanned lazily on the launcher's first search.
     index: Option<crate::launch::Index>,
     /// Live slider values (applied on release).
     volume: f32,
     brightness: f32,
     /// Wi-Fi networks and Bluetooth devices for the QS pages (service-fed).
-    aps: Vec<(String, String, bool, bool)>,
-    bt_devices: Vec<(String, String, String, bool)>,
+    aps: Vec<crate::panels::QsAp>,
+    bt_devices: Vec<crate::panels::QsBt>,
     /// The last merged services snapshot (wifi/bt toggles read it).
     svc: Option<Arc<services::State>>,
     /// wlr-gamma-control handle; `night` toggles the temperature on it.
     night_gamma: Option<crate::wayl::Night>,
     /// Power saver is on (also fed by the services snapshot once it lands).
     saver: bool,
+    /// Live `org.freedesktop.ScreenSaver` inhibitor count — the idle stages
+    /// hold while any client inhibits.
+    inhibitors: u32,
     /// How the bar presents (`BarStates`); `triton msg bar mode …` sets it.
     bar_mode: BarMode,
     /// Islands that are up right now (ignored while pinned). Keys carry the
@@ -439,6 +460,8 @@ impl Shell {
                 Task::none()
             }
             Message::Services(state) => {
+                let was_low = self.statuses.battery.is_some_and(|b| b.low);
+                let now_low = state.statuses.battery.is_some_and(|b| b.low);
                 self.statuses.clone_from(&state.statuses);
                 self.volume = f32::from(state.audio.volume).min(150.0) / 100.0;
                 if let Some(b) = state.brightness {
@@ -448,17 +471,15 @@ impl Shell {
                     .net
                     .aps
                     .iter()
-                    .map(|ap| {
-                        (
-                            ap.ssid.clone(),
-                            format!(
-                                "{}%{}",
-                                ap.strength,
-                                if ap.secured { " · secured" } else { "" }
-                            ),
-                            ap.secured,
-                            ap.connected,
-                        )
+                    .map(|ap| crate::panels::QsAp {
+                        ssid: ap.ssid.clone(),
+                        supporting: format!(
+                            "{}%{}",
+                            ap.strength,
+                            if ap.secured { " · secured" } else { "" }
+                        ),
+                        secured: ap.secured,
+                        connected: ap.connected,
                     })
                     .collect();
                 self.bt_devices = state
@@ -466,23 +487,35 @@ impl Shell {
                     .devices
                     .iter()
                     .map(|d| {
-                        let status = if d.connected {
-                            "Connected"
+                        let mut supporting = if d.connected {
+                            "Connected".to_owned()
                         } else if d.paired {
-                            "Paired"
+                            "Paired".to_owned()
                         } else {
-                            "Available"
+                            "Available".to_owned()
                         };
-                        (
-                            d.name.clone(),
-                            status.to_owned(),
-                            d.address.clone(),
-                            d.connected,
-                        )
+                        if let Some(batt) = d.battery {
+                            supporting = format!("{supporting} · {batt}%");
+                        }
+                        crate::panels::QsBt {
+                            name: d.name.clone(),
+                            supporting,
+                            address: d.address.clone(),
+                            connected: d.connected,
+                        }
                     })
                     .collect();
                 self.saver = state.profile == services::Profile::PowerSaver;
                 self.svc = Some(state);
+                // The low-battery form of the OSD (battery only just crossed
+                // into `low`; UPower doesn't say how long is left).
+                if now_low && !was_low {
+                    let percent = self.statuses.battery.map_or(0, |b| b.percent);
+                    return self.show_osd(crate::panels::Osd::Battery {
+                        percent,
+                        left: String::new(),
+                    });
+                }
                 Task::none()
             }
             Message::Closed(id) => {
@@ -553,7 +586,11 @@ impl Shell {
                     let id = n.id;
                     let hold = n.timeout;
                     self.notifs.upsert(n);
-                    Self::after(hold, Message::NotifExpired(id))
+                    // Reconcile so the Toasts surface maps while the card is fresh.
+                    Task::batch([
+                        Self::after(hold, Message::NotifExpired(id)),
+                        self.reconcile(),
+                    ])
                 }
                 crate::notify::Event::Closed(id) => {
                     self.notifs.close(id);
@@ -588,12 +625,11 @@ impl Shell {
                 }
                 Task::none()
             }
-            Message::OsdSaver => {
-                self.power_saver(true);
-                Task::none()
-            }
             Message::PowerToggle => self.toggle_centered(CenteredRole::Power),
             Message::PowerMove(dir) => {
+                if !matches!(self.centered, Some((CenteredRole::Power, _))) {
+                    return Task::none();
+                }
                 let n = crate::panels::POWER_ACTIONS.len() as i8;
                 self.power_focus = ((self.power_focus as i8 + dir).rem_euclid(n)) as usize;
                 Task::none()
@@ -663,7 +699,15 @@ impl Shell {
                 Task::none()
             }
             Message::QsMicMute => {
-                services::set_mic_mute(true);
+                services::set_mic_mute(!self.svc_mic_muted());
+                Task::none()
+            }
+            Message::WifiJoin(ssid) => {
+                services::wifi_connect(&ssid);
+                Task::none()
+            }
+            Message::Inhibitors(n) => {
+                self.inhibitors = n;
                 Task::none()
             }
             Message::QsAllSettings => {
@@ -719,16 +763,84 @@ impl Shell {
             }
             Message::LaunchHit(kind) => self.activate_hit(&kind),
             Message::LauncherEnter => {
-                let first = self
-                    .results
-                    .as_ref()
-                    .and_then(|r| r.groups.first())
-                    .and_then(|(_, hits)| hits.first())
-                    .map(|h| h.kind.clone());
-                match first {
+                // A Tab-focused action fires that action; else the selected hit.
+                let kind = if let Some(ai) = self.action_sel {
+                    self.flat_hits().next().and_then(|h| match h.kind {
+                        crate::launch::HitKind::App { app, .. } => {
+                            Some(crate::launch::HitKind::App {
+                                app,
+                                action: Some(ai),
+                            })
+                        }
+                        _ => None,
+                    })
+                } else if let crate::launch::Scope::Math(q) = crate::launch::scope(&self.query) {
+                    // Enter on a `=` query copies the result.
+                    crate::launch::math(q)
+                        .map(|(expr, result)| crate::launch::HitKind::Math { expr, result })
+                } else {
+                    self.flat_hits().nth(self.sel).map(|h| h.kind.clone())
+                };
+                match kind {
                     Some(kind) => self.activate_hit(&kind),
                     None => Task::none(),
                 }
+            }
+            Message::LauncherMove(dir) => {
+                if self.launcher.is_none() {
+                    return Task::none();
+                }
+                let n = self.flat_hits().count() as i8;
+                if n > 0 {
+                    self.sel = ((self.sel as i8 + dir).rem_euclid(n)) as usize;
+                    self.action_sel = None;
+                }
+                Task::none()
+            }
+            Message::LauncherTab => {
+                if self.launcher.is_none() {
+                    return Task::none();
+                }
+                // Cycle the top hit's desktop actions: None → 0 → … → None.
+                let actions = match self.flat_hits().next() {
+                    Some(crate::launch::Hit {
+                        kind: crate::launch::HitKind::App { app, .. },
+                        ..
+                    }) => self
+                        .index
+                        .as_ref()
+                        .map_or(0, |i| i.apps[*app].actions.len()),
+                    _ => 0,
+                };
+                self.action_sel = match self.action_sel {
+                    None if actions > 0 => Some(0),
+                    Some(i) if i + 1 < actions => Some(i + 1),
+                    _ => None,
+                };
+                Task::none()
+            }
+            Message::LauncherReveal => {
+                if self.launcher.is_none() {
+                    return Task::none();
+                }
+                // Alt+Enter: open the app's .desktop dir in the file manager.
+                let dir = self
+                    .flat_hits()
+                    .nth(self.sel)
+                    .and_then(|h| match h.kind {
+                        crate::launch::HitKind::App { app, .. } => Some(app),
+                        _ => None,
+                    })
+                    .and_then(|app| self.index.as_ref().and_then(|i| i.apps.get(app)))
+                    .and_then(|a| a.path.parent().map(std::path::Path::to_path_buf));
+                if let Some(dir) = dir {
+                    std::thread::spawn(move || {
+                        let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
+                    });
+                    self.launcher = None;
+                    return self.reconcile();
+                }
+                Task::none()
             }
             Message::Pipeline(done) => {
                 self.wallpaper.clone_from(&done.wallpaper);
@@ -844,11 +956,15 @@ impl Shell {
         Task::perform(tokio::time::sleep(delay), move |()| message)
     }
 
-    /// Run the focused power action (`Power` board: Enter confirms).
+    /// Run the focused power action (`Power` board: Enter confirms). Only
+    /// while the menu is actually up — a stray Enter elsewhere must not act.
     fn power_confirm(&mut self) -> Task<Message> {
+        if !matches!(self.centered, Some((CenteredRole::Power, _))) {
+            return Task::none();
+        }
         self.centered = None;
         match crate::panels::POWER_ACTIONS[self.power_focus] {
-            crate::panels::PowerAction::Lock => Self::lock(),
+            crate::panels::PowerAction::Lock => self.lock(),
             crate::panels::PowerAction::Sleep => services::suspend(),
             crate::panels::PowerAction::LogOut => niri::quit(),
             crate::panels::PowerAction::Restart => services::reboot(),
@@ -858,8 +974,22 @@ impl Shell {
     }
 
     /// Spawn `triton-lock` next to this binary (or on PATH) — a crash there
-    /// must not take the shell down (roadmap §3).
-    fn lock() {
+    /// must not take the shell down (roadmap §3). The lock screen reads the
+    /// notification-sender file for its status line.
+    fn lock(&self) {
+        // `$XDG_RUNTIME_DIR/triton/lock-notifs`: total count, then up to three
+        // sender names — the Lock board's notifications line.
+        if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+            let groups = self.notifs.groups();
+            let names: Vec<_> = groups.iter().take(3).map(|g| g.app.as_str()).collect();
+            let text = format!("{}\n{}\n", self.notifs.len(), names.join(", "));
+            let dir = std::path::PathBuf::from(dir).join("triton");
+            if std::fs::create_dir_all(&dir).is_ok()
+                && let Err(e) = std::fs::write(dir.join("lock-notifs"), text)
+            {
+                tracing::warn!(%e, "cannot write the lock status file");
+            }
+        }
         let exe = std::env::current_exe().ok();
         let sib = exe
             .as_deref()
@@ -899,22 +1029,38 @@ impl Shell {
 
     /// What happens at each idle stage (roadmap: dim → lock → suspend). The
     /// timeouts come from `wayl::idles` (`IDLE_TIMEOUTS`); resume resets.
+    /// `ScreenSaver` inhibitors hold every stage while a client inhibits.
     fn idle(&mut self, event: crate::wayl::IdleEvent) -> Task<Message> {
+        if self.inhibitors > 0 {
+            return Task::none();
+        }
         match event {
+            crate::wayl::IdleEvent::Idle(0) => {
+                self.idle_stage = 0;
+                self.dim(0.55);
+            }
             crate::wayl::IdleEvent::Idle(1) => {
                 self.idle_stage = 1;
-                Self::lock();
-                Task::none()
+                self.dim(1.0);
+                self.lock();
             }
             crate::wayl::IdleEvent::Idle(i) if i >= 2 => {
                 self.idle_stage = 2;
                 services::suspend();
-                Task::none()
             }
-            crate::wayl::IdleEvent::Idle(_) | crate::wayl::IdleEvent::Resumed(_) => {
+            crate::wayl::IdleEvent::Resumed(_) => {
                 self.idle_stage = 0;
-                Task::none()
+                self.dim(1.0);
             }
+            crate::wayl::IdleEvent::Idle(_) => {}
+        }
+        Task::none()
+    }
+
+    /// The idle dim stage's gamma scale (1.0 = undimmed).
+    fn dim(&self, factor: f32) {
+        if let Some(night) = &self.night_gamma {
+            night.set_dim(factor);
         }
     }
 
@@ -953,6 +1099,30 @@ impl Shell {
     fn svc_bt(&self) -> bool {
         self.svc.as_ref().is_some_and(|s| s.bt.powered)
     }
+    fn svc_audio_muted(&self) -> bool {
+        self.svc.as_ref().is_some_and(|s| s.audio.muted)
+    }
+    fn svc_mic_muted(&self) -> bool {
+        self.svc.as_ref().is_some_and(|s| s.audio.mic_muted)
+    }
+    fn svc_mic_present(&self) -> bool {
+        self.svc.as_ref().is_some_and(|s| s.audio.mic_present)
+    }
+    fn svc_sink(&self) -> &str {
+        self.svc
+            .as_ref()
+            .and_then(|s| s.audio.sink.as_deref())
+            .unwrap_or("Speakers")
+    }
+
+    /// The launcher's hits in display order, flattened across groups — what
+    /// the `↑↓` selection indexes.
+    fn flat_hits(&self) -> impl Iterator<Item = &crate::launch::Hit> {
+        self.results
+            .iter()
+            .flat_map(|r| r.groups.iter())
+            .flat_map(|(_, hits)| hits.iter())
+    }
 
     /// Run the query through the launch engine. Cheap enough to stay
     /// synchronous: a hundred entries against a subsequence scorer.
@@ -977,6 +1147,8 @@ impl Shell {
             LAUNCH_COMMANDS,
             &self.query,
         )));
+        self.sel = 0;
+        self.action_sel = None;
         Task::none()
     }
 
@@ -1038,8 +1210,26 @@ impl Shell {
                 }
             },
             ["lock"] => {
-                Self::lock();
+                self.lock();
                 Task::none()
+            }
+            ["workspace", n] => {
+                if let Ok(idx) = n.parse::<u8>() {
+                    niri::focus_workspace_idx(idx);
+                    let label = self
+                        .focused_output()
+                        .and_then(|o| {
+                            self.niri
+                                .workspaces_on(&o)
+                                .find(|w| w.idx == idx)
+                                .map(|w| w.name.clone().unwrap_or_else(|| idx.to_string()))
+                        })
+                        .unwrap_or_else(|| idx.to_string());
+                    self.show_osd(crate::panels::Osd::Workspace { label })
+                } else {
+                    tracing::warn!(?n, "msg: workspace wants an index");
+                    Task::none()
+                }
             }
             ["suspend"] => {
                 services::suspend();
@@ -1049,10 +1239,11 @@ impl Shell {
                 "up" => self.volume_step(0.05),
                 "down" => self.volume_step(-0.05),
                 "mute" => {
-                    services::set_mute(true);
+                    let muted = !self.svc_audio_muted();
+                    services::set_mute(muted);
                     self.show_osd(crate::panels::Osd::Volume {
                         percent: (self.volume * 100.0) as u8,
-                        muted: true,
+                        muted,
                     })
                 }
                 set => set.parse::<u8>().ok().map_or_else(
@@ -1075,8 +1266,16 @@ impl Shell {
                 ),
             },
             ["mic", "mute"] => {
-                services::set_mic_mute(true);
-                self.show_osd(crate::panels::Osd::MicMuted)
+                let muted = !self.svc_mic_muted();
+                services::set_mic_mute(muted);
+                if muted {
+                    self.show_osd(crate::panels::Osd::MicMuted)
+                } else if matches!(self.osd, Some(crate::panels::Osd::MicMuted)) {
+                    self.osd = None;
+                    self.reconcile()
+                } else {
+                    Task::none()
+                }
             }
             ["dnd", "toggle"] => self.update(Message::Dnd),
             ["nightlight", "toggle"] => self.update(Message::QsToggleNight),
@@ -1085,7 +1284,13 @@ impl Shell {
                 if path.is_empty() {
                     Task::none()
                 } else {
-                    self.set_wallpaper(std::path::PathBuf::from(path))
+                    let path = std::path::PathBuf::from(path);
+                    // Persist first: the lock screen and next boot read the
+                    // config file (`pipeline::set_wallpaper` was dead without this).
+                    if let Err(e) = crate::pipeline::set_wallpaper(&path) {
+                        tracing::warn!(%e, path = %path.display(), "cannot persist the wallpaper");
+                    }
+                    self.set_wallpaper(path)
                 }
             }
             ["notify", rest @ ..] => {
@@ -1110,8 +1315,8 @@ impl Shell {
                     name: "Deutsch".into(),
                 }),
                 ["battery"] => self.show_osd(crate::panels::Osd::Battery {
-                    percent: 18,
-                    left: "≈ 45 min left".into(),
+                    percent: self.statuses.battery.map_or(0, |b| b.percent),
+                    left: String::new(),
                 }),
                 other => {
                     tracing::warn!(?other, "msg: unknown osd kind");
@@ -1415,6 +1620,7 @@ impl Shell {
                 }
                 col.push(launcher_results(
                     self.results.as_deref().unwrap_or(&EMPTY_RESULTS),
+                    self.sel,
                 ))
                 .into()
             };
@@ -1465,7 +1671,12 @@ impl Shell {
                     button::button(
                         action.name.as_str(),
                         None,
-                        button::Kind::Text,
+                        // Tab focuses the action: it stands out until fired.
+                        if self.action_sel == Some(ai) {
+                            button::Kind::Tonal
+                        } else {
+                            button::Kind::Text
+                        },
                         button::Size::S,
                     )
                     .on_press(Message::LaunchHit(
@@ -1510,7 +1721,7 @@ impl Shell {
             .map(|g| {
                 (
                     g.app.clone(),
-                    g.items.iter().map(|n| self.notif_view(n)).collect(),
+                    g.items.iter().map(Self::notif_view).collect(),
                 )
             })
             .collect();
@@ -1519,8 +1730,7 @@ impl Shell {
     }
 
     /// Map a store row onto the card's plain inputs (icon hint → glyph fallback).
-    fn notif_view(&self, n: &crate::notify::Notification) -> crate::panels::NotifView {
-        let _ = self;
+    fn notif_view(n: &crate::notify::Notification) -> crate::panels::NotifView {
         crate::panels::NotifView {
             id: n.id,
             app: n.app_name.clone(),
@@ -1539,7 +1749,7 @@ impl Shell {
             .toasts(std::time::Instant::now(), self.dnd)
             .into_iter()
             .take(4)
-            .map(|n| self.notif_view(n))
+            .map(Self::notif_view)
             .collect::<Vec<_>>();
         let overflow = self
             .notifs
@@ -1565,7 +1775,7 @@ impl Shell {
             wifi_label: if self.svc_wifi() { "On" } else { "Off" },
             bt_on: self.svc_bt(),
             bt_label: if self.svc_bt() { "On" } else { "Off" },
-            sound_label: "Speakers",
+            sound_label: self.svc_sink(),
             night_on: self.night,
             night_label: if self.night { "On" } else { "Off" },
             brightness: self.brightness,
@@ -1573,6 +1783,8 @@ impl Shell {
             dnd: self.dnd,
             dark: self.variant == triton_design::Variant::Dark,
             saver: self.saver,
+            mic_present: self.svc_mic_present(),
+            mic_muted: self.svc_mic_muted(),
             aps: &self.aps,
             bt_devices: &self.bt_devices,
         })
@@ -1625,7 +1837,10 @@ impl Shell {
             right = right.push(pill);
         }
         right
-            .push(bar::bell(false, self.dnd).on_press(Message::Bell(output.to_owned())))
+            .push(
+                bar::bell(!self.notifs.is_empty(), self.dnd)
+                    .on_press(Message::Bell(output.to_owned())),
+            )
             .into()
     }
 
@@ -1638,23 +1853,39 @@ impl Shell {
             iced_runtime::window::close_events().map(Message::Closed),
             crate::notify::server().map(Message::Notify),
             crate::polkit::agent(shell.real_services).map(Message::Polkit),
+            crate::inhibit::server().map(Message::Inhibitors),
             crate::wayl::idles(&IDLE_TIMEOUTS).map(Message::Idle),
-            event::listen_with(|event, _status, id| match event {
+            // `listen_with` takes a plain fn, so modal scoping lives in
+            // `update`: these messages no-op when their modal is closed.
+            event::listen_with(|event, status, id| match event {
                 Event::Window(window::Event::Opened { .. }) => Some(Message::Opened(id)),
-                Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => match key {
-                    Key::Named(key::Named::Escape) => Some(Message::Dismiss),
-                    Key::Named(key::Named::ArrowLeft) => Some(Message::PowerMove(-1)),
-                    Key::Named(key::Named::ArrowRight) => Some(Message::PowerMove(1)),
-                    Key::Named(key::Named::Enter) => Some(Message::PowerConfirm),
-                    Key::Character(c) => c
-                        .chars()
-                        .next()
-                        .and_then(|c| c.to_digit(10))
-                        .and_then(|n| (n as usize).checked_sub(1))
-                        .filter(|i| *i < crate::panels::POWER_ACTIONS.len())
-                        .map(|i| Message::PowerPick(crate::panels::POWER_ACTIONS[i])),
-                    _ => None,
-                },
+                Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                    // A widget that consumed the key owns it — typing in a
+                    // field must never reach the modal shortcuts.
+                    if status == iced_core::event::Status::Captured {
+                        return None;
+                    }
+                    match key {
+                        Key::Named(key::Named::Escape) => Some(Message::Dismiss),
+                        Key::Named(key::Named::ArrowUp) => Some(Message::LauncherMove(-1)),
+                        Key::Named(key::Named::ArrowDown) => Some(Message::LauncherMove(1)),
+                        Key::Named(key::Named::Tab) => Some(Message::LauncherTab),
+                        Key::Named(key::Named::Enter) if modifiers.alt() => {
+                            Some(Message::LauncherReveal)
+                        }
+                        Key::Named(key::Named::ArrowLeft) => Some(Message::PowerMove(-1)),
+                        Key::Named(key::Named::ArrowRight) => Some(Message::PowerMove(1)),
+                        Key::Named(key::Named::Enter) => Some(Message::PowerConfirm),
+                        Key::Character(c) => c
+                            .chars()
+                            .next()
+                            .and_then(|c| c.to_digit(10))
+                            .and_then(|n| (n as usize).checked_sub(1))
+                            .filter(|i| *i < crate::panels::POWER_ACTIONS.len())
+                            .map(|i| Message::PowerPick(crate::panels::POWER_ACTIONS[i])),
+                        _ => None,
+                    }
+                }
                 _ => None,
             }),
         ])

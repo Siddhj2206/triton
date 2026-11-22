@@ -144,6 +144,10 @@ pub const BAR_SIDE: f32 = 16.0;
 /// Width of an island before it has been measured.
 const UNMEASURED: u32 = 56;
 
+/// A top-right panel's top margin when the bar is up: the islands' bottom
+/// edge plus a gap.
+const PANEL_TOP: f32 = BAR_TOP + SIZE.bar_height + 12.0;
+
 /// One island, in a top corner, exactly its own size: niri clips and shadows a
 /// layer surface as a whole, so the surface must be the pill and nothing more.
 fn island(role: Role, width: u32) -> SurfaceSpec {
@@ -269,7 +273,7 @@ fn launcher() -> SurfaceSpec {
 fn notifications(height: u32, bar_shown: bool) -> SurfaceSpec {
     let top = if bar_shown {
         // The islands' bottom edge is BAR_TOP + bar_height; a gap below.
-        (BAR_TOP + SIZE.bar_height + 12.0) as i32
+        PANEL_TOP as i32
     } else {
         20
     };
@@ -327,7 +331,8 @@ fn osd(width: u32, height: u32) -> SurfaceSpec {
         exclusive_zone: -1,
         margin: (0, 0, 48, 0),
         keyboard: Keyboard::None,
-        blur_radius: Some(32),
+        // A pill: half the measured height, like the islands' bar_height / 2.
+        blur_radius: Some(height.max(1) / 2),
         input_passthrough: true,
     }
 }
@@ -336,11 +341,7 @@ fn osd(width: u32, height: u32) -> SurfaceSpec {
 /// four cards and the overflow chip. Its top edge clears the bar, like the
 /// notification center's.
 fn toasts(height: u32, bar_shown: bool) -> SurfaceSpec {
-    let top = if bar_shown {
-        (BAR_TOP + SIZE.bar_height + 12.0) as i32
-    } else {
-        20
-    };
+    let top = if bar_shown { PANEL_TOP as i32 } else { 20 };
     SurfaceSpec {
         namespace: TOASTS_NAMESPACE,
         layer: Layer::Overlay,
@@ -362,11 +363,7 @@ fn toasts(height: u32, bar_shown: bool) -> SurfaceSpec {
 /// Quick settings (`QuickSettings` board): a top-right Glass panel, 420 wide,
 /// as tall as its page. Grabs the keyboard while open (Esc, drill-in nav).
 fn quick_settings(height: u32, bar_shown: bool) -> SurfaceSpec {
-    let top = if bar_shown {
-        (BAR_TOP + SIZE.bar_height + 12.0) as i32
-    } else {
-        20
-    };
+    let top = if bar_shown { PANEL_TOP as i32 } else { 20 };
     SurfaceSpec {
         namespace: QUICK_SETTINGS_NAMESPACE,
         layer: Layer::Overlay,

@@ -161,6 +161,14 @@ pub fn focus_workspace(id: u64) {
     });
 }
 
+/// Focus a workspace by its index on its output — what the `Mod+1..9` binds
+/// in the generated `binds.kdl` ask for.
+pub fn focus_workspace_idx(idx: u8) {
+    act(Action::FocusWorkspace {
+        reference: WorkspaceReferenceArg::Index(idx),
+    });
+}
+
 /// Focus a window (the launcher's window results).
 pub fn focus_window(id: u64) {
     act(Action::FocusWindow { id });

@@ -10,11 +10,6 @@
 //! Skipped for now: `image-data` (raw pixels — the UI has no image slot) and
 //! the sound hints; seeing them is debug-logged once.
 
-// Nothing calls this module yet — the notification center and toasts
-// (Phase 1) wire `server`, `Store`, `closed` and `action_invoked` into
-// `app.rs`. Drop the allow when they do.
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Once, OnceLock};
@@ -51,10 +46,12 @@ pub struct Notification {
     pub id: u32,
     pub app_name: String,
     /// `app_icon`, else the `image-path`/`image_path` hint.
+    #[expect(dead_code, reason = "icon images land with the card icon support")]
     pub icon: Option<String>,
     pub summary: String,
     pub body: String,
     /// `(action key, label)` pairs from the flat alternating actions array.
+    #[expect(dead_code, reason = "action buttons land with the card actions")]
     pub actions: Vec<(String, String)>,
     pub urgency: Urgency,
     /// Toast lifetime. `expire_timeout <= 0` becomes `DEFAULT_TIMEOUT`;

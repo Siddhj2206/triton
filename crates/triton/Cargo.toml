@@ -47,7 +47,7 @@ triton-design.workspace = true
 triton-ui.workspace = true
 # Status services read UPower and NetworkManager over D-Bus; `block_on` on the
 # watcher threads needs no async runtime of ours (zruntime's helper thread).
-zbus = { version = "6", default-features = false, features = [
+zbus = { workspace = true, features = [
   "default-rt",
   "proxy",
   # `service`: the shell serves org.freedesktop.Notifications and the polkit agent.

@@ -4,6 +4,7 @@ use iced_core::layout::{self, Layout};
 use iced_core::widget::{Tree, Widget, tree};
 use iced_core::{Color, Length, Padding, Rectangle, Shadow, Vector, mouse, renderer};
 use iced_widget::container::{Catalog, Style};
+use iced_widget::text::IntoFragment;
 use iced_widget::{Column, Container, Row, Space};
 use triton_design::color::with_alpha;
 use triton_design::material::ShadowToken;
@@ -505,7 +506,7 @@ pub fn card<'a, M: 'a>(content: impl Into<Element<'a, M>>) -> Panel<'a, M> {
 }
 
 /// `.t-pill`: icon and label on Glass, 36 high.
-pub fn pill<'a, M: 'a>(glyph: Icon, label: &'a str) -> Panel<'a, M> {
+pub fn pill<'a, M: 'a>(glyph: Icon, label: impl IntoFragment<'a>) -> Panel<'a, M> {
     let content = Row::new()
         .push(icon(glyph, IconStyle::Outlined, 18.0))
         .push(crate::text::ui(

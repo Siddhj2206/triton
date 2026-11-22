@@ -29,8 +29,10 @@ pub enum Osd {
     MicMuted,
     /// Keyboard layout code + language name ("DE / Deutsch").
     Layout { code: String, name: String },
-    /// Low battery: percent + time-left line + the Saver action (6 s hold).
+    /// Low battery: percent + optional hint line (6 s hold).
     Battery { percent: u8, left: String },
+    /// A workspace switch (from a `Mod+N` bind): its name or index.
+    Workspace { label: String },
 }
 
 impl Osd {
@@ -77,7 +79,7 @@ fn osd_meter(icon: Icon, level: f32, number: String, off: bool) -> Element<'stat
         .into()
 }
 
-/// The OSD pill content. `Message::OsdAction` fires for the saver button.
+/// The OSD pill content. Pass-through: nothing here is pressable.
 pub fn osd(osd: &Osd) -> Element<'_, Message> {
     let row = match osd {
         Osd::Volume { percent, muted } => osd_meter(
@@ -106,22 +108,29 @@ pub fn osd(osd: &Osd) -> Element<'_, Message> {
             )
             .padding(Padding::from([14.0, 8.0]))
             .into(),
-        Osd::Battery { percent, left } => Row::new()
+        Osd::Battery { percent, left } => {
+            let mut lines = Column::new().push(text::text(
+                format!("Battery {percent}%"),
+                TypeStyle::TITLE_M,
+            ));
+            if !left.is_empty() {
+                lines = lines.push(
+                    text::text(left.clone(), TypeStyle::BODY_S).class(Tone::OnSurfaceVariant),
+                );
+            }
+            Row::new()
+                .spacing(14)
+                .align_y(Vertical::Center)
+                .push(surface::icon_disc(Icon::BatteryAlert))
+                .push(lines)
+                .padding(Padding::from([14.0, 8.0]))
+                .into()
+        }
+        Osd::Workspace { label } => Row::new()
             .spacing(14)
             .align_y(Vertical::Center)
-            .push(surface::icon_disc(Icon::BatteryAlert))
-            .push(
-                Column::new()
-                    .push(text::text(
-                        format!("Battery {percent}%"),
-                        TypeStyle::TITLE_M,
-                    ))
-                    .push(
-                        text::text(left.clone(), TypeStyle::BODY_S).class(Tone::OnSurfaceVariant),
-                    ),
-            )
-            .push(Space::new().width(16))
-            .push(button::button("Saver", None, Kind::Filled, Size::S).on_press(Message::OsdSaver))
+            .push(surface::icon_disc(Icon::Apps))
+            .push(text::text(label.clone(), TypeStyle::TITLE_M))
             .padding(Padding::from([14.0, 8.0]))
             .into(),
     };
@@ -259,6 +268,26 @@ pub enum QsPage {
     Sound,
 }
 
+/// One Wi-Fi page row, shaped by `app` from `services::AccessPoint`.
+#[derive(Debug)]
+pub struct QsAp {
+    pub ssid: String,
+    /// "82% · secured" under the SSID.
+    pub supporting: String,
+    pub secured: bool,
+    pub connected: bool,
+}
+
+/// One Bluetooth page row, shaped by `app` from `services::Device`.
+#[derive(Debug)]
+pub struct QsBt {
+    pub name: String,
+    /// "Connected · 82%" / "Paired" / "Available".
+    pub supporting: String,
+    pub address: String,
+    pub connected: bool,
+}
+
 /// The board's 2×2 tile grid, then the two sliders, then the footer.
 /// Inputs arrive already shaped by `app` from `services::State`.
 /// Six tiles, six bools — the shape mirrors the board.
@@ -277,10 +306,13 @@ pub struct Qs<'a> {
     pub dnd: bool,
     pub dark: bool,
     pub saver: bool,
-    /// (ssid, supporting, secured, connected) for the Wi-Fi page.
-    pub aps: &'a [(String, String, bool, bool)],
-    /// (name, supporting, address, connected) for the Bluetooth page.
-    pub bt_devices: &'a [(String, String, String, bool)],
+    /// The Sound page's mic control: hidden when no source exists.
+    pub mic_present: bool,
+    pub mic_muted: bool,
+    /// The Wi-Fi page's access points.
+    pub aps: &'a [QsAp],
+    /// The Bluetooth page's devices.
+    pub bt_devices: &'a [QsBt],
 }
 
 fn tile<'a>(
@@ -450,22 +482,23 @@ pub fn quick_settings(qs: Qs<'_>) -> Element<'_, Message> {
             let items: Vec<surface::ListItem<'_, Message>> = qs
                 .aps
                 .iter()
-                .map(|(ssid, sub, secured, connected)| surface::ListItem {
+                .map(|ap| surface::ListItem {
                     leading: Some(surface::icon_disc(Icon::Wifi).into()),
-                    title: ssid.as_str(),
-                    supporting: Some(sub.as_str()),
+                    title: ap.ssid.as_str(),
+                    supporting: Some(ap.supporting.as_str()),
                     trailing: Some(
-                        if *connected {
+                        if ap.connected {
                             text::icon(Icon::Check, IconStyle::Outlined, 20.0)
-                        } else if *secured {
+                        } else if ap.secured {
                             text::icon(Icon::Lock, IconStyle::Outlined, 18.0)
                         } else {
                             text::icon(Icon::Wifi, IconStyle::Outlined, 18.0)
                         }
                         .into(),
                     ),
-                    selected: *connected,
-                    on_press: None,
+                    selected: ap.connected,
+                    // The connected row is inert; others join the network.
+                    on_press: (!ap.connected).then(|| Message::WifiJoin(ap.ssid.clone())),
                 })
                 .collect();
             Column::new()
@@ -486,17 +519,17 @@ pub fn quick_settings(qs: Qs<'_>) -> Element<'_, Message> {
             let items: Vec<surface::ListItem<'_, Message>> = qs
                 .bt_devices
                 .iter()
-                .map(|(name, sub, addr, connected)| surface::ListItem {
+                .map(|d| surface::ListItem {
                     leading: Some(surface::icon_disc(Icon::Bluetooth).into()),
-                    title: name.as_str(),
-                    supporting: Some(sub.as_str()),
-                    trailing: connected.then(|| {
+                    title: d.name.as_str(),
+                    supporting: Some(d.supporting.as_str()),
+                    trailing: d.connected.then(|| {
                         text::icon(Icon::BluetoothConnected, IconStyle::Outlined, 20.0).into()
                     }),
-                    selected: *connected,
+                    selected: d.connected,
                     on_press: Some(Message::BtDevice {
-                        address: addr.clone(),
-                        connected: *connected,
+                        address: d.address.clone(),
+                        connected: d.connected,
                     }),
                 })
                 .collect();
@@ -514,9 +547,8 @@ pub fn quick_settings(qs: Qs<'_>) -> Element<'_, Message> {
                 )
                 .into()
         }
-        QsPage::Sound => Column::new()
-            .spacing(14)
-            .push(
+        QsPage::Sound => {
+            let mut col = Column::new().spacing(14).push(
                 Row::new()
                     .spacing(12)
                     .align_y(Vertical::Center)
@@ -526,20 +558,27 @@ pub fn quick_settings(qs: Qs<'_>) -> Element<'_, Message> {
                             .on_glass(true)
                             .on_release(Message::QsVolumeCommit),
                     ),
-            )
-            .push(
-                Row::new()
-                    .spacing(12)
-                    .align_y(Vertical::Center)
-                    .push(text::icon(Icon::Mic, IconStyle::Outlined, 20.0))
-                    .push(text::text("Microphone", TypeStyle::BODY_M))
-                    .push(Space::new().width(Length::Fill))
-                    .push(
-                        button::button("Mute", None, Kind::Tonal, Size::S)
+            );
+            if qs.mic_present {
+                col = col.push(
+                    Row::new()
+                        .spacing(12)
+                        .align_y(Vertical::Center)
+                        .push(text::icon(Icon::Mic, IconStyle::Outlined, 20.0))
+                        .push(text::text("Microphone", TypeStyle::BODY_M))
+                        .push(Space::new().width(Length::Fill))
+                        .push(
+                            button::button(
+                                if qs.mic_muted { "Unmute" } else { "Mute" },
+                                None,
+                                Kind::Tonal,
+                                Size::S,
+                            )
                             .on_press(Message::QsMicMute),
-                    ),
-            )
-            .push(
+                        ),
+                );
+            }
+            col.push(
                 button::button(
                     "All sound settings",
                     Some(Icon::Tune),
@@ -548,7 +587,8 @@ pub fn quick_settings(qs: Qs<'_>) -> Element<'_, Message> {
                 )
                 .on_press(Message::QsAllSettings),
             )
-            .into(),
+            .into()
+        }
     };
     // Header: back + title on pages, title + gear on root.
     let header = match qs.page {
@@ -652,7 +692,7 @@ pub fn toasts(list: Vec<NotifView>, overflow: usize) -> Element<'static, Message
     }
     if overflow > 0 {
         col = col.push(
-            surface::pill(Icon::Stacks, format!("{overflow} more").leak())
+            surface::pill(Icon::Stacks, format!("{overflow} more"))
                 .align_x(Horizontal::Right)
                 .width(Length::Fill),
         );
@@ -728,13 +768,8 @@ pub fn notification_center(
         }
         if hidden > 0 {
             group = group.push(
-                button::button(
-                    format!("Show {hidden} more").leak(),
-                    None,
-                    Kind::Text,
-                    Size::S,
-                )
-                .on_press(Message::NotifGroupToggle(app.clone())),
+                button::button(format!("Show {hidden} more"), None, Kind::Text, Size::S)
+                    .on_press(Message::NotifGroupToggle(app.clone())),
             );
         }
         col = col.push(group);
@@ -754,7 +789,7 @@ pub fn polkit_dialog<'a>(message: &'a str, user: &'a str, value: &'a str) -> Ele
         value,
         Field::Nested {
             outer: triton_design::shape::RADII.floating_window,
-            inset: 14.0,
+            inset: crate::app::LAUNCHER_PAD,
         },
     )
     .secure(true)

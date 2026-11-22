@@ -11,10 +11,6 @@
 //! yet; [`Scope::Files`] is already recognized so the UI can show its empty
 //! state.
 
-// The app wires the rest of this API in Phase 1; until then most of it is dead
-// code and the expectation is fulfilled. The wiring change removes this.
-#![expect(dead_code, reason = "wired by the launcher UI in Phase 1")]
-
 mod index;
 mod math;
 mod search;

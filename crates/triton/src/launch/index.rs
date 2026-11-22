@@ -32,6 +32,8 @@ pub struct App {
     /// The `Exec` line, ready to spawn.
     pub exec: Exec,
     /// `Icon`: a themed name or an absolute path.
+    // Read only by tests today; icon images land with the Phase 2 launcher icons.
+    #[allow(dead_code)]
     pub icon: Option<String>,
     /// Localized `Keywords`, extra haystack for matching.
     pub keywords: Vec<String>,
@@ -39,6 +41,8 @@ pub struct App {
     pub actions: Vec<AppAction>,
     /// `Terminal=true`: launch inside a terminal emulator.
     pub terminal: bool,
+    /// The `.desktop` file's path — Alt+Enter reveals its directory.
+    pub path: PathBuf,
 }
 
 /// An `Exec` line with field codes stripped and quoting honored: element 0 is
@@ -50,6 +54,7 @@ pub struct Exec(pub Vec<String>);
 #[derive(Debug, Clone)]
 pub struct AppAction {
     /// The action's id as listed in `Actions`.
+    #[expect(dead_code, reason = "the stable key; the view uses index position")]
     pub id: String,
     /// Localized action `Name` ("New window").
     pub name: String,
@@ -144,6 +149,7 @@ impl App {
                 .collect(),
             actions,
             terminal: entry.terminal(),
+            path: entry.path.clone(),
         })
     }
 }

@@ -112,6 +112,15 @@ fn binds() -> String {
     XF86AudioMicMute {{ spawn \"triton\" \"msg\" \"mic mute\"; }}
     XF86MonBrightnessUp {{ spawn \"triton\" \"msg\" \"brightness up\"; }}
     XF86MonBrightnessDown {{ spawn \"triton\" \"msg\" \"brightness down\"; }}
+    Mod+1 {{ spawn \"triton\" \"msg\" \"workspace\" \"1\"; }}
+    Mod+2 {{ spawn \"triton\" \"msg\" \"workspace\" \"2\"; }}
+    Mod+3 {{ spawn \"triton\" \"msg\" \"workspace\" \"3\"; }}
+    Mod+4 {{ spawn \"triton\" \"msg\" \"workspace\" \"4\"; }}
+    Mod+5 {{ spawn \"triton\" \"msg\" \"workspace\" \"5\"; }}
+    Mod+6 {{ spawn \"triton\" \"msg\" \"workspace\" \"6\"; }}
+    Mod+7 {{ spawn \"triton\" \"msg\" \"workspace\" \"7\"; }}
+    Mod+8 {{ spawn \"triton\" \"msg\" \"workspace\" \"8\"; }}
+    Mod+9 {{ spawn \"triton\" \"msg\" \"workspace\" \"9\"; }}
 }}
 "
     )
@@ -137,62 +146,63 @@ fn colors(scheme: &triton_design::Scheme) -> String {
 }
 
 /// The systemd user unit: niri-session runs `graphical-session.target`, so a
-/// `WantedBy` on it starts the shell with the session (roadmap §2).
-const UNIT: &str = "# Written by triton. Changes here are overwritten.
+/// `WantedBy` on it starts the shell with the session (roadmap §2). `ExecStart`
+/// is this binary — whatever installed the unit — with `--real-services` on:
+/// dev and preview runs invoke the binary directly and stay on the fake
+/// backend, but a unit that runs the fake would have no real battery, no
+/// power actions and no polkit agent.
+fn unit() -> String {
+    let exe =
+        std::env::current_exe().map_or_else(|_| "triton".to_owned(), |p| p.display().to_string());
+    format!(
+        "# Written by triton. Changes here are overwritten.
 [Unit]
 Description=Triton shell (bar, panels, OSD, notifications)
 PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-ExecStart=triton
+ExecStart={exe} --real-services
 Restart=on-failure
 Slice=session.slice
 
 [Install]
 WantedBy=graphical-session.target
-";
+"
+    )
+}
 
 /// `~/.config/systemd/user`: the unit plus the wants link that enables it —
-/// the same "one owned file" pattern as the niri includes.
+/// the same "one owned file" pattern as the niri includes. A changed unit or
+/// a new link takes a `daemon-reload` to register.
 fn install_unit() -> io::Result<()> {
-    let Some(base) = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".config")))
-    else {
+    let Some(base) = crate::util::config_root() else {
         return Ok(());
     };
     let dir = base.join("systemd/user");
     fs::create_dir_all(&dir)?;
-    write_if_changed(&dir, "triton.service", UNIT)?;
+    let mut changed = crate::util::write_if_changed(&dir, "triton.service", &unit())?;
     let wants = dir.join("graphical-session.target.wants");
     fs::create_dir_all(&wants)?;
     let link = wants.join("triton.service");
     if !link.exists() {
         std::os::unix::fs::symlink("../triton.service", &link)?;
         tracing::info!(path = %link.display(), "enabled triton.service");
+        changed = true;
+    }
+    if changed {
+        std::thread::spawn(|| {
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "daemon-reload"])
+                .spawn()
+                .map(|mut child| child.wait());
+        });
     }
     Ok(())
 }
 
 fn niri_dir() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".config")))?;
-    Some(base.join("niri"))
-}
-
-/// Writes `text` to `dir/name` only if it differs, through a same-dir rename.
-fn write_if_changed(dir: &Path, name: &str, text: &str) -> io::Result<()> {
-    let path = dir.join(name);
-    if fs::read_to_string(&path).is_ok_and(|old| old == text) {
-        return Ok(());
-    }
-    let staged = dir.join(format!(".{name}.new"));
-    fs::write(&staged, text)?;
-    fs::rename(&staged, &path)?;
-    tracing::info!(path = %path.display(), "wrote niri config");
-    Ok(())
+    crate::util::config_root().map(|base| base.join("niri"))
 }
 
 /// `config.kdl` already hands off to triton when some `include` line names our
@@ -216,7 +226,8 @@ fn ensure_include_line(dir: &Path) -> io::Result<()> {
     } else {
         "\n"
     };
-    write_if_changed(dir, "config.kdl", &format!("{old}{sep}{INCLUDE_LINE}\n"))
+    crate::util::write_if_changed(dir, "config.kdl", &format!("{old}{sep}{INCLUDE_LINE}\n"))?;
+    Ok(())
 }
 
 /// Writes the files that differ from what is on disk, then makes sure the
@@ -233,7 +244,7 @@ pub fn install(scheme: &triton_design::Scheme) -> io::Result<()> {
     fs::create_dir_all(&dir)?;
     // Leaf files first, so the index never names a file that is not there yet.
     for (name, text) in render(scheme).into_iter().rev() {
-        write_if_changed(&dir, name, &text)?;
+        crate::util::write_if_changed(&dir, name, &text)?;
     }
     ensure_include_line(&niri)
 }

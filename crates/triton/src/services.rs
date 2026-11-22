@@ -1448,6 +1448,31 @@ pub fn wifi_rescan() {
     }
 }
 
+/// Join a wifi network by SSID. `nmcli dev wifi connect` covers known and
+/// open networks; a secured network with no saved profile fails and NM keeps
+/// the current connection — the password flow is the settings app's (Phase 3).
+/// NM's property signals refetch the new state once it lands.
+pub fn wifi_connect(ssid: &str) {
+    if real() {
+        let ssid = ssid.to_owned();
+        run_command("nm-connect", move || {
+            if run("nmcli", &["device", "wifi", "connect", &ssid]).is_none() {
+                tracing::warn!(%ssid, "nmcli: wifi connect failed");
+            }
+        });
+    } else {
+        let ssid = ssid.to_owned();
+        fake_mutate(move |state| {
+            if state.net.aps.iter().any(|ap| ap.ssid == ssid) {
+                for ap in &mut state.net.aps {
+                    ap.connected = ap.ssid == ssid;
+                }
+                state.net.wifi = Some(ssid);
+            }
+        });
+    }
+}
+
 /// Power the bluetooth adapters on or off.
 pub fn bt_power(on: bool) {
     if real() {

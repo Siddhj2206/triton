@@ -67,6 +67,12 @@ impl Night {
     pub fn set_temperature(&self, kelvin: u16) {
         self.shared.send(Cmd::Temperature(kelvin));
     }
+
+    /// Dim every output by `factor` (1.0 = full brightness): the idle dim
+    /// stage. Composes with the temperature — both fold into the one table.
+    pub fn set_dim(&self, factor: f32) {
+        self.shared.send(Cmd::Dim(factor));
+    }
 }
 
 /// Starts the worker thread's connection and returns the `Night` handle, or
@@ -138,6 +144,8 @@ fn shared() -> Option<&'static Shared> {
 enum Cmd {
     /// Apply this color temperature on every gamma-controlled output.
     Temperature(u16),
+    /// Scale brightness by this factor on every output (the idle dim stage).
+    Dim(f32),
     /// Register one idle notification per timeout; events go to `tx`.
     Watch {
         timeouts: Vec<u32>,
@@ -215,6 +223,10 @@ struct State {
     notifier_name: Option<u32>,
     gamma: Option<ZwlrGammaControlManagerV1>,
     gamma_name: Option<u32>,
+    /// Current color temperature — the gamma table folds it with `dim`.
+    kelvin: u16,
+    /// Brightness scale for the idle dim stage (1.0 = undimmed).
+    dim: f32,
     outputs: Vec<Output>,
     watches: Vec<Watch>,
     /// Ramp files whose fds must stay open until the next `flush` — the
@@ -225,7 +237,14 @@ struct State {
 impl State {
     fn command(&mut self, cmd: Cmd, qh: &QueueHandle<Self>) {
         match cmd {
-            Cmd::Temperature(kelvin) => self.temperature(kelvin),
+            Cmd::Temperature(kelvin) => {
+                self.kelvin = kelvin;
+                self.apply_gamma();
+            }
+            Cmd::Dim(factor) => {
+                self.dim = factor.clamp(0.0, 1.0);
+                self.apply_gamma();
+            }
             Cmd::Watch { timeouts, tx } => {
                 let mut watch = Watch {
                     timeouts,
@@ -247,7 +266,8 @@ impl State {
         self.watches.retain(|watch| !watch.tx.is_closed());
     }
 
-    fn temperature(&mut self, kelvin: u16) {
+    /// Write the table for the current kelvin × dim to every controlled output.
+    fn apply_gamma(&mut self) {
         for output in &mut self.outputs {
             let Some(control) = &output.control else {
                 continue;
@@ -255,7 +275,7 @@ impl State {
             if output.ramp == 0 {
                 continue; // no gamma_size yet (or a failed control)
             }
-            let table = gamma_table(kelvin, output.ramp);
+            let table = gamma_table(self.kelvin, output.ramp, self.dim);
             let Some(file) = ramp_file(&table) else {
                 tracing::warn!("wayl: cannot write a gamma table");
                 continue;
@@ -515,8 +535,9 @@ fn whitepoint(kelvin: u16) -> [f64; 3] {
 }
 
 /// The gamma table `set_gamma` wants: `size` u16 entries per channel, red then
-/// green then blue — a linear ramp scaled by the temperature's channel factor.
-fn gamma_table(kelvin: u16, size: usize) -> Vec<u16> {
+/// green then blue — a linear ramp scaled by the temperature's channel factor
+/// and the idle dim factor.
+fn gamma_table(kelvin: u16, size: usize, dim: f32) -> Vec<u16> {
     // chunks_mut panics on a zero chunk; the caller already skips ramp 0.
     if size == 0 {
         return Vec::new();
@@ -529,7 +550,9 @@ fn gamma_table(kelvin: u16, size: usize) -> Vec<u16> {
             } else {
                 1.0
             };
-            *entry = (level * factor * 65535.0).round().min(65535.0) as u16;
+            *entry = (level * factor * f64::from(dim) * 65535.0)
+                .round()
+                .min(65535.0) as u16;
         }
     }
     table
@@ -599,6 +622,8 @@ fn connect() -> Option<Shared> {
         notifier_name: None,
         gamma: None,
         gamma_name: None,
+        kelvin: 6500,
+        dim: 1.0,
         outputs: Vec::new(),
         watches: Vec::new(),
         pending: Vec::new(),

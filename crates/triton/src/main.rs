@@ -4,6 +4,7 @@
 
 mod app;
 mod host;
+mod inhibit;
 mod launch;
 mod msg;
 mod niri;
@@ -14,6 +15,7 @@ mod pipeline;
 mod polkit;
 mod services;
 mod shell;
+mod util;
 mod wayl;
 
 use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};

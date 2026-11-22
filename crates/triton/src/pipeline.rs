@@ -10,10 +10,6 @@
 //! reports the targets that finished, for the toast. [`run`] is the whole chain
 //! for the worker thread `app::set_wallpaper` kicks off.
 
-// `current_wallpaper`, `set_wallpaper`, `load` and `Wallpaper` are for the boot
-// wiring and the Phase 2 picker; they have tests but no caller yet.
-#![allow(dead_code)]
-
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -31,7 +27,18 @@ use material_colors::image::extract_color;
 use material_colors::scheme::variant::SchemeTonalSpot;
 use triton_design::color::{Scheme, Variant, luminance};
 
-use crate::app::PipelineDone;
+/// What the pipeline worker hands back to the app: the wallpaper image and
+/// both schemes.
+#[derive(Debug)]
+pub struct PipelineDone {
+    pub wallpaper: Option<iced_widget::image::Handle>,
+    /// Mean wallpaper luminance → Mica's adaptive tint.
+    pub luminance: f32,
+    pub dark: triton_design::Scheme,
+    pub light: triton_design::Scheme,
+    /// Targets the last `apply` finished (for its toast).
+    pub applied: Vec<&'static str>,
+}
 
 /// Long side of the copy that goes to the quantizer; the engine's own docs warn
 /// that quantize time grows with pixel count and suggest ~128 px.
@@ -40,20 +47,13 @@ const SCHEME_SIDE: u32 = 128;
 /// Long side of the copy the luminance is averaged over.
 const LUMINANCE_SIDE: u32 = 64;
 
-/// `~/.config`, honoring `XDG_CONFIG_HOME` the way `niri_config::niri_dir` does.
-fn config_root() -> Option<PathBuf> {
-    std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".config")))
-}
-
 /// The configured wallpaper: contents of `$XDG_CONFIG_HOME/triton/wallpaper`
 /// (one path), else the most recently modified image in `~/Pictures`, else
 /// `None`. Anything unreadable or missing falls through to the next source
 /// with a warning.
 pub fn current_wallpaper() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    let config = config_root()?;
+    let config = crate::util::config_root()?;
     wallpaper_in(&config, &home)
 }
 
@@ -131,7 +131,7 @@ fn is_image(path: &Path) -> bool {
 
 /// Persist a wallpaper choice: `$XDG_CONFIG_HOME/triton/wallpaper` gets one path.
 pub fn set_wallpaper(path: &Path) -> io::Result<()> {
-    let root = config_root()
+    let root = crate::util::config_root()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no HOME or XDG_CONFIG_HOME"))?;
     set_wallpaper_in(&root, path)
 }
@@ -141,7 +141,8 @@ fn set_wallpaper_in(config: &Path, path: &Path) -> io::Result<()> {
     let text = path.to_str().ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "wallpaper path is not UTF-8")
     })?;
-    write_if_changed(&config.join("triton"), "wallpaper", &format!("{text}\n"))
+    crate::util::write_if_changed(&config.join("triton"), "wallpaper", &format!("{text}\n"))?;
+    Ok(())
 }
 
 /// A decoded wallpaper: the pixels the background surface draws, plus the number
@@ -149,13 +150,19 @@ fn set_wallpaper_in(config: &Path, path: &Path) -> io::Result<()> {
 #[derive(Debug, Clone)]
 pub struct Wallpaper {
     /// Full-res handle for the background surface to draw (`ContentFit::Cover`).
+    #[expect(dead_code, reason = "the Phase 2 wallpaper picker previews with it")]
     pub handle: Handle,
     /// Mean luminance of a downscaled copy; feeds Mica's adaptive tint.
+    // Read only by tests today, like `load` — `expect` fails unfulfilled there.
+    #[allow(dead_code)]
     pub luminance: f32,
 }
 
 /// Decode `path` once: the handle owns the full-res pixels, a downscaled copy
 /// gives the mean luminance.
+// Dead in the binary but exercised by tests — `expect` would fail unfulfilled
+// in the test build, so this keeps a targeted `allow`.
+#[allow(dead_code)]
 pub fn load(path: &Path) -> anyhow::Result<Wallpaper> {
     let rgba = decode(path)?;
     let thumb = downscale(&rgba, LUMINANCE_SIDE);
@@ -283,7 +290,7 @@ fn mean_luminance(image: &RgbaImage) -> f32 {
 /// `niri_config::install`, which owns its own files; the shell theme is the
 /// `Scheme` itself.)
 pub fn apply(scheme: &Scheme, variant: Variant) -> Vec<&'static str> {
-    let Some(config) = config_root() else {
+    let Some(config) = crate::util::config_root() else {
         tracing::warn!("no HOME or XDG_CONFIG_HOME; nothing applied");
         return Vec::new();
     };
@@ -343,8 +350,8 @@ fn apply_to(
         ("gtk-3.0", config.join("gtk-3.0")),
         ("gtk-4.0", config.join("gtk-4.0")),
     ] {
-        match write_if_changed(&dir, "gtk.css", &css) {
-            Ok(()) => done.push(name),
+        match crate::util::write_if_changed(&dir, "gtk.css", &css) {
+            Ok(_) => done.push(name),
             Err(e) => tracing::warn!(%e, dir = %dir.display(), "cannot write gtk.css"),
         }
     }
@@ -468,22 +475,6 @@ fn hct_color(hue: f64, chroma: f64, tone: f64) -> Color {
 fn hex(color: Color) -> String {
     let [r, g, b, _] = color.into_rgba8();
     format!("#{r:02x}{g:02x}{b:02x}")
-}
-
-/// Write `text` to `dir/name` only when it differs, staged `.new` + rename —
-/// the `niri_config::write_if_changed` approach (kept private there; the theme
-/// files want the same one).
-fn write_if_changed(dir: &Path, name: &str, text: &str) -> io::Result<()> {
-    let path = dir.join(name);
-    if fs::read_to_string(&path).is_ok_and(|old| old == text) {
-        return Ok(());
-    }
-    fs::create_dir_all(dir)?;
-    let staged = dir.join(format!(".{name}.new"));
-    fs::write(&staged, text)?;
-    fs::rename(&staged, &path)?;
-    tracing::info!(path = %path.display(), "wrote theme file");
-    Ok(())
 }
 
 #[cfg(test)]

@@ -84,6 +84,8 @@ pub struct Lock {
     error: Option<&'static str>,
     locked_at: chrono::DateTime<chrono::Local>,
     now: chrono::DateTime<chrono::Local>,
+    /// The "N new · senders" line the shell leaves behind when it locks.
+    notifications: Option<String>,
 }
 
 impl Lock {
@@ -101,6 +103,7 @@ impl Lock {
                 error: None,
                 locked_at: now,
                 now,
+                notifications: lock_status(),
             },
             Task::none(),
         )
@@ -232,12 +235,18 @@ impl Lock {
 
     /// Date and the huge Jost clock over the card, centered on the output.
     fn content(&self) -> Element<'_, Message> {
-        let header = column![
+        let mut header = column![
             text::text(self.date(), TypeStyle::TITLE_L),
             text::text(self.clock(), CLOCK),
         ]
         .spacing(4)
         .align_x(Horizontal::Center);
+        // The Lock board's notifications line: senders from the shell's store.
+        if let Some(notifications) = &self.notifications {
+            header = header
+                .push(text::text(notifications.as_str(), TypeStyle::BODY_M))
+                .push(Space::new().height(8));
+        }
         iced_widget::container(
             column![header, self.card()]
                 .spacing(56)
@@ -343,6 +352,25 @@ impl Lock {
     fn clock(&self) -> String {
         self.now.format("%H:%M").to_string()
     }
+}
+
+/// `$XDG_RUNTIME_DIR/triton/lock-notifs`: the shell writes the store's total
+/// on the first line and up to three sender names on the second when it
+/// spawns us (the Lock board's notifications line). Absent or zero → `None`.
+fn lock_status() -> Option<String> {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)?;
+    let text = std::fs::read_to_string(dir.join("triton").join("lock-notifs")).ok()?;
+    let mut lines = text.lines();
+    let count: u64 = lines.next()?.trim().parse().ok()?;
+    let senders = lines.next().unwrap_or("").trim();
+    if count == 0 {
+        return None;
+    }
+    Some(if senders.is_empty() {
+        format!("{count} notifications")
+    } else {
+        format!("{count} new · {senders}")
+    })
 }
 
 /// The user's wallpaper: `$XDG_CONFIG_HOME/triton/wallpaper` holds one path.
