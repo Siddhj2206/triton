@@ -361,12 +361,19 @@ pub struct Element<M> {
     pub layer_key: Option<NodeKey>,
 }
 
+/// Minimum compounded `SubtreeTransform` opacity required before emitting a
+/// compositor blur region (`ext-background-effect`). Prevents fading surfaces
+/// from smearing underlying surfaces with full-strength compositor blur while
+/// nearly transparent.
+const BLUR_OPACITY_THRESHOLD: f32 = 0.85;
+
 impl<M> Element<M> {
     fn container(dir: FlexDirection) -> Self {
         Self {
             key: None,
             layout: Style {
                 display: Display::Flex,
+                position: Position::Relative,
                 flex_direction: dir,
                 ..Style::default()
             },
@@ -1447,6 +1454,7 @@ pub fn layout_and_paint<M>(
         None,
         None,
         None,
+        None,
         scale,
         interaction,
         text,
@@ -1536,6 +1544,7 @@ fn paint_node<M>(
     clip_rect: Option<Rect>,
     edge_fade: Option<EdgeFade>,
     scroll_ancestor: Option<NodeKey>,
+    blur_ancestor: Option<Rect>,
     scale: f32,
     interaction: &InteractionState,
     text: &mut TextEngine,
@@ -1600,6 +1609,7 @@ fn paint_node<M>(
             None,
             None,
             scroll_ancestor,
+            None,
             scale,
             interaction,
             text,
@@ -1620,18 +1630,29 @@ fn paint_node<M>(
                 r.h,
             ))
         };
-        frame
-            .blur_rects
-            .extend(local_frame.blur_rects.iter().map(|br| BlurRect {
-                rect: to_screen(br.rect),
-                radius: br.radius * tf.scale,
-            }));
-        frame
-            .input_rects
-            .extend(local_frame.input_rects.iter().map(|br| BlurRect {
-                rect: to_screen(br.rect),
-                radius: br.radius * tf.scale,
-            }));
+        if tf.opacity >= BLUR_OPACITY_THRESHOLD {
+            for br in &local_frame.blur_rects {
+                let mapped = to_screen(br.rect);
+                let clipped = clip_rect.map_or(mapped, |c| mapped.intersect(c));
+                let covered = blur_ancestor.is_some_and(|a| rect_contains(a, clipped));
+                if !clipped.is_empty() && !covered {
+                    frame.blur_rects.push(BlurRect {
+                        rect: clipped,
+                        radius: br.radius * tf.scale,
+                    });
+                }
+            }
+        }
+        for br in &local_frame.input_rects {
+            let mapped = to_screen(br.rect);
+            let clipped = clip_rect.map_or(mapped, |c| mapped.intersect(c));
+            if !clipped.is_empty() {
+                frame.input_rects.push(BlurRect {
+                    rect: clipped,
+                    radius: br.radius * tf.scale,
+                });
+            }
+        }
         for mut hit in local_frame.hits {
             hit.rect = to_screen(hit.rect);
             hit.clip = match hit.clip {
@@ -1802,19 +1823,35 @@ fn paint_node<M>(
     }
 
     // Report compositor blur & Wayland input regions in logical surface coords.
+    // Blur regions are gated on effective opacity (so fading surfaces never
+    // smear content below at full compositor blur strength), clipped to any
+    // enclosing clip_rect (so scrolled-off materials never leak blur outside
+    // their viewport), and deduplicated when an ancestor already registered blur.
     let blur_r = elem.visual.radii.max_clamped(local_rect.w, local_rect.h) * tf.scale;
-    if elem.visual.blur && !screen_rect.is_empty() {
+    let clipped_screen_rect = clip_rect.map_or(screen_rect, |c| screen_rect.intersect(c));
+    let covered_by_blur_ancestor =
+        blur_ancestor.is_some_and(|a| rect_contains(a, clipped_screen_rect));
+    let emitted_blur = elem.visual.blur
+        && !covered_by_blur_ancestor
+        && tf.opacity >= BLUR_OPACITY_THRESHOLD
+        && !clipped_screen_rect.is_empty();
+    if emitted_blur {
         frame.blur_rects.push(BlurRect {
-            rect: screen_rect,
+            rect: clipped_screen_rect,
             radius: blur_r,
         });
     }
-    if elem.captures_input && !screen_rect.is_empty() {
+    if elem.captures_input && !clipped_screen_rect.is_empty() {
         frame.input_rects.push(BlurRect {
-            rect: screen_rect,
+            rect: clipped_screen_rect,
             radius: blur_r,
         });
     }
+    let child_blur_ancestor = if emitted_blur {
+        Some(clipped_screen_rect)
+    } else {
+        blur_ancestor
+    };
 
     // 3. Text content
     if let ElementContent::Text {
@@ -2005,32 +2042,13 @@ fn paint_node<M>(
         clip_rect
     };
 
-    let child_edge_fade = if let Some(widths) = elem.edge_fade {
-        Some(EdgeFade {
-            rect: [
-                screen_rect.x * scale,
-                screen_rect.y * scale,
-                screen_rect.w * scale,
-                screen_rect.h * scale,
-            ],
-            widths: [
-                widths.left * eff_scale,
-                widths.right * eff_scale,
-                widths.top * eff_scale,
-                widths.bottom * eff_scale,
-            ],
-        })
-    } else {
-        edge_fade
-    };
-
     let scroll_y = if elem.scrollable {
         elem.key.map_or(0.0, |k| interaction.scroll_offset(k))
     } else {
         0.0
     };
 
-    // Compute total content height for scroll clamping.
+    // Compute total content height for scroll clamping and scroll-aware edge fades.
     let child_ids: Vec<NodeId> = tree.children(node_id).unwrap_or_default();
     let mut content_height = local_rect.h;
     if elem.scrollable {
@@ -2042,6 +2060,43 @@ fn paint_node<M>(
         }
         content_height = max_bottom + layout.padding.bottom;
     }
+
+    let child_edge_fade = if let Some(widths) = elem.edge_fade {
+        let (top_w, bottom_w) = if elem.scrollable {
+            let max_scroll = (content_height - local_rect.h).max(0.0);
+            (
+                widths.top.min(scroll_y).max(0.0),
+                widths.bottom.min((max_scroll - scroll_y).max(0.0)).max(0.0),
+            )
+        } else {
+            (widths.top.max(0.0), widths.bottom.max(0.0))
+        };
+        let local_widths = [
+            widths.left.max(0.0) * eff_scale,
+            widths.right.max(0.0) * eff_scale,
+            top_w * eff_scale,
+            bottom_w * eff_scale,
+        ];
+        if local_widths.iter().any(|&w| w > 0.0) {
+            let local_ef = EdgeFade {
+                rect: [
+                    screen_rect.x * scale,
+                    screen_rect.y * scale,
+                    screen_rect.w * scale,
+                    screen_rect.h * scale,
+                ],
+                widths: local_widths,
+            };
+            Some(match edge_fade {
+                Some(outer) => intersect_edge_fade(outer, local_ef),
+                None => local_ef,
+            })
+        } else {
+            edge_fade
+        }
+    } else {
+        edge_fade
+    };
 
     // Record semantic node info for every laid-out element (back-to-front).
     if let Some(k) = elem.key {
@@ -2115,6 +2170,7 @@ fn paint_node<M>(
             child_clip,
             child_edge_fade,
             child_scroll_ancestor,
+            child_blur_ancestor,
             scale,
             interaction,
             text,
@@ -2159,6 +2215,41 @@ fn paint_node<M>(
                 misc: [KIND_FILL, 0.0, 0.0, tf.opacity],
             },
         );
+    }
+}
+
+fn rect_contains(outer: Rect, inner: Rect) -> bool {
+    const EPS: f32 = 0.5;
+    inner.x >= outer.x - EPS
+        && inner.y >= outer.y - EPS
+        && inner.x + inner.w <= outer.x + outer.w + EPS
+        && inner.y + inner.h <= outer.y + outer.h + EPS
+}
+
+fn intersect_edge_fade(outer: EdgeFade, inner: EdgeFade) -> EdgeFade {
+    let ox0 = outer.rect[0];
+    let oy0 = outer.rect[1];
+    let ox1 = ox0 + outer.rect[2];
+    let oy1 = oy0 + outer.rect[3];
+    let ix0 = inner.rect[0];
+    let iy0 = inner.rect[1];
+    let ix1 = ix0 + inner.rect[2];
+    let iy1 = iy0 + inner.rect[3];
+
+    let x0 = ox0.max(ix0);
+    let y0 = oy0.max(iy0);
+    let x1 = ox1.min(ix1);
+    let y1 = oy1.min(iy1);
+
+    let edge_w = |w: f32, inset: f32| if w > 0.0 { (w - inset).max(0.0) } else { 0.0 };
+    let left = edge_w(outer.widths[0], x0 - ox0).max(edge_w(inner.widths[0], x0 - ix0));
+    let right = edge_w(outer.widths[1], ox1 - x1).max(edge_w(inner.widths[1], ix1 - x1));
+    let top = edge_w(outer.widths[2], y0 - oy0).max(edge_w(inner.widths[2], y0 - iy0));
+    let bottom = edge_w(outer.widths[3], oy1 - y1).max(edge_w(inner.widths[3], iy1 - y1));
+
+    EdgeFade {
+        rect: [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)],
+        widths: [left, right, top, bottom],
     }
 }
 

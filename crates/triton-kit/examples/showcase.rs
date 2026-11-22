@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use triton_design::color::{STATE_LAYER, Variant};
 use triton_design::icon::{Icon, IconStyle};
-use triton_design::material::Material;
+use triton_design::material::{Material, ShadowToken};
 use triton_design::motion::{Animated, Motion, Spring};
 use triton_design::shape::{RADII, SIZE};
 use triton_design::typography::TypeStyle;
@@ -61,7 +61,7 @@ const TIMER_QUIT: u32 = 5;
 const WORKSPACES: usize = 4;
 const PANEL_RADIUS: f32 = RADII.xl;
 const PANEL_PAD: f32 = 16.0;
-const SECTION_HEIGHT: f32 = 560.0;
+const SECTION_HEIGHT: f32 = 520.0;
 /// Live `wavy_ring` countdown drain (seconds); restart by clicking the ring.
 const COUNTDOWN_SECS: f32 = 8.0;
 /// The demo password that unlocks `password_field` without a shake.
@@ -620,6 +620,7 @@ impl ShowcaseApp {
         );
 
         let card = panel(Material::Thick, PANEL_RADIUS, t)
+            .shadow(ShadowToken::FLOATING)
             .w(1000.0)
             .p(Edges::all(PANEL_PAD))
             .gap(12.0)
@@ -807,14 +808,19 @@ impl ShowcaseApp {
         ];
         let mat_row = row()
             .gap(12.0)
+            .p(Edges::new(4.0, 4.0, 12.0, 4.0))
             .children(mats.iter().map(|&(m, name, desc)| {
-                panel(m, RADII.lg, t)
-                    .w(220.0)
+                let mut tile = panel(m, RADII.lg, t)
+                    .w(218.0)
                     .h(92.0)
                     .p(14.0)
                     .gap(2.0)
                     .child(text(name, TypeStyle::TITLE_M, on_surf(t)))
-                    .child(text(desc, TypeStyle::BODY_S, onv(t)))
+                    .child(text(desc, TypeStyle::BODY_S, onv(t)));
+                if matches!(m, Material::Glass | Material::Thick) {
+                    tile = tile.shadow(ShadowToken::RAISED);
+                }
+                tile
             }));
 
         let demo_card = card(t)
@@ -1477,8 +1483,10 @@ impl ShowcaseApp {
             .child(sec_label("slider · on Glass + disabled", t))
             .child(
                 panel(Material::Glass, RADII.md, t)
+                    .shadow(ShadowToken::RAISED)
                     .w(660.0)
                     .p(Edges::xy(20.0, 12.0))
+                    .m(Edges::new(2.0, 0.0, 10.0, 8.0))
                     .child(slider(
                         NodeKey::named("sl-glass"),
                         self.sliders[2],
@@ -2005,7 +2013,7 @@ impl ShowcaseApp {
     )]
     fn toast_row(&self, ctx: &mut ViewContext<'_>) -> Element<Msg> {
         let t = &self.theme;
-        let mut cards = col().w_full().gap(12.0);
+        let mut cards = col().w_full().gap(18.0).p(Edges::new(4.0, 0.0, 8.0, 12.0));
 
         if self.toast_dismissed.iter().all(|&d| d) {
             cards = cards.child(row().gap(12.0).items_center().child(button(
@@ -2197,11 +2205,13 @@ impl ShellApp for ShowcaseApp {
                     margin: (0, 0, 0, 0),
                     keyboard: SurfaceKeyboard::Exclusive,
                     exclusive_zone: -1,
-                    // 1000px card + FLOATING_LARGE gutter (blur 80 → 160 sides,
-                    // offset 30 → 130 top / 190 bottom) so the shadow never clips.
+                    // 1000px card + FLOATING gutter (blur 40 → 80 sides,
+                    // offset 16 → 64 top / 96 bottom) so the full surface fits
+                    // cleanly inside 1645×1028 logical (2880×1800 @ 1.75×) below
+                    // the top bar islands without shadow clipping.
                     sizing: SurfaceSize::FitContent {
-                        max_w: Some(1000 + 2 * 160),
-                        max_h: Some(960 + 130 + 190),
+                        max_w: Some(1000 + 2 * 80),
+                        max_h: Some(760 + 64 + 96),
                     },
                     shaped_input: true,
                 },
@@ -2715,12 +2725,18 @@ fn run_headless(opts: &HeadlessArgs) -> Result<(), String> {
                 .find(|(id, _)| *id == SurfaceId::Gallery)
                 .map_or(
                     SurfaceSize::FitContent {
-                        max_w: Some(1320),
-                        max_h: Some(1280),
+                        max_w: Some(1160),
+                        max_h: Some(920),
                     },
                     |(_, spec)| spec.sizing,
                 );
+            // Render once to seed springs, then advance 450ms so clock-driven
+            // indicators (indeterminate wavy progress, level meter) show mid-flight.
             session.render_surface(&mut app, SurfaceId::Gallery, sizing);
+            if !opts.reduce_motion {
+                session.advance(Duration::from_millis(450));
+                session.render_surface(&mut app, SurfaceId::Gallery, sizing);
+            }
 
             let stem = format!("{}-{}", section_slug(sec_idx), theme_slug(variant));
             if let (Some(snap_base), Some(r)) = (&opts.snap, renderer.as_mut()) {

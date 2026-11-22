@@ -835,8 +835,13 @@ fn scroll_area_clips_fades_scrolls_and_morphs_thumb() {
         "scissor"
     );
     assert!(
-        qs.iter().any(|q| q.1.is_some_and(|f| f.widths[2] > 0.0)),
-        "top edge fade on children"
+        qs.iter().any(|q| q.1.is_some_and(|f| f.widths[3] > 0.0)),
+        "bottom edge fade on children when overflow exists below"
+    );
+    assert!(
+        qs.iter()
+            .all(|q| q.1.is_none_or(|f| f.widths[2].abs() < EPS)),
+        "no top edge fade at scroll_y == 0"
     );
 
     // Wheel scroll registers the offset.
@@ -858,9 +863,16 @@ fn scroll_area_clips_fades_scrolls_and_morphs_thumb() {
     assert!(interaction.is_scroll_hovered(NodeKey::named("sa")));
 
     // The retarget frame itself still reports the start value; the next
-    // frame samples the spring mid-flight.
+    // frame samples the spring mid-flight. Scrolling down also activates top fade.
     anim.begin_frame(t0 + Duration::from_millis(16), false);
     scroll_frame(&interaction, &mut anim, &theme, &mut text, &mut dl);
+    let scrolled_qs = quads(&dl);
+    assert!(
+        scrolled_qs
+            .iter()
+            .any(|q| q.1.is_some_and(|f| f.widths[2] > 0.0)),
+        "top edge fade activates once scrolled down"
+    );
     anim.begin_frame(t0 + Duration::from_millis(64), false);
     scroll_frame(&interaction, &mut anim, &theme, &mut text, &mut dl);
     let w_mid = quads(&dl).last().unwrap().2.dst[2];

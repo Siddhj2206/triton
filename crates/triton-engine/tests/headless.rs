@@ -6,12 +6,13 @@
 
 use std::time::{Duration, Instant};
 
+use triton_design::material::Material;
 use triton_design::shape::Point;
 use triton_engine::{
-    AppCommand, DropShadow, Element, FontSpec, HeadlessRenderer, HeadlessSession, ImageData,
+    AppCommand, DropShadow, Edges, Element, FontSpec, HeadlessRenderer, HeadlessSession, ImageData,
     ImageStore, ImageStyle, InputEvent, Key, NodeKey, NodeKind, Rect, Rgba, Script, ShellApp,
-    Spring, SubtreeTransform, SurfaceSize, SurfaceSpec, ViewContext, box_, col, encode_png, image,
-    polyline, row, text, write_png,
+    Spring, SubtreeTransform, SurfaceSize, SurfaceSpec, Theme, ViewContext, box_, col, encode_png,
+    image, polyline, row, text, write_png,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -480,4 +481,251 @@ fn headless_session_handles_missing_key_and_bad_script_cleanly() {
     // Ensure ImageStore public import works cleanly too.
     let _store = ImageStore::new();
     let _rect = Rect::new(0.0, 0.0, 1.0, 1.0);
+}
+
+// ── Part B: Blur gating/clipping/dedup, scroll-aware edge_fade, layout & shadow ──
+
+#[test]
+fn b1_blur_rects_gated_on_opacity_and_clipped_to_viewport() {
+    let theme = Theme::dark();
+    let mut session = HeadlessSession::<()>::new((300.0, 200.0), 1.0);
+
+    // 1. Mid-fade (opacity 0.5 < 0.85) emits ZERO blur rects (both direct and layer_key).
+    let fading = session.render(|_| {
+        row()
+            .w(300.0)
+            .h(200.0)
+            .gap(10.0)
+            .child(
+                box_()
+                    .w(120.0)
+                    .h(80.0)
+                    .material(Material::Thick, &theme)
+                    .opacity(0.5),
+            )
+            .child(
+                box_()
+                    .w(120.0)
+                    .h(80.0)
+                    .layer("fading-layer")
+                    .material(Material::Glass, &theme)
+                    .opacity(0.84),
+            )
+    });
+    assert!(
+        fading.blur_rects.is_empty(),
+        "fading surfaces (< 0.85 opacity) must not emit compositor blur rects, got {:?}",
+        fading.blur_rects
+    );
+
+    // 2. Settled (>= 0.85) emits blur rects cleanly.
+    let settled = session.render(|_| {
+        box_()
+            .w(120.0)
+            .h(80.0)
+            .material(Material::Thick, &theme)
+            .opacity(0.9)
+    });
+    assert_eq!(settled.blur_rects.len(), 1);
+
+    // 3. Clipped child inside a scroll viewport has its blur_rect (and input_rect)
+    //    clipped to the viewport; completely scrolled-off children emit no blur_rect.
+    let clipped = session.render(|_| {
+        col()
+            .id("viewport")
+            .w(200.0)
+            .h(100.0)
+            .clip()
+            .scroll_y()
+            .child(box_().w(200.0).h(80.0))
+            .child(box_().w(200.0).h(80.0).material(Material::Glass, &theme))
+            .child(box_().w(200.0).h(80.0).material(Material::Thick, &theme))
+    });
+    assert_eq!(
+        clipped.blur_rects.len(),
+        1,
+        "completely scrolled-off Thick tile must not emit a blur_rect; got {:?}",
+        clipped.blur_rects
+    );
+    let br = clipped.blur_rects[0].rect;
+    assert!(
+        (br.y - 80.0).abs() < 0.5 && (br.h - 20.0).abs() < 0.5,
+        "got {br:?}"
+    );
+}
+
+#[test]
+fn b2_blur_ancestor_deduplicates_nested_materials() {
+    let theme = Theme::dark();
+    let mut session = HeadlessSession::<()>::new((300.0, 200.0), 1.0);
+
+    let frame = session.render(|_| {
+        col()
+            .w(300.0)
+            .h(200.0)
+            .p(16.0)
+            .gap(12.0)
+            .material(Material::Thick, &theme)
+            .child(box_().w(120.0).h(60.0).material(Material::Glass, &theme))
+            .child(
+                box_()
+                    .w(120.0)
+                    .h(60.0)
+                    .layer("nested-cached")
+                    .material(Material::Mica, &theme),
+            )
+    });
+
+    assert_eq!(
+        frame.blur_rects.len(),
+        1,
+        "nested blurred panels inside a blurred ancestor must deduplicate to 1 blur rect, got {:?}",
+        frame.blur_rects
+    );
+    let r = frame.blur_rects[0].rect;
+    assert!(
+        (r.w - 300.0).abs() < 0.5 && (r.h - 200.0).abs() < 0.5,
+        "got {r:?}"
+    );
+}
+
+#[test]
+fn l1_scroll_aware_and_nested_edge_fade() {
+    let mut session = HeadlessSession::<()>::new((240.0, 120.0), 1.0);
+    let build = |_ctx: &mut ViewContext<'_>| -> Element<()> {
+        col()
+            .id("outer-scroll")
+            .w(240.0)
+            .h(120.0)
+            .clip()
+            .scroll_y()
+            .edge_fade(Edges::xy(0.0, 24.0))
+            .child(box_().w(240.0).h(90.0).bg(Rgba::WHITE))
+            .child(
+                col()
+                    .id("inner-scroll")
+                    .w(240.0)
+                    .h(80.0)
+                    .clip()
+                    .scroll_y()
+                    .edge_fade(Edges::xy(0.0, 28.0))
+                    .child(box_().id("inner-top").w(240.0).h(50.0).bg(Rgba::WHITE))
+                    .child(box_().w(240.0).h(120.0).bg(Rgba::WHITE)),
+            )
+    };
+
+    // At scroll_y = 0 for both outer & inner: top fade is 0 (no dimming band at top!),
+    // while bottom fade is active and intersected to the visible outer bottom (y = 120).
+    session.render(build);
+    let mut saw_inner_fade = None;
+    for batch in &session.draw_list().batches {
+        if let triton_engine::gpu::DrawBatch::Quads {
+            edge_fade,
+            instances,
+            ..
+        } = batch
+        {
+            for q in instances {
+                if (q.dst[1] - 90.0).abs() < 1.0 && (q.dst[3] - 50.0).abs() < 1.0 {
+                    saw_inner_fade = *edge_fade;
+                }
+            }
+        }
+    }
+    let ef = saw_inner_fade.expect("inner-top quad should carry intersected edge_fade");
+    assert!(
+        ef.widths[2].abs() < 0.01,
+        "top edge_fade must be 0 when neither scroller is scrolled, got {ef:?}"
+    );
+    assert!(
+        ef.widths[3] > 0.0 && (ef.rect[1] + ef.rect[3] - 120.0).abs() < 1.0,
+        "nested bottom edge_fade must stay clamped to outer viewport bottom (120), got {ef:?}"
+    );
+
+    // Scroll outer down by 40px: top fade becomes active (> 0).
+    session.scroll_key("outer-scroll", 40.0).unwrap();
+    session.render(build);
+    let top_quad_fade = session
+        .draw_list()
+        .batches
+        .iter()
+        .find_map(|b| match b {
+            triton_engine::gpu::DrawBatch::Quads { edge_fade, .. } if edge_fade.is_some() => {
+                *edge_fade
+            }
+            _ => None,
+        })
+        .expect("scrolled container emits edge_fade");
+    assert!(
+        top_quad_fade.widths[2] >= 23.5,
+        "scrolling down 40px should activate full 24px top edge_fade, got {top_quad_fade:?}"
+    );
+}
+
+#[test]
+fn absolute_inset_all_resolves_against_direct_parent_not_root() {
+    let mut session = HeadlessSession::<()>::new((400.0, 300.0), 1.0);
+    let frame = session.render(|_| {
+        box_().w(400.0).h(300.0).p(40.0).child(
+            box_().id("host").size(20.0, 20.0).child(
+                box_()
+                    .id("overlay")
+                    .absolute()
+                    .inset_all(0.0)
+                    .bg(Rgba::WHITE),
+            ),
+        )
+    });
+
+    let host = frame.node_by_key(NodeKey::named("host")).unwrap();
+    let overlay = frame.node_by_key(NodeKey::named("overlay")).unwrap();
+    assert!((host.rect.w - 20.0).abs() < 0.5 && (host.rect.h - 20.0).abs() < 0.5);
+    assert!(
+        (overlay.rect.w - 20.0).abs() < 0.5 && (overlay.rect.h - 20.0).abs() < 0.5,
+        "absolute inset_all(0) must size to direct parent (20x20), not root (400x300): got {:?}",
+        overlay.rect
+    );
+}
+
+#[test]
+fn smooth_corner_shadow_decays_cleanly_without_clamped_square_halo() {
+    let mut renderer = HeadlessRenderer::new().expect("headless EGL/GLES3 must initialize");
+    let mut session = HeadlessSession::<()>::new((320.0, 240.0), 1.0);
+
+    session.render(|_| {
+        box_()
+            .w(320.0)
+            .h(240.0)
+            .p(Edges::new(50.0, 0.0, 0.0, 40.0))
+            .child(
+                box_()
+                    .w(120.0)
+                    .h(100.0)
+                    .rounded(24.0)
+                    .bg(Rgba::WHITE)
+                    .shadow(DropShadow {
+                        offset_x: 0.0,
+                        offset_y: 12.0,
+                        blur: 32.0,
+                        spread: 0.0,
+                        color: Rgba::new(0.0, 0.0, 0.0, 0.55),
+                    }),
+            )
+    });
+
+    let (w, _h, rgba) = renderer
+        .render_rgba(&mut session)
+        .expect("offscreen render succeeds");
+    let alpha_at = |x: u32, y: u32| -> u8 { rgba[((y * w + x) * 4 + 3) as usize] };
+
+    // Card occupies x = 40..160, y = 50..150.
+    // Right beside the upper-right corner (y = 55, well inside LUT_EXTENT * r = 38.4 of top edge):
+    // shadow alpha must decay monotonically with distance outside x = 160 (NOT stay stuck high!).
+    let near = alpha_at(168, 55);
+    let mid = alpha_at(186, 55);
+    let far = alpha_at(212, 55);
+    assert!(
+        near > mid && mid > far && far < 10,
+        "smooth-corner drop shadow must decay monotonically past right edge (near={near}, mid={mid}, far={far})"
+    );
 }

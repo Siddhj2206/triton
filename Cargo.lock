@@ -827,6 +827,7 @@ dependencies = [
  "glow",
  "khronos-egl",
  "libloading 0.9.1",
+ "serde_json",
  "smithay-client-toolkit",
  "taffy",
  "thiserror",

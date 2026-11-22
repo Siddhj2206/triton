@@ -117,12 +117,15 @@ float sd_smooth(vec2 p, vec2 b, vec4 r) {
     float s_eff = clamp(min(b.x, b.y) / rr - 1.0, 0.0, 0.6);
     vec2 c = b - abs(p);
     const float LUT_EXTENT = 1.6;
-    if (c.x < LUT_EXTENT * rr && c.y < LUT_EXTENT * rr) {
-        vec2 uv = clamp(c / (LUT_EXTENT * rr), 0.0, 1.0);
-        float d_lut = (texture(u_corner_lut, uv).r - 0.5) * 2.0 * rr;
-        return mix(sd_round(p, b, r), d_lut, s_eff / 0.6);
+    if (c.x >= 0.0 && c.y >= 0.0) {
+        if (c.x < LUT_EXTENT * rr && c.y < LUT_EXTENT * rr) {
+            vec2 uv = c / (LUT_EXTENT * rr);
+            float d_lut = (texture(u_corner_lut, uv).r - 0.5) * 2.0 * rr;
+            return mix(sd_round(p, b, r), d_lut, s_eff / 0.6);
+        }
+        return -min(c.x, c.y);
     }
-    return -min(c.x, c.y);
+    return sd_round(p, b, r);
 }
 
 float sd_box(vec2 p, vec2 b, vec4 r, float smoothing) {
@@ -203,7 +206,7 @@ void main() {
         float blur = max(param, 1.0);
         float pad = blur * 2.0;
         vec2 caster_half = max(v_half - vec2(pad), vec2(0.5));
-        float d = sd_box(p, caster_half, v_radii, smoothing);
+        float d = sd_round(p, caster_half, v_radii);
         float a = shadow_falloff(d, blur * 0.55) * v_fill.a * opacity;
         // Fade cleanly to zero near the quad boundary to prevent hard clip lines.
         vec2 edge = v_half - abs(p);
@@ -453,12 +456,15 @@ float sd_smooth(vec2 p, vec2 b, vec4 r) {
     float s_eff = clamp(min(b.x, b.y) / rr - 1.0, 0.0, 0.6);
     vec2 c = b - abs(p);
     const float LUT_EXTENT = 1.6;
-    if (c.x < LUT_EXTENT * rr && c.y < LUT_EXTENT * rr) {
-        vec2 uv = clamp(c / (LUT_EXTENT * rr), 0.0, 1.0);
-        float d_lut = (texture(u_corner_lut, uv).r - 0.5) * 2.0 * rr;
-        return mix(sd_round(p, b, r), d_lut, s_eff / 0.6);
+    if (c.x >= 0.0 && c.y >= 0.0) {
+        if (c.x < LUT_EXTENT * rr && c.y < LUT_EXTENT * rr) {
+            vec2 uv = c / (LUT_EXTENT * rr);
+            float d_lut = (texture(u_corner_lut, uv).r - 0.5) * 2.0 * rr;
+            return mix(sd_round(p, b, r), d_lut, s_eff / 0.6);
+        }
+        return -min(c.x, c.y);
     }
-    return -min(c.x, c.y);
+    return sd_round(p, b, r);
 }
 
 float sd_box(vec2 p, vec2 b, vec4 r, float smoothing) {
