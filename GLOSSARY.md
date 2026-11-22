@@ -14,4 +14,4 @@ Terms from the design (Material 3 Futura) as they are used in code and docs.
 - **Wavy progress**: a progress indicator whose played part is a sine wave, linear or circular.
 - **Spatial spring / effects spring**: motion for position, size and shape (may overshoot) versus color and opacity (never overshoots).
 - **Reduce motion**: replaces every spring with a 120 ms linear fade.
-- **Surface**: a layer-shell surface the shell owns (bar, panel, OSD). See ADR-0003.
+- **Surface**: a layer-shell surface the shell owns (bar, panel, OSD). Owned by `triton-engine`'s `platform` host (ADR-0008).

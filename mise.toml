@@ -8,12 +8,11 @@ rust = { version = "1.100.0", components = "rustfmt,clippy", mr_boxington = true
 [env]
 # Native libraries come from nx (nix) on Fedora Atomic: libraries live in
 # ~/.nix-profile/lib, and link-only pkg-config entries live in dev/pkgconfig.
+# triton-engine dlopens libwayland-client/libEGL at runtime, so only
+# libxkbcommon needs a real library here — no -devel packages anywhere.
 PKG_CONFIG_PATH = "{{config_root}}/dev/pkgconfig:{{env.PKG_CONFIG_PATH | default(value='')}}"
 LIBRARY_PATH = "{{env.HOME}}/.nix-profile/lib"
-# Snapshot tests render on tiny-skia: deterministic, and no GPU needed. The shell
-# itself prefers wgpu (ADR-0007).
-ICED_TEST_BACKEND = "tiny-skia"
-RUST_LOG = "{{env.RUST_LOG | default(value='triton=debug,info')}}"
+RUST_LOG = "{{env.RUST_LOG | default(value='triton_engine=debug,info')}}"
 
 # ── setup ────────────────────────────────────────────────────────────────────
 
@@ -43,130 +42,9 @@ run = "cargo fmt --all"
 description = "Run tests"
 run = "cargo test --workspace"
 
-[tasks.install]
-description = "Install release binaries to ~/.local/bin (re-run 'triton' after to refresh the unit's ExecStart path)"
-run = '''
-cargo build --release
-install -Dm755 target/release/triton ~/.local/bin/triton
-install -Dm755 target/release/triton-lock ~/.local/bin/triton-lock
-'''
-
-# ── preview (container: headless sway -> nested niri -> triton) ─────────────
-# Never touches the real session: private runtime dir, scratch home, private
-# session bus. See docs/roadmap.md section 7 and dev/preview/.
-# target/ is a symlink into the mbx cache, so its real path is mounted too:
-# TRITON_CMD=/work/target/debug/triton then resolves inside the container.
-
-[tasks."preview:image"]
-description = "Build the preview container image"
-run = "podman build -t localhost/triton-preview:latest dev/preview"
-
-[tasks.preview]
-description = "Start a headless preview session in the background (TRITON_CMD sets what niri runs)"
-run = """
-mkdir -p target/preview
-podman rm -f triton-preview >/dev/null 2>&1 || true
-podman run -d --rm --name triton-preview \
-  --device /dev/dri --security-opt label=disable \
-  -v "$PWD:/work:ro" -v "$(readlink -f target):$(readlink -f target):ro" \
-  -v "$PWD/target/preview:/preview" \
-  -e TRITON_CMD="${TRITON_CMD:-}" -e RUST_LOG \
-  localhost/triton-preview:latest \
-  dbus-run-session -- /work/dev/preview/session.sh headless
-"""
-
-[tasks.dev]
-description = "Run a nested niri window on your desktop, isolated (TRITON_CMD sets what niri runs)"
-run = """
-mkdir -p target/preview
-podman rm -f triton-preview >/dev/null 2>&1 || true
-podman run --rm --name triton-preview \
-  --device /dev/dri --security-opt label=disable \
-  -v "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY:/run/host-wayland" \
-  -v "$PWD:/work:ro" -v "$(readlink -f target):$(readlink -f target):ro" \
-  -v "$PWD/target/preview:/preview" \
-  -e TRITON_CMD="${TRITON_CMD:-}" -e RUST_LOG \
-  localhost/triton-preview:latest \
-  dbus-run-session -- /work/dev/preview/session.sh nested
-"""
-
-# ── child session (host-native, no container) ────────────────────────────────
-# A nested niri window on the real desktop running triton, on a private session
-# bus — qs/DMS keep org.freedesktop.Notifications on the parent bus, so toasts
-# work in the child. Real HOME and --real-services: triton exercises your
-# actual config and system services. Volume/brightness/power actions act on
-# the REAL system — the child's power menu really suspends this machine.
-# Override TRITON_CMD for the fake backend: TRITON_CMD=".../triton" mise run child
-# The host is dbus-broker (no dbus-run-session): nix shell provides it lazily.
-
-[tasks.child]
-description = "Nested niri window + triton on a private bus (real services act on the real system)"
-run = """
-cargo build -p triton -p triton-lock
-REPO=$PWD nix shell nixpkgs#dbus --command sh dev/child/session.sh
-"""
-
-[tasks."child:msg"]
-description = "triton msg against the child session (mise run child:msg -- launcher toggle)"
-run = """
-XDG_RUNTIME_DIR=$PWD/target/child/runtime ./target/debug/triton msg
-"""
-
-[tasks."preview:msg"]
-description = "niri msg against the preview session (mise run preview:msg -- windows)"
-run = "podman exec triton-preview /work/dev/preview/msg.sh"
-
-[tasks."preview:triton"]
-description = "triton msg against the preview session (mise run preview:triton -- launcher toggle)"
-run = "podman exec -e XDG_RUNTIME_DIR=/run/triton-preview triton-preview /work/target/debug/triton msg"
-
-[tasks."preview:shot"]
-description = "Screenshot the preview output to target/preview/shot.png"
-run = "podman exec triton-preview /work/dev/preview/msg.sh action screenshot-screen --show-pointer false --path /preview/shot.png"
-
-[tasks."preview:logs"]
-description = "Show the preview session's logs"
-run = "podman logs triton-preview"
-
-[tasks."preview:stop"]
-description = "Stop the preview session"
-run = "podman rm -f triton-preview"
-
-# ── board pixel gate ─────────────────────────────────────────────────────────
-# dev/boards/: headless Chromium renders a design board (.dc.html) at 2x — the
-# same physical pixels iced_test's Simulator produces — and Pillow diffs it
-# against the committed triton-ui snapshot. Font rasterization differs between
-# Skia and cosmic-text, so the metric is the share of pixels over a per-channel
-# tolerance, not equality. Isolation matches the preview: repo ro, writes only
-# under target/.
-
-[tasks."boards:image"]
-description = "Build the board-render container (headless Chromium + Pillow)"
-run = "podman build -t localhost/triton-boards:latest dev/boards"
-
-[tasks.pixel]
-description = "Pixel-diff a board: mise run pixel [-- board width height limit]"
-run = """
-set -eu
-board="${1:-ComponentIndex}"
-width="${2:-1646}"
-height="${3:-1620}"
-limit="${4:-5.0}"
-mkdir -p target/boards
-cargo test -p triton-ui --test index
-cp crates/triton-ui/tests/snapshots/index-dark-tiny-skia.png target/boards/index-triton.png
-podman run --rm --security-opt label=disable \
-  -v "$PWD:/work:ro" -v "$PWD/target/boards:/out" \
-  localhost/triton-boards:latest \
-  /work/dev/boards/shot.sh \
-    "/work/references/Triton%20Shell-project/$board.dc.html" \
-    "/out/$board.png" "$width" "$height"
-podman run --rm --security-opt label=disable \
-  -v "$PWD:/work:ro" -v "$PWD/target/boards:/out" \
-  localhost/triton-boards:latest \
-  python3 /work/dev/boards/diff.py \
-    "/out/$board.png" /out/index-triton.png /out/index-diff.png "$limit"
-"""
+[tasks.showcase]
+description = "Run the triton-engine showcase example (needs a Wayland session; dev/preview container)"
+run = "cargo run -p triton-engine --example showcase"
 
 # ── assets ───────────────────────────────────────────────────────────────────
 
@@ -179,3 +57,12 @@ podman run --rm --security-opt label=disable -v "$PWD:/work" -w /work \
   -v "$(readlink -f target/fonts-src):/cache" -e FONTS_CACHE=/cache \
   localhost/triton-fonts:latest python3 -I dev/fonts/build.py
 """
+
+# ── board rendering ─────────────────────────────────────────────────────────
+# dev/boards/: headless Chromium renders a design board (.dc.html) at 2x for
+# visual reference. The preview/child shells are gone with the iced crates —
+# a new isolated runner for triton-engine surfaces lands with the first panel.
+
+[tasks."boards:image"]
+description = "Build the board-render container (headless Chromium)"
+run = "podman build -t localhost/triton-boards:latest dev/boards"

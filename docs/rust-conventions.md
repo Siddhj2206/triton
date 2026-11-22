@@ -20,15 +20,15 @@ Everything here must agree with the mise tasks: `mise run check` is fmt check, `
 
 **Commit `Cargo.lock`.** Why: reproducible builds, and `cargo deny` audits what ships. Source: [Cargo FAQ](https://doc.rust-lang.org/cargo/faq.html#why-have-cargolock-in-version-control).
 
-**Pin with `=` only for a stated reason, in a comment.** Existing example, keep it: `winit-core` and `winit-common` are `=0.31.0-beta.2` because beta.4 added a `NativeKeyCode` variant that breaks `iced_exdevtools` (pulled in by iced_layershell 0.19.1). Drop the pin when waycrate releases a fix. Why: an unexplained pin is never removed. Source: the comment in `crates/triton/Cargo.toml`.
+**Pin with `=` only for a stated reason, in a comment.** Why: an unexplained pin is never removed. (Historical example, dropped with the iced stack: `winit-core`/`winit-common` were pinned to `=0.31.0-beta.2` because beta.4 broke `iced_exdevtools`; the pin disappeared when the dependency did.)
 
-Root `Cargo.toml` to grow into (the current file is the starting point; today it has no `[workspace.dependencies]` or lints yet):
+Root `Cargo.toml` to grow into (mirroring today's workspace):
 
 ```toml
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-default-members = ["crates/triton"]   # add triton-lock when it exists; keep triton-settings out of plain `cargo build`
+default-members = ["crates/triton-engine"]   # add the triton binary back when it lands
 
 [workspace.package]
 edition = "2024"
@@ -39,21 +39,18 @@ publish = false                       # nothing goes to crates.io
 [workspace.dependencies]
 # internal
 triton-design   = { path = "crates/triton-design" }
-triton-services = { path = "crates/triton-services" }
-triton-ui       = { path = "crates/triton-ui" }
-triton-config   = { path = "crates/triton-config" }
+triton-engine   = { path = "crates/triton-engine" }
 # external
-anyhow      = "1"
 thiserror   = "2"
 tracing     = "0.1"
-tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi"] }
-tokio       = { version = "1", default-features = false }
-serde       = { version = "1", features = ["derive"] }
+tracing-subscriber = { version = "0.3", default-features = false }
+smithay-client-toolkit = { version = "0.21", default-features = false }
+glow        = { version = "0.16", default-features = false }
+taffy       = { version = "0.15", default-features = false }
+cosmic-text = { version = "0.15", default-features = false }
+etagere     = { version = "0.2", default-features = false }
 kdl         = "6.7"                   # KDL v2 document model; round-trips comments and formatting
 insta       = "1"
-# Pinned: beta.4 breaks iced_exdevtools. Drop once iced_layershell is fixed.
-winit-core   = "=0.31.0-beta.2"
-winit-common = "=0.31.0-beta.2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"                  # not "forbid": forbid cannot be overridden, and the PAM/PipeWire FFI wrappers need a scoped allow
@@ -139,11 +136,11 @@ Why these lint choices: pedantic catches real mistakes but is noisy for UI code,
 
 - **Behaviour tests cross the module's interface (`crates/<x>/tests/*.rs`, or `#[cfg(test)]` next to a pure function with no better seam); delete tests of private helpers once an interface test covers them.** Why: tests that describe behaviour survive refactors. Source: [The Book, test organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html), codebase-design "replace, don't layer".
 - **Runner is `cargo test --workspace` (what `mise run test` runs).** Why: one fewer tool, and doc-tests run (nextest does not run them). Adopt `cargo nextest` only if a D-Bus test needs per-test process isolation or retries, and then add it to `mise.toml` in the same change. Source: [nextest, doctests](https://nexte.st/docs/running/#doctests).
-- **`insta` snapshots for structured data (surface plans, parsed config, rendered KDL, event sequences); `iced_test` screenshots on tiny-skia for UI.** Why: reviewable diffs, deterministic across machines. CI sets `INSTA_UPDATE=no`. Source: [insta](https://insta.rs/), [iced_test 0.14](https://docs.rs/iced_test/0.14.0/iced_test/).
+- **`insta` snapshots for structured data (surface plans, parsed config, rendered KDL, event sequences); `triton-engine`'s headless `layout_and_paint`/`DrawList` assertions for UI.** Why: reviewable diffs, deterministic across machines — `DrawList` is plain data, so a test can assert exact primitives, damage rects and animation values without Wayland or a GPU. CI sets `INSTA_UPDATE=no`. Source: [insta](https://insta.rs/), `crates/triton-engine/tests/layout_and_draw.rs`.
 - **Fixtures live in `tests/fixtures/`: recorded niri `.jsonl` streams, sample desktop entries, sample KDL (including a hand-written niri config full of comments).** Why: real protocol shapes and real user files catch what invented ones do not.
 - **No sleeping; time and randomness are arguments.** Why: determinism and speed; state machines take `Instant`.
 - **D-Bus tests use a private bus (`dbus-run-session`), never the user's session; the preview harness has its own D-Bus too.** Why: a test must not talk to the real desktop. AGENTS.md: never run triton against the real session.
-- **UI changes are verified by looking: `mise run dev`, read `target/preview/dev.png`.** Why: tests cannot say a layout looks right. Source: AGENTS.md.
+- **UI changes are verified by looking: run the `showcase` example in an isolated nested niri session.** Why: tests cannot say a layout looks right. Source: AGENTS.md.
 
 ## 9. Formatting and linting
 
@@ -177,7 +174,7 @@ Gate: `mise run check`. Proposed additions once the workspace has more than a fe
 
 ## 10. Dependency hygiene
 
-- **`cargo-deny` with a committed `deny.toml`.** Why: iced, wgpu and zbus bring hundreds of crates; advisories, licences (project is MIT; avoid GPL and AGPL) and duplicates should fail loudly. Source: [cargo-deny](https://embarkstudios.github.io/cargo-deny/).
+- **`cargo-deny` with a committed `deny.toml`.** Why: SCTK and the Wayland protocol stack still bring a sizable tree, and zbus will arrive with the services crates; advisories, licences (project is MIT; avoid GPL and AGPL) and duplicates should fail loudly. Source: [cargo-deny](https://embarkstudios.github.io/cargo-deny/).
 
 ```toml
 [advisories]
@@ -199,7 +196,7 @@ unknown-git = "deny"
 
 - **`cargo-machete` for unused dependencies; false positives go in `[workspace.metadata.cargo-machete] ignored`.** Why: cheap, regex-based, catches leftovers after a refactor. Source: [cargo-machete](https://github.com/bnjbvr/cargo-machete).
 - **Git dependencies only with a pinned `rev` and a comment saying why; prefer crates.io.** Why: reproducibility and licence audit. Source: [Cargo, specifying dependencies from git](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies-from-git-repositories).
-- **Check weight before adding a crate: `cargo tree -d`, `cargo build --timings`.** Why: one heavy dependency in the wrong crate defeats the split; the lock binary and `triton-config` stay free of zbus and iced.
+- **Check weight before adding a crate: `cargo tree -d`, `cargo build --timings`.** Why: one heavy dependency in the wrong crate defeats the split; `triton-design` stays free of anything beyond `iced_core` (value types only), and the lock binary stays free of D-Bus crates.
 - **`kdl` (v2 document model) is the only KDL dependency in the workspace.** Why: it is what makes comment-preserving edits possible, and one parser means one set of quirks. Source: [kdl-rs](https://github.com/kdl-org/kdl-rs).
 
 ## 11. Profiles
@@ -208,7 +205,7 @@ The product is a process that runs for weeks, so small resident memory and "one 
 
 ```toml
 [profile.dev]
-opt-level = 1                       # iced is sluggish at 0, even for our own crates
+opt-level = 1                       # SDF shaders + Taffy stay interactive even in dev
 debug = "line-tables-only"         # smaller binaries, faster links, backtraces still work
 split-debuginfo = "unpacked"        # Linux: faster incremental links
 
@@ -223,11 +220,11 @@ panic = "unwind"                    # keep: a service panic is caught as a task 
 strip = "debuginfo"                 # keep symbol names so panic backtraces stay readable
 ```
 
-Why each: LTO and one codegen unit shrink code and improve inlining across the iced and wgpu graph; `panic = "abort"` (used by cosmic-applets) saves size but a panic in one service would end the whole shell, and the panic strategy is per-profile, not per-package. Measure binary size and RSS, do not guess. Sources: [Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html), [min-sized-rust](https://github.com/johnthagen/min-sized-rust), manifests of cosmic-applets and niri.
+Why each: LTO and one codegen unit shrink code and improve inlining across the SCTK/glow/graph; `panic = "abort"` (used by cosmic-applets) saves size but a panic in one service would end the whole shell, and the panic strategy is per-profile, not per-package. Measure binary size and RSS, do not guess. Sources: [Cargo profiles](https://doc.rust-lang.org/cargo/reference/profiles.html), [min-sized-rust](https://github.com/johnthagen/min-sized-rust), manifests of cosmic-applets and niri.
 
-**Allocator.** glibc malloc can fragment in a long-lived multithreaded process; Dux tuned jemalloc for this (`research/dux-analysis.md` 1.1, 8). Do not add jemalloc or mimalloc speculatively: first measure the RSS slope with `mise run preview:status` over a soak, then try fewer threads (the single services runtime) and `MALLOC_ARENA_MAX`, and change the allocator last. Source: [glibc malloc tunables](https://www.gnu.org/software/libc/manual/html_node/Memory-Allocation-Tunables.html).
+**Allocator.** glibc malloc can fragment in a long-lived multithreaded process; Dux tuned jemalloc for this (`research/dux-analysis.md` 1.1, 8). Do not add jemalloc or mimalloc speculatively: first measure the RSS slope over a soak, then try fewer threads and `MALLOC_ARENA_MAX`, and change the allocator last. Source: [glibc malloc tunables](https://www.gnu.org/software/libc/manual/html_node/Memory-Allocation-Tunables.html).
 
-**Fast iteration.** Use `mise run dev` for the real thing and `cargo test -p triton-ui` (no zbus or PipeWire linked) while editing views. A faster linker (`mold` or `lld` via a `.cargo/config.toml` `rustflags = ["-C", "link-arg=-fuse-ld=mold"]`) is optional and must be installed through `nx` first; do not add it speculatively. Source: [Bevy setup guide](https://bevy.org/learn/quick-start/getting-started/setup/).
+**Fast iteration.** `cargo test -p triton-engine` while editing views (headless, no Wayland) and the `showcase` example for the real thing. A faster linker (`mold` or `lld` via a `.cargo/config.toml` `rustflags = ["-C", "link-arg=-fuse-ld=mold"]`) is optional and must be installed through `nx` first; do not add it speculatively. Source: [Bevy setup guide](https://bevy.org/learn/quick-start/getting-started/setup/).
 
 ## 12. Async and concurrency
 

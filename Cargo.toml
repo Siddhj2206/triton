@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-default-members = ["crates/triton", "crates/triton-lock"]
+default-members = ["crates/triton-engine"]
 
 [workspace.package]
 edition = "2024"
@@ -12,47 +12,20 @@ publish = false
 [workspace.dependencies]
 # internal
 triton-design = { path = "crates/triton-design" }
-triton-ui = { path = "crates/triton-ui" }
 # external (members re-enable the features they need)
-anyhow = "1"
-chrono = { version = "0.4.45", default-features = false }
 cosmic-text = { version = "0.15", default-features = false }
 etagere = { version = "0.2", default-features = false }
-freedesktop-desktop-entry = { version = "0.8.4", default-features = false }
 glow = { version = "0.16", default-features = false }
-image = { version = "0.25", default-features = false }
 khronos-egl = { version = "6.0", default-features = false }
-libc = "0.2"
 libloading = "0.9"
-material-colors = { version = "0.5.0", default-features = false }
 iced_core = { version = "0.14.0", default-features = false }
-iced_futures = { version = "0.14.0", default-features = false }
-iced_renderer = { version = "0.14.0", default-features = false }
-iced_runtime = { version = "0.14.0", default-features = false }
-iced_test = "0.14.0"
-iced_widget = { version = "0.14.2", default-features = false }
-# no default features: they add a D-Bus theme watcher (mundy); the scheme is ours
-iced_layershell = { version = "0.19.1", default-features = false }
-iced_sessionlock = { version = "0.19.1", default-features = false }
-serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.154"
 smithay-client-toolkit = { version = "0.21", default-features = false }
 taffy = { version = "0.15", default-features = false }
 thiserror = "2"
-toml = "0.9.12"
-tempfile = "3.27.0"
-niri-ipc = { version = "26.4.0", default-features = false }
-tokio = { version = "1.54.1", default-features = false }
 tracing = "0.1.44"
 wayland-client = { version = "0.31", default-features = false }
-wayland-protocols = { version = "0.32", default-features = false, features = ["client", "staging"] }
-wayland-protocols-wlr = { version = "0.3", default-features = false, features = ["client"] }
 tracing-subscriber = { version = "0.3.23", default-features = false }
-zbus = { version = "6", default-features = false }
-# Pinned: iced_layershell 0.19.1 (via iced_exdevtools) breaks on winit-core beta.4,
-# which added a NativeKeyCode variant. Drop once waycrate releases a fix.
-winit-common = "=0.31.0-beta.2"
-winit-core = "=0.31.0-beta.2"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -82,10 +55,3 @@ disallowed_methods = "deny"
 # Dependencies build optimised even in dev, so the shell is smooth while iterating.
 [profile.dev.package."*"]
 opt-level = 2
-
-# See patches/README.md for why each patch exists.
-[patch.crates-io]
-softbuffer = { path = "patches/softbuffer" }
-layershellev = { path = "patches/layershellev" }
-iced_layershell = { path = "patches/iced_layershell" }
-iced_layershell_macros = { path = "patches/iced_layershell_macros" }
