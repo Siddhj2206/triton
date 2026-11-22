@@ -10,6 +10,7 @@
 
 pub mod bar;
 pub mod cli;
+pub mod headless;
 pub mod ipc;
 pub mod niri_config;
 pub mod niri_ipc;
@@ -26,6 +27,7 @@ pub use bar::{
 };
 
 pub use cli::{CliCommand, CliError, DaemonArgs, MsgArgs, parse_args};
+pub use headless::{DEFAULT_SCALE, DEFAULT_SETTLE_MS, HeadlessArgs, HeadlessError, HeadlessReport};
 pub use ipc::{
     BarCommand, IpcCommand, IpcError, IpcResponse, IpcServer, OsdCommand, ThemeCommand,
     resolve_socket_path, send_command,
