@@ -49,20 +49,49 @@ description = "Run the triton-kit showcase example (needs a Wayland session)"
 run = "cargo run -p triton-kit --example showcase"
 
 # ── isolated dev session ─────────────────────────────────────────────────────
-# Runs the showcase gallery inside a NESTED niri window: private session bus
-# (dbus-run-session), private XDG_RUNTIME_DIR, scratch HOME/XDG dirs — never
-# the host session or the real ~/.config/niri. See dev/nested/session.sh.
+# Runs the real `triton` shell inside a NESTED niri window: private session bus
+# (dbus-run-session), private XDG_RUNTIME_DIR, scratch HOME/XDG dirs, and
+# GSETTINGS_BACKEND=memory — never the host session, the real ~/.config/niri,
+# or host dconf. `--real-services` is the default here so live niri IPC, owned
+# triton/*.kdl generation, and gsettings live-reload all work strictly inside
+# target/nested-niri. See dev/nested/session.sh.
 
 [tasks.dev]
-description = "Nested niri dev session running the showcase gallery (isolated)"
+description = "Nested niri dev session running the triton shell with real services (isolated)"
+run = """
+cargo build -p triton
+RUNNER="env REPO=$PWD"
+if command -v dbus-run-session >/dev/null 2>&1; then
+  RUNNER="env REPO=$PWD TRITON_NESTED_PRIVATE_BUS=1 dbus-run-session --"
+fi
+$RUNNER sh dev/nested/session.sh "$PWD/target/debug/triton" --real-services
+"""
+
+[tasks."dev:showcase"]
+description = "Nested niri dev session running the triton-kit showcase gallery (isolated)"
 run = """
 cargo build -p triton-kit --example showcase
+RUNNER="env REPO=$PWD"
 if command -v dbus-run-session >/dev/null 2>&1; then
-  REPO="$PWD" TRITON_NESTED_PRIVATE_BUS=1 dbus-run-session -- sh dev/nested/session.sh "$PWD/target/debug/examples/showcase"
-else
-  REPO="$PWD" sh dev/nested/session.sh "$PWD/target/debug/examples/showcase"
+  RUNNER="env REPO=$PWD TRITON_NESTED_PRIVATE_BUS=1 dbus-run-session --"
 fi
+$RUNNER sh dev/nested/session.sh "$PWD/target/debug/examples/showcase"
 """
+
+[tasks.msg]
+description = "Send `triton msg` to the running nested session's private socket"
+run = """
+SOCKET="$PWD/target/nested-niri/runtime/triton.sock"
+if [ ! -S "$SOCKET" ]; then
+  echo "mise run msg: no triton socket at $SOCKET — start the dev session first" >&2
+  exit 1
+fi
+cargo run -q -p triton -- msg --socket "$SOCKET"
+"""
+
+[tasks.snap]
+description = "Headless offscreen PNG snapshot of triton surfaces (e.g. `mise run snap -- target/snap --surface all`)"
+run = "cargo run -q -p triton -- --snap"
 
 # ── assets ───────────────────────────────────────────────────────────────────
 

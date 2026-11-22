@@ -1,0 +1,906 @@
+//! `TritonShell`: single-process `ShellApp` host with declarative
+//! `(SurfaceRole, OutputName)` surface reconciliation.
+
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use tracing::warn;
+use triton_design::color::{Scheme, Variant};
+use triton_engine::{
+    AppCommand, Element, EventSender, ImageStore, OutputInfo, ShellApp, SurfaceAnchor,
+    SurfaceKeyboard, SurfaceLayer, SurfaceSize, SurfaceSpec, Theme, ViewContext, box_,
+};
+
+use crate::bar::{BarClock, BarController};
+use crate::ipc::{BarCommand, IpcCommand, IpcResponse, OsdCommand, ThemeCommand};
+use crate::niri_config;
+use crate::niri_ipc::{NiriAction, NiriActionSender};
+use crate::osd::{self, OSD_HOLD_DURATION, OsdPayload, OsdState};
+use crate::state::{
+    BackendMode, BarMode, OutputKey, ShellEvent, ShellState, ShellStatusSnapshot, SurfaceRole,
+    SurfaceSummary, variant_as_str,
+};
+use crate::theme_pipeline::{self, ThemeSyncConfig};
+use crate::timer::TimerTag;
+use crate::wallpaper::{WallpaperImage, WallpaperSet, crossfade_duration, view_background};
+
+/// Timer tag for releasing outgoing wallpaper textures once a crossfade settles.
+pub const TIMER_WALLPAPER_SETTLE: u32 = TimerTag::WallpaperSettle.to_u32();
+
+/// Copyable surface identifier combining a [`SurfaceRole`] with a stable
+/// [`OutputKey`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SurfaceId {
+    pub role: SurfaceRole,
+    pub output: OutputKey,
+}
+
+/// UI interaction messages emitted by `triton-kit` widgets inside `TritonShell`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ShellMessage {
+    /// No-op placeholder message.
+    None,
+    /// User clicked a workspace pill in the Bar.
+    FocusWorkspace(u64),
+    /// User clicked the Bar status pill.
+    StatusPillClicked,
+    /// User clicked the Bar notification bell.
+    NotificationBellClicked,
+}
+
+/// Main Triton desktop shell application implementing [`ShellApp`].
+#[derive(Debug)]
+pub struct TritonShell {
+    state: ShellState,
+    bar: BarController,
+    name_to_key: HashMap<String, OutputKey>,
+    key_to_name: HashMap<OutputKey, String>,
+    next_output_key: u32,
+    wallpapers: WallpaperSet,
+    event_sender: Option<EventSender<ShellEvent>>,
+    /// Non-blocking niri action dispatch (set only under `--real-services`).
+    niri_sink: Option<NiriActionSender>,
+    /// External desktop theme sync target (GTK3/4 `gtk.css`, `colors.kdl`,
+    /// `gsettings`). Only honored when `state.backend == BackendMode::RealServices`.
+    theme_sync: Option<ThemeSyncConfig>,
+}
+
+impl TritonShell {
+    /// Construct a new shell daemon in the given [`BackendMode`].
+    pub fn new(backend: BackendMode) -> Self {
+        let now = Instant::now();
+        let state = ShellState::for_backend(backend);
+        let mut shell = Self {
+            state,
+            bar: BarController::new(now),
+            name_to_key: HashMap::new(),
+            key_to_name: HashMap::new(),
+            next_output_key: 1,
+            wallpapers: WallpaperSet::default(),
+            event_sender: None,
+            niri_sink: None,
+            theme_sync: None,
+        };
+        let initial_outputs = shell.state.outputs.clone();
+        shell.sync_output_registry(&initial_outputs, now);
+        shell
+    }
+
+    /// Borrow the active [`BarController`].
+    pub fn bar(&self) -> &BarController {
+        &self.bar
+    }
+
+    /// Mutably borrow the active [`BarController`].
+    pub fn bar_mut(&mut self) -> &mut BarController {
+        &mut self.bar
+    }
+
+    /// Override the Bar clock (useful for deterministic headless testing).
+    pub fn set_bar_clock(&mut self, clock: BarClock) {
+        self.bar.set_clock(clock);
+    }
+
+    /// Configure the normal (non-fullscreen) Autohide bar reveal delay.
+    pub fn set_bar_reveal_delay(&mut self, delay: Duration) {
+        self.bar.set_reveal_delay(delay);
+    }
+
+    /// Borrow the current [`ShellState`].
+    pub fn state(&self) -> &ShellState {
+        &self.state
+    }
+
+    /// Inject the niri action sink used to dispatch compositor actions
+    /// (workspace pill clicks) off the UI thread under `--real-services`.
+    pub fn set_niri_action_sink(&mut self, sink: NiriActionSender) {
+        self.niri_sink = Some(sink);
+    }
+
+    /// Current niri action sink, if live compositor integration is active.
+    pub fn niri_action_sink(&self) -> Option<&NiriActionSender> {
+        self.niri_sink.as_ref()
+    }
+
+    /// Configure external desktop theme syncing (GTK3/4 `gtk.css`,
+    /// `triton/colors.kdl`, and optionally `gsettings`). Only takes effect
+    /// when `self.state().backend == BackendMode::RealServices`.
+    pub fn set_theme_sync(&mut self, config: ThemeSyncConfig) {
+        self.theme_sync = Some(config);
+    }
+
+    /// Current external desktop theme sync configuration, if any.
+    pub fn theme_sync(&self) -> Option<&ThemeSyncConfig> {
+        self.theme_sync.as_ref()
+    }
+
+    /// Mutably borrow the current [`ShellState`].
+    pub fn state_mut(&mut self) -> &mut ShellState {
+        &mut self.state
+    }
+
+    /// Install the external event sender so wallpaper decodes can be spawned
+    /// off-thread and delivered back as [`ShellEvent`]s.
+    pub fn set_event_sender(&mut self, sender: EventSender<ShellEvent>) {
+        self.event_sender = Some(sender);
+    }
+
+    /// Borrow the wallpaper registry (decoded cache + per-output fades).
+    pub fn wallpapers(&self) -> &WallpaperSet {
+        &self.wallpapers
+    }
+
+    /// Resolve an [`OutputKey`] back to its compositor output name.
+    pub fn output_name(&self, key: OutputKey) -> Option<&str> {
+        self.key_to_name.get(&key).map(String::as_str)
+    }
+
+    /// Resolve a [`SurfaceId`] to its `(SurfaceRole, OutputName)` pair.
+    pub fn surface_descriptor(&self, id: SurfaceId) -> Option<(SurfaceRole, &str)> {
+        self.output_name(id.output).map(|name| (id.role, name))
+    }
+
+    /// Build a serializable status snapshot for `triton msg status`.
+    pub fn status_snapshot(&self) -> ShellStatusSnapshot {
+        let active_surfaces = self
+            .surfaces()
+            .into_iter()
+            .filter_map(|(id, spec)| {
+                let (role, output) = self.surface_descriptor(id)?;
+                Some(SurfaceSummary {
+                    role: role.as_str().to_owned(),
+                    output: output.to_owned(),
+                    namespace: spec.namespace,
+                })
+            })
+            .collect();
+
+        let wallpaper = self
+            .state
+            .target_output_name()
+            .and_then(|out| self.state.wallpaper.path_for(out))
+            .or(self.state.wallpaper.default_path.as_ref())
+            .map(|p| p.display().to_string());
+
+        ShellStatusSnapshot {
+            backend: self.state.backend.as_str().to_owned(),
+            outputs: self.state.outputs.iter().map(|o| o.name.clone()).collect(),
+            focused_output: self.state.focused_output.clone(),
+            bar_mode: self.state.bar_mode,
+            variant: variant_as_str(self.state.theme.variant).to_owned(),
+            reduce_motion: self.state.reduce_motion,
+            osd_active: self.state.osd.as_ref().is_some_and(|o| o.visible),
+            active_surfaces,
+            wallpaper,
+            mean_luminance: self.state.wallpaper.mean_luminance,
+            bright_backdrop: self.state.wallpaper.is_bright_backdrop(),
+            workspace_count: self.state.workspaces.len(),
+            focused_window_title: self.state.focused_window.as_ref().map(|w| w.title.clone()),
+        }
+    }
+
+    /// Handle an external [`ShellEvent`] and return resulting [`AppCommand`]s.
+    pub fn handle_event(&mut self, event: ShellEvent, now: Instant) -> Vec<AppCommand<SurfaceId>> {
+        match event {
+            ShellEvent::Ipc { command, reply } => {
+                let (response, cmds) = self.handle_ipc_command(command, now);
+                let _ = reply.send(response);
+                cmds
+            }
+            ShellEvent::SetBarMode(mode) => {
+                let changed = mode != self.state.bar_mode;
+                self.state.set_bar_mode(mode);
+                if changed {
+                    self.sync_layer_rules();
+                }
+                let mut cmds = self.bar.on_mode_changed(mode, now);
+                cmds.push(AppCommand::RedrawAll);
+                cmds
+            }
+            ShellEvent::ToggleBarHidden => {
+                let prev = self.state.bar_mode;
+                let mode = self.state.toggle_bar_hidden();
+                if mode != prev {
+                    self.sync_layer_rules();
+                }
+                let mut cmds = self.bar.on_mode_changed(mode, now);
+                cmds.push(AppCommand::RedrawAll);
+                cmds
+            }
+            ShellEvent::ShowOsd { payload, output } => self.show_osd(payload, output, now),
+            ShellEvent::HideOsd => {
+                self.state.osd = None;
+                vec![
+                    AppCommand::CancelTimer(TimerTag::OsdHide.to_u32()),
+                    AppCommand::CancelTimer(TimerTag::OsdReap.to_u32()),
+                    AppCommand::RedrawAll,
+                ]
+            }
+            ShellEvent::SetWallpaper { path, output } => self.set_wallpaper(path, output, now),
+            ShellEvent::WallpaperReady { image } => self.wallpaper_ready(image, now),
+            ShellEvent::WallpaperFailed { path, error } => {
+                warn!(path = %path.display(), "wallpaper decode failed: {error}");
+                self.wallpapers.on_decode_failed(&path);
+                Vec::new()
+            }
+            ShellEvent::ApplyTheme {
+                scheme,
+                variant,
+                mean_luminance,
+            } => self.apply_theme(scheme, variant, mean_luminance),
+            ShellEvent::SetReduceMotion(enabled) => {
+                self.state.reduce_motion = enabled;
+                self.wallpapers.set_reduce_motion(enabled);
+                self.bar.set_reduce_motion(enabled, now);
+                if let Some(ref mut osd) = self.state.osd {
+                    osd.set_reduce_motion(enabled, now);
+                }
+                vec![AppCommand::SetReduceMotion(enabled), AppCommand::RedrawAll]
+            }
+            ShellEvent::OutputsChanged(outputs) => self.reconcile_outputs(&outputs, now),
+            ShellEvent::FocusedOutputChanged(output) => {
+                self.state.focused_output = output;
+                self.refresh_active_wallpaper();
+                vec![AppCommand::RedrawAll]
+            }
+            ShellEvent::WorkspacesUpdated(workspaces) => {
+                self.state.workspaces = workspaces;
+                vec![AppCommand::RedrawAll]
+            }
+            ShellEvent::FocusedWindowChanged(window) => {
+                self.state.focused_window = window;
+                vec![AppCommand::RedrawAll]
+            }
+            ShellEvent::StatusUpdated(status) => {
+                self.state.status = status;
+                vec![AppCommand::RedrawAll]
+            }
+            ShellEvent::Quit => vec![AppCommand::Quit],
+        }
+    }
+
+    fn apply_theme(
+        &mut self,
+        scheme: Option<Box<Scheme>>,
+        variant: Option<Variant>,
+        mean_luminance: Option<f32>,
+    ) -> Vec<AppCommand<SurfaceId>> {
+        let next_variant = variant.unwrap_or(self.state.theme.variant);
+        let next_scheme = match scheme {
+            Some(boxed) => *boxed,
+            None if next_variant != self.state.theme.variant => {
+                match self.state.wallpaper.active_image.as_ref() {
+                    Some(img) => theme_pipeline::extract_scheme(&img.data, next_variant),
+                    None => Scheme::reference(next_variant),
+                }
+            }
+            None => self.state.theme.scheme,
+        };
+        let scheme_changed = next_scheme != self.state.theme.scheme;
+        let variant_changed = next_variant != self.state.theme.variant;
+        self.state.theme = Theme {
+            scheme: next_scheme,
+            variant: next_variant,
+        };
+        if let Some(lum) = mean_luminance {
+            self.state.wallpaper.mean_luminance = lum;
+        }
+        if scheme_changed || variant_changed {
+            self.sync_external_theme();
+        }
+        if variant_changed {
+            self.sync_layer_rules();
+        }
+        vec![AppCommand::RedrawAll]
+    }
+
+    fn handle_ipc_command(
+        &mut self,
+        command: IpcCommand,
+        now: Instant,
+    ) -> (IpcResponse, Vec<AppCommand<SurfaceId>>) {
+        match command {
+            IpcCommand::Status => {
+                let snapshot = self.status_snapshot();
+                match serde_json::to_value(&snapshot) {
+                    Ok(data) => (IpcResponse::ok_data(data), Vec::new()),
+                    Err(err) => (
+                        IpcResponse::error(format!("failed to serialize status: {err}")),
+                        Vec::new(),
+                    ),
+                }
+            }
+            IpcCommand::Bar { action } => {
+                let cmds = match action {
+                    BarCommand::Autohide => {
+                        self.handle_event(ShellEvent::SetBarMode(BarMode::Autohide), now)
+                    }
+                    BarCommand::Pinned => {
+                        self.handle_event(ShellEvent::SetBarMode(BarMode::Pinned), now)
+                    }
+                    BarCommand::Hidden => {
+                        self.handle_event(ShellEvent::SetBarMode(BarMode::Hidden), now)
+                    }
+                    BarCommand::Toggle => self.handle_event(ShellEvent::ToggleBarHidden, now),
+                };
+                let mode = self.state.bar_mode;
+                (IpcResponse::ok(format!("bar mode set to {mode:?}")), cmds)
+            }
+            IpcCommand::Osd { action } => match action {
+                OsdCommand::Show { payload, output } => {
+                    let cmds = self.handle_event(ShellEvent::ShowOsd { payload, output }, now);
+                    if self.state.osd.is_some() {
+                        (IpcResponse::ok("osd shown"), cmds)
+                    } else {
+                        (IpcResponse::error("no connected output for osd"), cmds)
+                    }
+                }
+                OsdCommand::Hide => {
+                    let cmds = self.handle_event(ShellEvent::HideOsd, now);
+                    (IpcResponse::ok("osd hidden"), cmds)
+                }
+            },
+            IpcCommand::Wallpaper { path, output } => {
+                let display = path.display().to_string();
+                let cmds = self.handle_event(ShellEvent::SetWallpaper { path, output }, now);
+                (
+                    IpcResponse::ok(format!("wallpaper updated: {display}")),
+                    cmds,
+                )
+            }
+            IpcCommand::Theme { action } => match action {
+                ThemeCommand::Dark => {
+                    let cmds = self.handle_event(
+                        ShellEvent::ApplyTheme {
+                            scheme: None,
+                            variant: Some(Variant::Dark),
+                            mean_luminance: None,
+                        },
+                        now,
+                    );
+                    (IpcResponse::ok("theme set to dark"), cmds)
+                }
+                ThemeCommand::Light => {
+                    let cmds = self.handle_event(
+                        ShellEvent::ApplyTheme {
+                            scheme: None,
+                            variant: Some(Variant::Light),
+                            mean_luminance: None,
+                        },
+                        now,
+                    );
+                    (IpcResponse::ok("theme set to light"), cmds)
+                }
+                ThemeCommand::ToggleVariant => {
+                    let next = match self.state.theme.variant {
+                        Variant::Dark => Variant::Light,
+                        Variant::Light => Variant::Dark,
+                    };
+                    let cmds = self.handle_event(
+                        ShellEvent::ApplyTheme {
+                            scheme: None,
+                            variant: Some(next),
+                            mean_luminance: None,
+                        },
+                        now,
+                    );
+                    (
+                        IpcResponse::ok(format!("theme set to {}", variant_as_str(next))),
+                        cmds,
+                    )
+                }
+                ThemeCommand::ReduceMotion { enabled } => {
+                    let cmds = self.handle_event(ShellEvent::SetReduceMotion(enabled), now);
+                    (IpcResponse::ok(format!("reduce_motion={enabled}")), cmds)
+                }
+            },
+            IpcCommand::Quit => (IpcResponse::ok("shutting down"), vec![AppCommand::Quit]),
+        }
+    }
+
+    fn show_osd(
+        &mut self,
+        payload: OsdPayload,
+        output: Option<String>,
+        now: Instant,
+    ) -> Vec<AppCommand<SurfaceId>> {
+        let target = output
+            .filter(|name| self.state.outputs.iter().any(|o| o.name == *name))
+            .or_else(|| self.state.target_output_name().map(str::to_owned));
+
+        let Some(target_output) = target else {
+            return Vec::new();
+        };
+
+        // Payload switches and mid-exit revivals morph in place: the surface id
+        // never changes, so the compositor keeps the same layer surface.
+        match self.state.osd.as_mut() {
+            Some(osd) => osd.show(payload, target_output, now),
+            None => {
+                self.state.osd = Some(OsdState::entering(
+                    payload,
+                    target_output,
+                    self.state.reduce_motion,
+                    now,
+                ));
+            }
+        }
+
+        // Re-arming the same tag refreshes the hold deadline on every event.
+        vec![
+            AppCommand::ScheduleTimer {
+                tag: TimerTag::OsdHide.to_u32(),
+                delay: OSD_HOLD_DURATION,
+            },
+            AppCommand::RedrawAll,
+        ]
+    }
+
+    fn reconcile_outputs(
+        &mut self,
+        outputs: &[OutputInfo],
+        now: Instant,
+    ) -> Vec<AppCommand<SurfaceId>> {
+        self.state.outputs = outputs.to_vec();
+        let mut cmds = self.sync_output_registry(outputs, now);
+
+        let connected: HashSet<&str> = outputs.iter().map(|o| o.name.as_str()).collect();
+
+        // Keep focused_output valid across hotplug removal.
+        let focused_valid = self
+            .state
+            .focused_output
+            .as_deref()
+            .is_some_and(|name| connected.contains(name));
+        if !focused_valid {
+            self.state.focused_output = outputs.first().map(|o| o.name.clone());
+        }
+
+        // Keep active OSD bound to a connected output (or clear if none left).
+        if let Some(ref mut osd) = self.state.osd
+            && !connected.contains(osd.output.as_str())
+        {
+            if let Some(ref fallback) = self.state.focused_output {
+                osd.output.clone_from(fallback);
+            } else {
+                self.state.osd = None;
+            }
+        }
+
+        self.refresh_wallpaper_targets(now);
+        self.refresh_active_wallpaper();
+        cmds.push(AppCommand::RedrawAll);
+        cmds
+    }
+
+    /// Update the wallpaper target globally or per output and kick off any
+    /// needed off-thread decode.
+    fn set_wallpaper(
+        &mut self,
+        path: PathBuf,
+        output: Option<String>,
+        now: Instant,
+    ) -> Vec<AppCommand<SurfaceId>> {
+        if let Some(output_name) = output {
+            self.state.wallpaper.per_output.insert(output_name, path);
+        } else {
+            // A new global default retargets every output without an explicit
+            // per-output override.
+            self.state.wallpaper.default_path = Some(path);
+        }
+        self.refresh_wallpaper_targets(now);
+        let mut cmds = vec![AppCommand::RedrawAll];
+        if self.wallpapers.has_active_fades() {
+            cmds.push(AppCommand::ScheduleTimer {
+                tag: TIMER_WALLPAPER_SETTLE,
+                delay: crossfade_duration(self.state.reduce_motion),
+            });
+        }
+        cmds
+    }
+
+    /// A decoded wallpaper landed from the worker thread: queue its GPU upload
+    /// (fades begin in `sync_images`) and arm the settle timer when an output
+    /// is transitioning to it.
+    fn wallpaper_ready(
+        &mut self,
+        image: Arc<WallpaperImage>,
+        now: Instant,
+    ) -> Vec<AppCommand<SurfaceId>> {
+        let will_fade = self.wallpapers.will_transition_to(&image.path);
+        self.wallpapers.on_decoded(image, now);
+        self.refresh_active_wallpaper();
+        let mut cmds = vec![AppCommand::RedrawAll];
+        if will_fade || self.wallpapers.has_active_fades() {
+            cmds.push(AppCommand::ScheduleTimer {
+                tag: TIMER_WALLPAPER_SETTLE,
+                delay: crossfade_duration(self.state.reduce_motion),
+            });
+        }
+        cmds
+    }
+
+    /// Point every connected output at its effective wallpaper path
+    /// (per-output override, else `default_path`) and spawn off-thread decodes
+    /// for any path with no decoded pixels yet.
+    fn refresh_wallpaper_targets(&mut self, now: Instant) {
+        let targets: Vec<(OutputKey, PathBuf)> = self
+            .state
+            .outputs
+            .iter()
+            .filter_map(|o| {
+                let key = *self.name_to_key.get(&o.name)?;
+                let path = self.state.wallpaper.path_for(&o.name)?.clone();
+                Some((key, path))
+            })
+            .collect();
+        for (key, path) in targets {
+            self.wallpapers.request(key, &path, now);
+        }
+        self.spawn_needed_decodes();
+    }
+
+    /// Spawn a `triton-wallpaper` decode worker for every desired path with no
+    /// cached pixels and no decode already in flight. Without an event sender
+    /// (headless tests inject `WallpaperReady` directly) this is a no-op.
+    fn spawn_needed_decodes(&mut self) {
+        let Some(sender) = self.event_sender.clone() else {
+            return;
+        };
+        for path in self.wallpapers.undecoded_desires() {
+            self.wallpapers.mark_decoding(&path);
+            if let Err(err) = crate::wallpaper::spawn_decode(path.clone(), sender.clone()) {
+                warn!(path = %path.display(), error = %err, "failed to spawn wallpaper decode");
+                self.wallpapers.on_decode_failed(&path);
+            }
+        }
+    }
+
+    /// Refresh `mean_luminance` / `active_image` in shell state from the
+    /// decoded image committed to the focused output — the freshest desired
+    /// image once its decode landed, otherwise whatever is still displayed.
+    ///
+    /// When the active image changes, re-extracts the 28-role Material 3
+    /// [`Scheme`] in-process for the current [`Variant`] and syncs external
+    /// desktop theme outputs if [`BackendMode::RealServices`] is active.
+    fn refresh_active_wallpaper(&mut self) {
+        let target_key = self
+            .state
+            .target_output_name()
+            .and_then(|name| self.name_to_key.get(name).copied());
+        let desired_image = target_key
+            .and_then(|key| self.wallpapers.desired_path(key))
+            .and_then(|path| self.wallpapers.image_for_path(&path));
+        let image = desired_image
+            .or_else(|| target_key.and_then(|key| self.wallpapers.displayed_image(key)));
+
+        let image_changed = match (&self.state.wallpaper.active_image, &image) {
+            (Some(prev), Some(next)) => !Arc::ptr_eq(prev, next),
+            (None, None) => false,
+            _ => true,
+        };
+
+        self.state.wallpaper.mean_luminance = image.as_ref().map_or(0.0, |img| img.mean_luminance);
+        self.state.wallpaper.active_image = image;
+
+        if image_changed && let Some(ref active) = self.state.wallpaper.active_image {
+            let next_scheme =
+                theme_pipeline::extract_scheme(&active.data, self.state.theme.variant);
+            if next_scheme != self.state.theme.scheme {
+                self.state.theme.scheme = next_scheme;
+                self.sync_external_theme();
+            }
+        }
+    }
+
+    /// Write GTK3/4 `gtk.css`, `triton/colors.kdl`, and (if enabled) invoke
+    /// `gsettings`. Strictly gated behind [`BackendMode::RealServices`].
+    fn sync_external_theme(&self) {
+        if self.state.backend != BackendMode::RealServices {
+            return;
+        }
+        let Some(ref cfg) = self.theme_sync else {
+            return;
+        };
+        if let Err(err) = theme_pipeline::sync_config_files(
+            &cfg.config_root,
+            &self.state.theme.scheme,
+            self.state.theme.variant,
+        ) {
+            warn!(
+                dir = %cfg.config_root.display(),
+                error = %err,
+                "failed to sync GTK/niri theme files"
+            );
+        }
+        if cfg.apply_gsettings
+            && let Err(err) =
+                theme_pipeline::apply_gsettings(self.state.theme.variant, self.state.backend)
+        {
+            warn!(error = %err, "failed to apply gsettings color-scheme");
+        }
+    }
+
+    /// Regenerate `<config_root>/niri/triton/layer-rules.kdl` when bar mode
+    /// or theme variant changes. Strictly gated behind [`BackendMode::RealServices`].
+    fn sync_layer_rules(&self) {
+        if self.state.backend != BackendMode::RealServices {
+            return;
+        }
+        let Some(ref cfg) = self.theme_sync else {
+            return;
+        };
+        let niri_dir = cfg.config_root.join("niri");
+        if let Err(err) =
+            niri_config::write_layer_rules(&niri_dir, self.state.theme.variant, self.state.bar_mode)
+        {
+            warn!(
+                dir = %niri_dir.display(),
+                error = %err,
+                "failed to sync niri layer-rules.kdl"
+            );
+        }
+    }
+
+    fn sync_output_registry(
+        &mut self,
+        outputs: &[OutputInfo],
+        now: Instant,
+    ) -> Vec<AppCommand<SurfaceId>> {
+        let active_names: HashSet<&str> = outputs.iter().map(|o| o.name.as_str()).collect();
+        self.name_to_key
+            .retain(|name, _| active_names.contains(name.as_str()));
+        self.key_to_name
+            .retain(|_, name| active_names.contains(name.as_str()));
+
+        for output in outputs {
+            if !self.name_to_key.contains_key(&output.name) {
+                let key = OutputKey(self.next_output_key);
+                self.next_output_key += 1;
+                self.name_to_key.insert(output.name.clone(), key);
+                self.key_to_name.insert(key, output.name.clone());
+            }
+        }
+
+        let active_keys: HashSet<OutputKey> = self.key_to_name.keys().copied().collect();
+        self.wallpapers.retain_outputs(|k| active_keys.contains(k));
+        self.bar
+            .sync_outputs(&active_keys, self.state.reduce_motion, now)
+    }
+
+    fn background_spec(output: &OutputInfo) -> SurfaceSpec {
+        SurfaceSpec {
+            namespace: SurfaceRole::Background.namespace().to_owned(),
+            layer: SurfaceLayer::Background,
+            anchor: SurfaceAnchor::TOP
+                | SurfaceAnchor::BOTTOM
+                | SurfaceAnchor::LEFT
+                | SurfaceAnchor::RIGHT,
+            margin: (0, 0, 0, 0),
+            keyboard: SurfaceKeyboard::None,
+            exclusive_zone: -1,
+            sizing: SurfaceSize::Stretch,
+            shaped_input: false,
+            output: Some(output.name.clone()),
+        }
+    }
+
+    fn bar_spec(&self, output: &OutputInfo) -> Option<SurfaceSpec> {
+        BarController::surface_spec(self.state.bar_mode, output)
+    }
+
+    fn view_bar(&self, id: SurfaceId, ctx: &mut ViewContext<'_>) -> Element<ShellMessage> {
+        let output_name = self.output_name(id.output).unwrap_or("");
+        self.bar.view(id, output_name, &self.state, ctx)
+    }
+}
+
+impl ShellApp for TritonShell {
+    type SurfaceId = SurfaceId;
+    type Message = ShellMessage;
+
+    fn surfaces(&self) -> Vec<(Self::SurfaceId, SurfaceSpec)> {
+        let mut specs = Vec::new();
+        for output in &self.state.outputs {
+            let Some(&output_key) = self.name_to_key.get(&output.name) else {
+                continue;
+            };
+            specs.push((
+                SurfaceId {
+                    role: SurfaceRole::Background,
+                    output: output_key,
+                },
+                Self::background_spec(output),
+            ));
+            if let Some(bar_spec) = self.bar_spec(output) {
+                specs.push((
+                    SurfaceId {
+                        role: SurfaceRole::Bar,
+                        output: output_key,
+                    },
+                    bar_spec,
+                ));
+            }
+        }
+
+        // The OSD stays mounted through its exit morph; the reap timer drops
+        // `state.osd` once the morph settles, unmounting the surface cleanly.
+        if let Some(ref osd) = self.state.osd
+            && let Some(&output_key) = self.name_to_key.get(&osd.output)
+        {
+            specs.push((
+                SurfaceId {
+                    role: SurfaceRole::Osd,
+                    output: output_key,
+                },
+                osd::surface_spec(&osd.output),
+            ));
+        }
+
+        specs
+    }
+
+    fn view(&self, id: Self::SurfaceId, ctx: &mut ViewContext<'_>) -> Element<Self::Message> {
+        match id.role {
+            SurfaceRole::Background => {
+                view_background(&self.wallpapers, id.output, &self.state.theme, ctx.now)
+            }
+            SurfaceRole::Bar => self.view_bar(id, ctx),
+            SurfaceRole::Osd => match self.state.osd.as_ref() {
+                Some(osd) => osd::view(osd, &self.state.theme, self.state.reduce_motion, ctx),
+                None => box_(),
+            },
+        }
+    }
+
+    fn update(
+        &mut self,
+        _id: Self::SurfaceId,
+        msg: Self::Message,
+        _now: Instant,
+    ) -> Vec<AppCommand<Self::SurfaceId>> {
+        match msg {
+            ShellMessage::FocusWorkspace(ws_id) => {
+                if let Some(sink) = &self.niri_sink {
+                    sink.send(NiriAction::FocusWorkspace(ws_id));
+                }
+                for ws in &mut self.state.workspaces {
+                    ws.is_active = ws.id == ws_id;
+                    ws.is_focused = ws.id == ws_id;
+                }
+                vec![AppCommand::RedrawAll]
+            }
+            ShellMessage::None
+            | ShellMessage::StatusPillClicked
+            | ShellMessage::NotificationBellClicked => Vec::new(),
+        }
+    }
+
+    fn is_animating(&self, id: Self::SurfaceId, now: Instant) -> bool {
+        match id.role {
+            SurfaceRole::Background => self.wallpapers.is_animating(id.output, now),
+            SurfaceRole::Bar => self.bar.is_animating(id.output, now),
+            // The app-owned presence channel drives frames during the
+            // enter/exit morph; once settled the surface goes idle (0% CPU).
+            SurfaceRole::Osd => self.state.osd.as_ref().is_some_and(|o| !o.is_settled(now)),
+        }
+    }
+
+    fn on_start(&mut self, now: Instant) -> Vec<AppCommand<Self::SurfaceId>> {
+        self.bar.on_start(now)
+    }
+
+    fn on_outputs_changed(
+        &mut self,
+        outputs: &[OutputInfo],
+        now: Instant,
+    ) -> Vec<AppCommand<Self::SurfaceId>> {
+        self.reconcile_outputs(outputs, now)
+    }
+
+    fn on_pointer_enter(
+        &mut self,
+        id: Self::SurfaceId,
+        _pos: (f32, f32),
+        now: Instant,
+    ) -> Vec<AppCommand<Self::SurfaceId>> {
+        let Some(output_name) = self.output_name(id.output).map(str::to_owned) else {
+            return Vec::new();
+        };
+        self.bar
+            .on_pointer_enter(id, &self.state, &output_name, now)
+    }
+
+    fn on_pointer_leave(
+        &mut self,
+        id: Self::SurfaceId,
+        now: Instant,
+    ) -> Vec<AppCommand<Self::SurfaceId>> {
+        self.bar.on_pointer_leave(id, &self.state, now)
+    }
+
+    fn sync_images(&mut self, images: &mut ImageStore) {
+        self.wallpapers.sync(images);
+    }
+
+    fn on_timer(&mut self, tag: u32, now: Instant) -> Vec<AppCommand<Self::SurfaceId>> {
+        let Some(timer_tag) = TimerTag::from_u32(tag) else {
+            return Vec::new();
+        };
+        match timer_tag {
+            TimerTag::WallpaperSettle => {
+                // Release outgoing textures whose crossfade completed; re-arm
+                // if a later fade is still running.
+                let mut cmds = vec![AppCommand::RedrawAll];
+                if let Some(remaining) = self.wallpapers.settle(now) {
+                    cmds.push(AppCommand::ScheduleTimer {
+                        tag: TimerTag::WallpaperSettle.to_u32(),
+                        delay: remaining,
+                    });
+                }
+                self.refresh_active_wallpaper();
+                cmds
+            }
+            TimerTag::OsdHide => {
+                let Some(osd) = self.state.osd.as_mut() else {
+                    return Vec::new();
+                };
+                if osd.is_exiting() {
+                    return Vec::new();
+                }
+                osd.dismiss(now);
+                vec![
+                    AppCommand::ScheduleTimer {
+                        tag: TimerTag::OsdReap.to_u32(),
+                        delay: osd::OSD_REAP_INTERVAL,
+                    },
+                    AppCommand::RedrawAll,
+                ]
+            }
+            TimerTag::OsdReap => {
+                let Some(osd) = self.state.osd.as_ref() else {
+                    return Vec::new();
+                };
+                if !osd.is_exiting() {
+                    // Revived mid-exit: a stale reap is a no-op.
+                    return Vec::new();
+                }
+                if osd.is_settled(now) {
+                    self.state.osd = None;
+                    vec![AppCommand::RedrawAll]
+                } else {
+                    vec![AppCommand::ScheduleTimer {
+                        tag: TimerTag::OsdReap.to_u32(),
+                        delay: osd::OSD_REAP_INTERVAL,
+                    }]
+                }
+            }
+            TimerTag::BarClock | TimerTag::BarReveal(_) | TimerTag::BarHide(_) => {
+                self.bar.on_timer(tag, &self.state, now).unwrap_or_default()
+            }
+        }
+    }
+}

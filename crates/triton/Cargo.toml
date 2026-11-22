@@ -1,0 +1,31 @@
+[package]
+name = "triton"
+version = "0.1.0"
+description = "Triton desktop shell daemon and CLI for the niri compositor."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "triton"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true, features = ["std"] }
+image = { workspace = true, features = ["png", "jpeg", "webp", "gif"] }
+material-colors = { workspace = true, features = ["std", "quantize"] }
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+triton-design.workspace = true
+triton-engine.workspace = true
+triton-kit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

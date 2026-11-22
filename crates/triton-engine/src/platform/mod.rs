@@ -26,6 +26,7 @@ use smithay_client_toolkit::compositor::{
 use smithay_client_toolkit::dispatch2::Dispatch2;
 use smithay_client_toolkit::globals::GlobalData;
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
+use smithay_client_toolkit::reexports::calloop::channel as calloop_channel;
 use smithay_client_toolkit::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay_client_toolkit::reexports::calloop::{
     EventLoop, LoopHandle, LoopSignal, RegistrationToken,
@@ -104,6 +105,31 @@ pub enum SurfaceSize {
     },
 }
 
+/// Metadata describing a connected display output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputInfo {
+    /// Compositor-assigned output name (e.g. `"eDP-1"`, `"DP-1"`).
+    pub name: String,
+    /// Logical dimensions `(width, height)` in compositor coordinates, if known.
+    pub logical_size: Option<(u32, u32)>,
+    /// Logical position `(x, y)` in compositor coordinates, if known.
+    pub logical_position: Option<(i32, i32)>,
+    /// Integer scale factor reported by `wl_output` (at least `1`).
+    pub scale_factor: i32,
+}
+
+impl OutputInfo {
+    /// Construct an [`OutputInfo`] with a name and logical size at origin `(0, 0)` and scale `1`.
+    pub fn new(name: impl Into<String>, logical_size: (u32, u32)) -> Self {
+        Self {
+            name: name.into(),
+            logical_size: Some(logical_size),
+            logical_position: Some((0, 0)),
+            scale_factor: 1,
+        }
+    }
+}
+
 /// Declarative specification of one layer-shell surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SurfaceSpec {
@@ -117,6 +143,8 @@ pub struct SurfaceSpec {
     pub sizing: SurfaceSize,
     /// If true, pointer events outside painted input rects pass through to windows below.
     pub shaped_input: bool,
+    /// Optional Wayland output name to bind this layer surface to (`None` = compositor default).
+    pub output: Option<String>,
 }
 
 impl SurfaceSpec {
@@ -138,6 +166,7 @@ impl SurfaceSpec {
                 max_h: Some(120),
             },
             shaped_input: true,
+            output: None,
         }
     }
 
@@ -163,6 +192,7 @@ impl SurfaceSpec {
                 height: max_h,
             },
             shaped_input: true,
+            output: None,
         }
     }
 
@@ -185,7 +215,15 @@ impl SurfaceSpec {
                 max_h: Some(900),
             },
             shaped_input: true,
+            output: None,
         }
+    }
+
+    /// Target a specific Wayland output by name (e.g. `"eDP-1"`).
+    #[must_use]
+    pub fn on_output(mut self, output: impl Into<String>) -> Self {
+        self.output = Some(output.into());
+        self
     }
 }
 
@@ -278,6 +316,36 @@ pub trait ShellApp: 'static {
         Vec::new()
     }
 
+    /// Optional callback invoked on startup with the initial output inventory
+    /// and whenever Wayland outputs are added, updated, or removed.
+    fn on_outputs_changed(
+        &mut self,
+        _outputs: &[OutputInfo],
+        _now: Instant,
+    ) -> Vec<AppCommand<Self::SurfaceId>> {
+        Vec::new()
+    }
+
+    /// Optional callback invoked when the pointer enters surface `id` at
+    /// logical surface coordinates `pos`.
+    fn on_pointer_enter(
+        &mut self,
+        _id: Self::SurfaceId,
+        _pos: (f32, f32),
+        _now: Instant,
+    ) -> Vec<AppCommand<Self::SurfaceId>> {
+        Vec::new()
+    }
+
+    /// Optional callback invoked when the pointer leaves surface `id`.
+    fn on_pointer_leave(
+        &mut self,
+        _id: Self::SurfaceId,
+        _now: Instant,
+    ) -> Vec<AppCommand<Self::SurfaceId>> {
+        Vec::new()
+    }
+
     /// Optional callback for timers scheduled via [`AppCommand::ScheduleTimer`].
     fn on_timer(&mut self, _tag: u32, _now: Instant) -> Vec<AppCommand<Self::SurfaceId>> {
         Vec::new()
@@ -296,33 +364,156 @@ pub trait ShellApp: 'static {
     fn on_exit(&mut self, _metrics: &HashMap<Self::SurfaceId, SurfaceMetrics>) {}
 }
 
+/// Thread-safe sender for pushing typed external events into a running
+/// [`ShellApp`] event loop (or a [`crate::HeadlessSession`]) without polling.
+pub struct EventSender<E> {
+    tx: calloop_channel::Sender<E>,
+}
+
+impl<E> Clone for EventSender<E> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+        }
+    }
+}
+
+impl<E> fmt::Debug for EventSender<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EventSender").finish_non_exhaustive()
+    }
+}
+
+impl<E> EventSender<E> {
+    /// Enqueue `event` and immediately wake the receiving `calloop` event loop.
+    pub fn send(&self, event: E) -> Result<(), EngineError> {
+        self.tx
+            .send(event)
+            .map_err(|e| EngineError::EventLoop(format!("external event send failed: {e}")))
+    }
+}
+
+/// Receiving end of a `calloop`-backed external event channel created by [`event_channel`].
+///
+/// Pass to [`run_with_events`] for live Wayland execution, or drain
+/// deterministically inside [`crate::HeadlessSession::drain_events`].
+pub struct EventReceiver<E> {
+    rx: calloop_channel::Channel<E>,
+}
+
+impl<E> fmt::Debug for EventReceiver<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EventReceiver").finish_non_exhaustive()
+    }
+}
+
+impl<E> EventReceiver<E> {
+    /// Non-blocking receive of the next queued external event, if any.
+    pub fn try_recv(&self) -> Option<E> {
+        self.rx.try_recv().ok()
+    }
+
+    /// Drain all currently queued external events in FIFO order without blocking.
+    pub fn drain(&self) -> Vec<E> {
+        let mut out = Vec::new();
+        while let Some(ev) = self.try_recv() {
+            out.push(ev);
+        }
+        out
+    }
+}
+
+/// Create a `calloop`-backed external event channel `(EventSender, EventReceiver)`.
+///
+/// Background threads (IPC streams, Unix socket servers, async image decoders)
+/// clone [`EventSender`] to wake the shell's `calloop` event loop with 0% idle CPU.
+pub fn event_channel<E: Send + 'static>() -> (EventSender<E>, EventReceiver<E>) {
+    let (tx, rx) = calloop_channel::channel();
+    (EventSender { tx }, EventReceiver { rx })
+}
+
 /// Run a [`ShellApp`] on the Wayland + calloop + EGL/GLES3 runtime.
 pub fn run<A: ShellApp>(app: A) -> Result<(), EngineError> {
+    run_inner(
+        app,
+        None::<(
+            EventReceiver<()>,
+            fn(&mut A, (), Instant) -> Vec<AppCommand<A::SurfaceId>>,
+        )>,
+    )
+}
+
+/// Run a [`ShellApp`] on the Wayland + calloop + EGL/GLES3 runtime with a
+/// `calloop`-backed [`EventReceiver`] delivering typed events from background threads.
+pub fn run_with_events<A, E, F>(
+    app: A,
+    events: EventReceiver<E>,
+    on_event: F,
+) -> Result<(), EngineError>
+where
+    A: ShellApp,
+    E: Send + 'static,
+    F: FnMut(&mut A, E, Instant) -> Vec<AppCommand<A::SurfaceId>> + 'static,
+{
+    run_inner(app, Some((events, on_event)))
+}
+
+fn run_inner<A, E, F>(
+    app: A,
+    external_events: Option<(EventReceiver<E>, F)>,
+) -> Result<(), EngineError>
+where
+    A: ShellApp,
+    E: Send + 'static,
+    F: FnMut(&mut A, E, Instant) -> Vec<AppCommand<A::SurfaceId>> + 'static,
+{
     let conn = Connection::connect_to_env()
         .map_err(|e| EngineError::Wayland(format!("connect_to_env: {e}")))?;
-    let (globals, event_queue) = registry_queue_init::<Runtime<A>>(&conn)
+    let (globals, mut event_queue) = registry_queue_init::<Runtime<A>>(&conn)
         .map_err(|e| EngineError::Wayland(format!("registry_queue_init: {e}")))?;
     let qh = event_queue.handle();
 
     let mut event_loop: EventLoop<'_, Runtime<A>> = EventLoop::try_new()
         .map_err(|e| EngineError::EventLoop(format!("EventLoop::try_new: {e}")))?;
     let loop_handle = event_loop.handle();
-    WaylandSource::new(conn.clone(), event_queue)
-        .insert(loop_handle.clone())
-        .map_err(|e| EngineError::EventLoop(format!("insert WaylandSource: {e}")))?;
 
     let mut runtime = Runtime::new(
         app,
         &conn,
         &globals,
         &qh,
-        loop_handle,
+        loop_handle.clone(),
         event_loop.get_signal(),
     )?;
+
+    // Roundtrip to populate initial wl_output / xdg_output metadata before
+    // announcing outputs and syncing initial surfaces.
+    let _ = event_queue.roundtrip(&mut runtime);
+    let _ = event_queue.roundtrip(&mut runtime);
+
+    WaylandSource::new(conn.clone(), event_queue)
+        .insert(loop_handle.clone())
+        .map_err(|e| EngineError::EventLoop(format!("insert WaylandSource: {e}")))?;
+
+    if let Some((events, mut on_event)) = external_events {
+        let qh_ev = qh.clone();
+        loop_handle
+            .insert_source(events.rx, move |event, (), rt: &mut Runtime<A>| {
+                if let calloop_channel::Event::Msg(ev) = event {
+                    let cmds = on_event(&mut rt.app, ev, Instant::now());
+                    rt.flush_app_commands(cmds, &qh_ev, "external event");
+                }
+            })
+            .map_err(|e| EngineError::EventLoop(format!("insert EventReceiver: {e}")))?;
+    }
+
+    runtime.started = true;
+    runtime.notify_outputs(&qh, true);
+
     let start_cmds = runtime.app.on_start(Instant::now());
-    runtime.apply_commands(start_cmds, &qh);
     runtime.sync_app_images();
     runtime.sync_surfaces(&qh)?;
+    runtime.apply_commands(start_cmds, &qh);
 
     event_loop
         .run(None, &mut runtime, |_| {})
@@ -399,6 +590,10 @@ struct Runtime<A: ShellApp> {
     timer_token: Option<RegistrationToken>,
     /// Global reduced-motion flag forwarded to every surface's `Animator`.
     reduce_motion: bool,
+    /// True once initial startup roundtrips complete and `on_outputs_changed` can fire.
+    started: bool,
+    /// Last output inventory delivered to `app.on_outputs_changed`.
+    last_outputs: Vec<OutputInfo>,
 }
 
 impl<A: ShellApp> Runtime<A> {
@@ -463,7 +658,80 @@ impl<A: ShellApp> Runtime<A> {
             timers: TimerScheduler::new(),
             timer_token: None,
             reduce_motion: false,
+            started: false,
+            last_outputs: Vec::new(),
         })
+    }
+
+    fn collect_outputs(&self) -> Vec<OutputInfo> {
+        let mut out: Vec<OutputInfo> = self
+            .output_state
+            .outputs()
+            .filter_map(|wl_out| {
+                let info = self.output_state.info(&wl_out)?;
+                let scale_factor = info.scale_factor.max(1);
+                let name = info
+                    .name
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| format!("output-{}", info.id));
+                let logical_size = info
+                    .logical_size
+                    .and_then(|(w, h)| {
+                        (w > 0 && h > 0).then_some((
+                            u32::try_from(w).unwrap_or(1),
+                            u32::try_from(h).unwrap_or(1),
+                        ))
+                    })
+                    .or_else(|| {
+                        info.modes.iter().find(|m| m.current).and_then(|m| {
+                            let (w, h) = m.dimensions;
+                            (w > 0 && h > 0).then_some((
+                                u32::try_from(w / scale_factor).unwrap_or(1).max(1),
+                                u32::try_from(h / scale_factor).unwrap_or(1).max(1),
+                            ))
+                        })
+                    });
+                Some(OutputInfo {
+                    name,
+                    logical_size,
+                    logical_position: info.logical_position,
+                    scale_factor,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
+    }
+
+    fn find_wl_output(&self, name: &str) -> Option<wl_output::WlOutput> {
+        self.output_state.outputs().find(|wl_out| {
+            self.output_state
+                .info(wl_out)
+                .and_then(|info| info.name)
+                .as_deref()
+                == Some(name)
+        })
+    }
+
+    fn notify_outputs(&mut self, qh: &QueueHandle<Self>, force: bool) {
+        let outputs = self.collect_outputs();
+        if !force && outputs == self.last_outputs {
+            return;
+        }
+        self.last_outputs.clone_from(&outputs);
+        let cmds = self.app.on_outputs_changed(&outputs, Instant::now());
+        self.flush_app_commands(cmds, qh, "output change");
+    }
+
+    fn destroy_surface(&mut self, id: A::SurfaceId) {
+        if let Some(host) = self.hosts.remove(&id) {
+            let _ = self.egl.make_current(None);
+            self.egl.destroy_surface(host.egl_surface);
+            drop(host);
+        }
+        if self.keyboard_surface == Some(id) {
+            self.keyboard_surface = None;
+        }
     }
 
     fn sync_surfaces(&mut self, qh: &QueueHandle<Self>) -> Result<(), EngineError> {
@@ -478,18 +746,19 @@ impl<A: ShellApp> Runtime<A> {
             .filter(|id| !desired_ids.contains(id))
             .collect();
         for id in to_remove {
-            if let Some(host) = self.hosts.remove(&id) {
-                let _ = self.egl.make_current(None);
-                self.egl.destroy_surface(host.egl_surface);
-                drop(host);
-            }
-            if self.keyboard_surface == Some(id) {
-                self.keyboard_surface = None;
-            }
+            self.destroy_surface(id);
         }
 
         // Create missing surfaces or update changed specs.
         for (id, spec) in desired {
+            let needs_recreate = self.hosts.get(&id).is_some_and(|host| {
+                host.spec.output != spec.output
+                    || host.spec.layer != spec.layer
+                    || host.spec.namespace != spec.namespace
+            });
+            if needs_recreate {
+                self.destroy_surface(id);
+            }
             if let Some(host) = self.hosts.get_mut(&id) {
                 if host.spec != spec {
                     host.layer.set_anchor(spec.anchor);
@@ -501,6 +770,9 @@ impl<A: ShellApp> Runtime<A> {
                     );
                     host.layer.set_keyboard_interactivity(spec.keyboard);
                     host.layer.set_exclusive_zone(spec.exclusive_zone);
+                    if host.spec.shaped_input != spec.shaped_input {
+                        host.last_input.clear();
+                    }
                     host.spec = spec;
                     host.damage.mark_full();
                     host.needs_redraw = true;
@@ -521,12 +793,23 @@ impl<A: ShellApp> Runtime<A> {
     ) -> Result<(), EngineError> {
         let initial_logical = self.compute_initial_size(id, &spec);
         let wl = self.compositor.create_surface(qh);
+        let target_output = spec.output.as_deref().and_then(|name| {
+            let found = self.find_wl_output(name);
+            if found.is_none() {
+                tracing::warn!(
+                    output = name,
+                    ?id,
+                    "requested Wayland output not found; falling back to compositor default"
+                );
+            }
+            found
+        });
         let layer = self.layer_shell.create_layer_surface(
             qh,
             wl,
             spec.layer,
             Some(spec.namespace.clone()),
-            None,
+            target_output.as_ref(),
         );
         layer.set_anchor(spec.anchor);
         layer.set_margin(spec.margin.0, spec.margin.1, spec.margin.2, spec.margin.3);
@@ -706,6 +989,21 @@ impl<A: ShellApp> Runtime<A> {
         }
     }
 
+    /// Flush app state changes after a callback: stage image updates, reconcile
+    /// surfaces, and execute returned [`AppCommand`]s.
+    fn flush_app_commands(
+        &mut self,
+        cmds: Vec<AppCommand<A::SurfaceId>>,
+        qh: &QueueHandle<Self>,
+        context: &'static str,
+    ) {
+        self.sync_app_images();
+        if let Err(e) = self.sync_surfaces(qh) {
+            tracing::error!(%e, context, "sync_surfaces failed");
+        }
+        self.apply_commands(cmds, qh);
+    }
+
     /// Stage any app image inserts/updates/removals and invalidate surface
     /// damage when GPU texture data changed (so same-`ImageId` updates like
     /// live screencopy frames are never skipped by `DrawList::diff_bounds`).
@@ -741,9 +1039,7 @@ impl<A: ShellApp> Runtime<A> {
                 for tag in expired {
                     cmds.extend(rt.app.on_timer(tag, now));
                 }
-                rt.apply_commands(cmds, &qh_clone);
-                rt.sync_app_images();
-                let _ = rt.sync_surfaces(&qh_clone);
+                rt.flush_app_commands(cmds, &qh_clone, "timer");
                 if rt.timer_token.is_none() {
                     rt.rearm_timer(&qh_clone);
                 }
@@ -1046,11 +1342,7 @@ impl<A: ShellApp> Runtime<A> {
         for msg in msgs {
             all_cmds.extend(self.app.update(id, msg, now));
         }
-        self.sync_app_images();
-        if let Err(e) = self.sync_surfaces(qh) {
-            tracing::error!(%e, "sync_surfaces after input failed");
-        }
-        self.apply_commands(all_cmds, qh);
+        self.flush_app_commands(all_cmds, qh, "input");
 
         if let Some(host) = self.hosts.get_mut(&id)
             && (dirty || host.animator.is_animating() || self.app.is_animating(id, now))
@@ -1298,9 +1590,21 @@ impl<A: ShellApp> OutputHandler for Runtime<A> {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.output_state
     }
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn new_output(&mut self, _: &Connection, qh: &QueueHandle<Self>, _: wl_output::WlOutput) {
+        if self.started {
+            self.notify_outputs(qh, false);
+        }
+    }
+    fn update_output(&mut self, _: &Connection, qh: &QueueHandle<Self>, _: wl_output::WlOutput) {
+        if self.started {
+            self.notify_outputs(qh, false);
+        }
+    }
+    fn output_destroyed(&mut self, _: &Connection, qh: &QueueHandle<Self>, _: wl_output::WlOutput) {
+        if self.started {
+            self.notify_outputs(qh, false);
+        }
+    }
 }
 
 impl<A: ShellApp> LayerShellHandler for Runtime<A> {
@@ -1494,11 +1798,20 @@ impl<A: ShellApp> PointerHandler for Runtime<A> {
             };
             let (x, y) = (event.position.0 as f32, event.position.1 as f32);
             let dirty = match event.kind {
-                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                PointerEventKind::Enter { .. } => {
+                    let cmds = self.app.on_pointer_enter(id, (x, y), Instant::now());
+                    self.flush_app_commands(cmds, qh, "pointer enter");
+                    self.dispatch_ui_event_deferred(id, &InputEvent::PointerMove { x, y }, qh)
+                }
+                PointerEventKind::Motion { .. } => {
                     self.dispatch_ui_event_deferred(id, &InputEvent::PointerMove { x, y }, qh)
                 }
                 PointerEventKind::Leave { .. } => {
-                    self.dispatch_ui_event_deferred(id, &InputEvent::PointerLeave, qh)
+                    let ui_dirty =
+                        self.dispatch_ui_event_deferred(id, &InputEvent::PointerLeave, qh);
+                    let cmds = self.app.on_pointer_leave(id, Instant::now());
+                    self.flush_app_commands(cmds, qh, "pointer leave");
+                    ui_dirty
                 }
                 PointerEventKind::Press { button, .. } => self.dispatch_ui_event_deferred(
                     id,
@@ -1629,3 +1942,44 @@ impl<A: ShellApp> ProvidesRegistryState for Runtime<A> {
 
 delegate_registry!(@<A: ShellApp> Runtime<A>);
 smithay_client_toolkit::delegate_dispatch2!(@<A: ShellApp> Runtime<A>);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_channel_wakes_calloop_event_loop_from_background_thread() {
+        let (tx, rx) = event_channel::<&'static str>();
+        let mut event_loop: EventLoop<'_, Vec<&'static str>> =
+            EventLoop::try_new().expect("create calloop EventLoop");
+        let signal = event_loop.get_signal();
+
+        event_loop
+            .handle()
+            .insert_source(rx.rx, move |event, (), received: &mut Vec<&'static str>| {
+                if let calloop_channel::Event::Msg(msg) = event {
+                    received.push(msg);
+                    if received.len() == 2 {
+                        signal.stop();
+                    }
+                }
+            })
+            .expect("insert EventReceiver into calloop");
+
+        let sender_thread = std::thread::Builder::new()
+            .name("test-calloop-wakeup".into())
+            .spawn(move || {
+                tx.send("niri-workspace").unwrap();
+                tx.send("triton-msg").unwrap();
+            })
+            .expect("spawn sender thread");
+
+        let mut received = Vec::new();
+        event_loop
+            .run(Some(Duration::from_secs(2)), &mut received, |_| {})
+            .expect("calloop event loop runs");
+        sender_thread.join().expect("sender thread joins");
+
+        assert_eq!(received, vec!["niri-workspace", "triton-msg"]);
+    }
+}
