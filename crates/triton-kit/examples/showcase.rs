@@ -246,16 +246,12 @@ impl ShowcaseApp {
 
         for i in 0..WORKSPACES {
             let key = NodeKey::from_pair("ws", i);
-            let target = f32::from(u8::from(i == self.active_ws));
-            let m = ctx.anim.spring(key, target, Spring::SPATIAL_FAST);
             bar = bar.child(pill(
                 key,
                 (i + 1).to_string(),
-                m,
-                40.0,
-                58.0,
-                40.0,
+                i == self.active_ws,
                 t,
+                ctx.anim,
                 move || Msg::SelectWorkspace(i),
             ));
         }
