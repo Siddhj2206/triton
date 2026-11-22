@@ -5,7 +5,7 @@
 //! `tokens.json` and rebuild. Every surface (shell, lock, greeter, settings) and every
 //! generated theme (GTK CSS, niri rules) reads these types, so they cannot disagree.
 //!
-//! The crate is pure (`iced_core` only): no renderer, no widgets, no Wayland.
+//! The crate has zero runtime dependencies: no renderer, no widgets, no Wayland.
 
 pub mod color;
 pub mod fonts;
@@ -16,22 +16,20 @@ pub mod shape;
 pub mod typography;
 pub mod wave;
 
-pub use color::{Scheme, StateLayer, Variant};
+pub use color::{Color, Scheme, StateLayer, Variant};
 pub use icon::{Icon, IconStyle};
 pub use material::{Material, MaterialSpec, ShadowToken};
 pub use motion::{Animated, Motion, Spring};
-pub use shape::{RADII, Radii, SIZE, SPACE, Size};
-pub use typography::{Family, TypeStyle};
+pub use shape::{Point, RADII, Radii, SIZE, SPACE, Size};
+pub use typography::{Family, TypeStyle, Weight};
 
 /// The constants generated from `tokens.json`.
 mod tokens {
-    use crate::color::{Scheme, StateLayer};
+    use crate::color::{Color, Scheme, StateLayer};
     use crate::material::{MaterialSpec, ShadowToken};
     use crate::motion::Spring;
     use crate::shape::{Radii, Size};
-    use crate::typography::{Family, TypeStyle};
-    use iced_core::Color;
-    use iced_core::font::Weight;
+    use crate::typography::{Family, TypeStyle, Weight};
 
     include!(concat!(env!("OUT_DIR"), "/tokens.rs"));
 }

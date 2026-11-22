@@ -1,6 +1,6 @@
 # Triton
 
-A desktop shell for the niri compositor, built on our owned `triton-engine` (SCTK + EGL/GLES3 + Taffy) and `triton-design` token crate. Architecture and design references live in `docs/adr/`, `docs/design-spec.md`, and `docs/rust-conventions.md`.
+A desktop shell for the niri compositor, built on a 4-layer Rust stack: `triton-design` (zero-dep tokens), `triton-engine` (SCTK + EGL/GLES3 + Taffy), `triton-kit` (shared Material 3 Futura components), and the shell binaries. Architecture and design references live in `docs/adr/`, `docs/design-spec.md`, `docs/roadmap.md`, and `docs/rust-conventions.md`.
 
 ## Development loop
 

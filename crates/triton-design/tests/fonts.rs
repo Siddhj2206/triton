@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashSet};
 
-use iced_core::font::Weight;
+use triton_design::typography::Weight;
 use triton_design::{Family, Icon, IconStyle, TypeStyle, fonts};
 
 fn family_name(bytes: &[u8]) -> String {
@@ -162,7 +162,7 @@ fn every_requested_weight_has_an_exact_face() {
     );
     assert!(weights(&fonts::JETBRAINS_MONO).contains(&600));
     // Icons are drawn at 500.
-    let icon = weight_class(Icon::font(IconStyle::Outlined).weight);
+    let icon = Weight::Medium.numeric();
     assert_eq!(
         weights(&[fonts::SYMBOLS, fonts::SYMBOLS_FILLED]),
         BTreeSet::from([icon])

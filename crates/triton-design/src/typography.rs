@@ -1,10 +1,39 @@
 //! The type scale. Jost for display, Google Sans Flex for UI, JetBrains Mono for
 //! code. Icons are in [`crate::icon`]; the font files are in [`crate::fonts`].
 
-use iced_core::Font;
-use iced_core::font::{self, Weight};
-
 use crate::tokens;
+
+/// CSS/OpenType font weight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Weight {
+    Thin,
+    ExtraLight,
+    Light,
+    #[default]
+    Normal,
+    Medium,
+    Semibold,
+    Bold,
+    ExtraBold,
+    Black,
+}
+
+impl Weight {
+    /// Numeric OpenType weight (100..=900).
+    pub const fn numeric(self) -> u16 {
+        match self {
+            Weight::Thin => 100,
+            Weight::ExtraLight => 200,
+            Weight::Light => 300,
+            Weight::Normal => 400,
+            Weight::Medium => 500,
+            Weight::Semibold => 600,
+            Weight::Bold => 700,
+            Weight::ExtraBold => 800,
+            Weight::Black => 900,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Family {
@@ -50,15 +79,7 @@ impl TypeStyle {
     pub const LABEL_S: TypeStyle = tokens::TYPE_LABEL_S;
     pub const MONO: TypeStyle = tokens::TYPE_MONO;
 
-    pub const fn font(self) -> Font {
-        Font {
-            family: font::Family::Name(self.family.name()),
-            weight: self.weight,
-            ..Font::DEFAULT
-        }
-    }
-
-    /// Line height as a multiple of the size, as iced's `LineHeight::Relative` takes.
+    /// Line height as a multiple of the size.
     pub fn line_height_relative(self) -> f32 {
         self.line_height / self.size
     }

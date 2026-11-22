@@ -9,9 +9,9 @@ Triton draws in several processes (`triton`, `triton-lock`, `triton-greeter`, `t
 ## Decision
 
 - `crates/triton-design/tokens.json` is the canvas's token file, copied verbatim. It is the only place a design value is written down. `build.rs` generates Rust constants from it. The struct definitions live in the crate, so a role missing from the file, or one the crate doesn't know, fails the build.
-- `triton-design` is pure (`iced_core` only): tokens, materials, springs, wave geometry. Every binary and every theme generator depends on it, and none defines its own design values.
+- `triton-design` has zero runtime dependencies: tokens, materials, springs, wave geometry. Every binary and every theme generator depends on it, and none defines its own design values.
 - Derived values are computed, not stored: material fills are a scheme role at the material's alpha, list and connected-group corners are functions of position, and niri blur rules come from `MaterialSpec`.
-- One component set (the canvas's Component index board) is shared by every iced surface. It lives in one UI crate. A surface composes components; it does not style widgets itself.
+- One component set (the canvas's Component index board) is shared by every surface. It lives in `crates/triton-kit` (built on `triton-engine`). A surface composes components; it does not style widgets itself.
 - Tests check the design's own claims (AA contrast of on-roles, effects springs never overshoot, the wave has nine lobes) rather than restating numbers.
 
 ## Consequences

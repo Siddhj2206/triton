@@ -7,8 +7,7 @@
 use std::f32::consts::{PI, TAU};
 use std::sync::OnceLock;
 
-use iced_core::Point;
-
+use crate::shape::Point;
 use crate::tokens;
 
 /// Lobes on the wave outline.

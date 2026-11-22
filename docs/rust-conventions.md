@@ -196,7 +196,7 @@ unknown-git = "deny"
 
 - **`cargo-machete` for unused dependencies; false positives go in `[workspace.metadata.cargo-machete] ignored`.** Why: cheap, regex-based, catches leftovers after a refactor. Source: [cargo-machete](https://github.com/bnjbvr/cargo-machete).
 - **Git dependencies only with a pinned `rev` and a comment saying why; prefer crates.io.** Why: reproducibility and licence audit. Source: [Cargo, specifying dependencies from git](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies-from-git-repositories).
-- **Check weight before adding a crate: `cargo tree -d`, `cargo build --timings`.** Why: one heavy dependency in the wrong crate defeats the split; `triton-design` stays free of anything beyond `iced_core` (value types only), and the lock binary stays free of D-Bus crates.
+- **Check weight before adding a crate: `cargo tree -d`, `cargo build --timings`.** Why: one heavy dependency in the wrong crate defeats the split; `triton-design` has zero runtime dependencies, `triton-kit` stays free of D-Bus/tokio, and the lock binary stays free of D-Bus crates.
 - **`kdl` (v2 document model) is the only KDL dependency in the workspace.** Why: it is what makes comment-preserving edits possible, and one parser means one set of quirks. Source: [kdl-rs](https://github.com/kdl-org/kdl-rs).
 
 ## 11. Profiles

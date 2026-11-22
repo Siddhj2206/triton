@@ -49,7 +49,7 @@ Everything below exists, is tested headlessly, and is green under `mise run chec
 - **Animation (`anim/`)**: engine-owned `Animator` keyed by `NodeKey` — scalar/color/corners/layout-rect springs, `Presence` enter/exit, one-shot shake, velocity-seeded springs, auto-pruning, global `reduce_motion`, deterministic `ctx.now`, automatic `wl_surface.frame` pacing (0% idle CPU when settled).
 - **Wayland (`platform/`)**: SCTK + calloop multi-surface host; `FitContent`, `StableExtent`, `Fixed`, `Stretch` sizing; `ext-background-effect-v1` blur regions; per-frame input-region updates; `EGL_BUFFER_AGE_KHR` partial damage via `DamageTracker` + `DrawList::diff_bounds`; `TimerScheduler` (schedule/cancel/pause/resume) and `AppCommand::SetReduceMotion`.
 - **Text (`text/`)**: cosmic-text + swash; `etagere` LRU glyph atlas with cold-slot eviction.
-- **Safety**: `unsafe` only in `platform/egl.rs`, `platform/wl_egl.rs`, `gpu/`, and `text/` uploads. `ui/`, `anim/`, `widgets/` are safe Rust.
+- **Safety**: `unsafe` only in `platform/egl.rs`, `platform/wl_egl.rs`, `gpu/`, and `text/` uploads. `ui/`, `anim/`, and `crates/triton-kit` are 100% safe Rust.
 
 ## 4. Processes
 
@@ -107,11 +107,10 @@ Our own files/terminal/editor/viewer apps. Qt/Kvantum theming. Disk-unlock UI (P
 - ✅ `triton-engine` core (section 3): renderer, animation, platform, text, timers — **complete, `mise run check` green**.
 - ✅ Design board audit: all 30 boards mapped; conflicts resolved into `docs/design-spec.md`.
 
-### Phase 1 — engine widget kit + surfaces, first daily-driver
-- `triton-engine::widgets` rebuilt on the engine (`panel`, `island`, `button`, `icon_button`, `chip`, `switch`, `slider`, `scroll_area`, `text_input`/`password_input`, `toggle_tile`, list rows, toast/notification card family, keycap, badge, page dots, segmented, menu, dialog, empty_state). The showcase example doubles as the gallery.
-- `triton` host binary on `triton-engine` (niri IPC event thread, surface spec reconciliation — port `host::plan` logic from `archive/iced-shell`, which was already pure and unit-tested).
-- Bar (all modes), OSD, notifications (toasts + center), quick settings, launcher, power menu, lock screen, polkit agent, idle, night light, wallpaper + color pipeline, `binds.kdl`/`layer-rules.kdl` generation, systemd unit.
-- Salvage as needed from `archive/iced-shell`: `launch/` index+search+math, `notify.rs` D-Bus server, `services.rs` backends (upgrading `wpctl`/`pactl` spawns to a real PipeWire client when deps allow), `pipeline.rs` wallpaper→scheme, `niri_config` include writer, `polkit.rs` agent, PAM code in `triton-lock`.
+### Phase 1 — `triton-kit` component library + shell daemon, first daily-driver
+- `crates/triton-kit` built from scratch on `triton-engine` + `triton-design` (`panel`, `island`, `button`, `icon_button`, `chip`, `toggle_tile`, `segmented`, `switch`, `checkbox`, `radio`, `slider`, `scroll_area`, `text_input`/`search_field`/`password_field`, `list_group`, toast/notification cards, `keycap`, `hint_bar`, `badge`, `wavy_progress`, `wavy_ring`, `level_meter`, `menu`, `dialog`, `empty_state`). The `showcase` example doubles as the live gallery.
+- `crates/triton` host daemon architected from scratch on `triton-engine` + `triton-kit` (niri IPC event stream, declarative surface reconciliation, D-Bus services, launcher, notifications, OSD, quick settings, power menu, polkit agent, idle, night light, wallpaper + color pipeline, `binds.kdl`/`layer-rules.kdl` generation, systemd unit).
+- `crates/triton-lock` (`ext-session-lock-v1` + PAM, sharing `triton-kit` login components).
 
 **Done when:** you can log into `niri-session` and daily-drive Triton end to end.
 

@@ -14,7 +14,6 @@ workspace = true
 cosmic-text = { workspace = true, features = ["std", "swash"] }
 etagere.workspace = true
 glow.workspace = true
-iced_core.workspace = true
 khronos-egl = { workspace = true, features = ["dynamic", "1_5"] }
 libloading.workspace = true
 smithay-client-toolkit = { workspace = true, features = ["calloop", "xkbcommon"] }

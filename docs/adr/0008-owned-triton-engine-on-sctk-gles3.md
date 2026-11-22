@@ -19,7 +19,7 @@ Two spikes compared alternatives (`t3/spike-custom-sdf-engine` vs `t3/spike-gpui
   - Flexbox/grid layout via Taffy.
   - Text shaping and rasterization via `cosmic-text` and `swash`.
   - Design tokens from `triton-design` (ADR-0006 still stands).
-- **`unsafe` is strictly quarantined.** All `unsafe` code is confined to `platform/egl.rs`, `platform/wl_egl.rs`, `gpu/`, and texture upload in `text/`. `ui/`, `anim/`, and `widgets/` are 100% safe Rust.
+- **`unsafe` is strictly quarantined.** All `unsafe` code is confined to `platform/egl.rs`, `platform/wl_egl.rs`, `gpu/`, and texture upload in `text/`. `ui/` and `anim/` (and `crates/triton-kit`) are 100% safe Rust.
 - **First-class animation:**
   - An `Animator` registry keyed by `NodeKey` tracks animated values across frames.
   - `Presence` handles enter and exit transitions without dropping unmounting subtrees prematurely.
@@ -32,5 +32,5 @@ Two spikes compared alternatives (`t3/spike-custom-sdf-engine` vs `t3/spike-gpui
 ## Consequences
 
 - Full control over every shell-specific visual primitive: Figma smoothed corners (256×256 LUT), 9-lobe wave SDF/clip, translucent shadow cutouts, FBO layers, `EGL_BUFFER_AGE_KHR` partial damage, and niri `ext-background-effect-v1` blur regions.
-- Triton owns its widget set (`triton-engine::widgets`), while `triton-design` remains the single source of truth for colors, materials, shapes, typography, and motion (ADR-0006).
+- Triton owns its shared component library in `crates/triton-kit` (keeping `triton-engine` strictly shell-agnostic), while `triton-design` remains the single source of truth for colors, materials, shapes, typography, and motion (ADR-0006).
 - Memory and startup overhead drop sharply compared to iced + wgpu + MSAA ×4, and no external UI framework upgrade cycle can break layer-shell or animation behavior.

@@ -3,9 +3,26 @@
 //! Tiled windows are square with no gaps. Radius, shadow and blur belong to things
 //! that float.
 
-use iced_core::Point;
-
 use crate::tokens;
+
+/// A 2D point in logical pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Point {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Point {
+    pub const ORIGIN: Self = Self { x: 0.0, y: 0.0 };
+
+    pub const fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+
+    pub fn distance(self, other: Self) -> f32 {
+        (self.x - other.x).hypot(self.y - other.y)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Radii {

@@ -1,9 +1,52 @@
 //! Color roles. The canvas derives them from the wallpaper (tonal-spot); these are
 //! the canvas's reference scheme, used until the wallpaper pipeline produces one.
 
-use iced_core::Color;
-
 use crate::tokens;
+
+/// RGBA color in straight (non-premultiplied) 0.0..=1.0 float channels.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Color {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+}
+
+impl Color {
+    pub const TRANSPARENT: Self = Self::from_rgba(0.0, 0.0, 0.0, 0.0);
+    pub const WHITE: Self = Self::from_rgb(1.0, 1.0, 1.0);
+    pub const BLACK: Self = Self::from_rgb(0.0, 0.0, 0.0);
+
+    pub const fn from_rgb(r: f32, g: f32, b: f32) -> Self {
+        Self { r, g, b, a: 1.0 }
+    }
+
+    pub const fn from_rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
+        Self { r, g, b, a }
+    }
+
+    pub const fn from_rgb8(r: u8, g: u8, b: u8) -> Self {
+        Self {
+            r: r as f32 / 255.0,
+            g: g as f32 / 255.0,
+            b: b as f32 / 255.0,
+            a: 1.0,
+        }
+    }
+
+    pub const fn from_rgba8(r: u8, g: u8, b: u8, a: f32) -> Self {
+        Self {
+            r: r as f32 / 255.0,
+            g: g as f32 / 255.0,
+            b: b as f32 / 255.0,
+            a,
+        }
+    }
+
+    pub const fn to_array(self) -> [f32; 4] {
+        [self.r, self.g, self.b, self.a]
+    }
+}
 
 /// Dark or light. The light scheme never dims the backdrop, and in it primary is for
 /// fills only, never text on a material.

@@ -1,7 +1,6 @@
 //! Core geometry, color, typography, and material styling primitives.
 
-use iced_core::Color;
-use triton_design::color::{Scheme, Variant, over, with_alpha};
+use triton_design::color::{Color, Scheme, Variant, over, with_alpha};
 use triton_design::material::{HIGHLIGHT, Material, ShadowToken};
 use triton_design::typography::{Family, TypeStyle};
 
@@ -245,22 +244,11 @@ impl FontSpec {
     }
 
     pub const fn from_type_style(ts: TypeStyle) -> Self {
-        let weight = match ts.weight {
-            iced_core::font::Weight::Thin => 100,
-            iced_core::font::Weight::ExtraLight => 200,
-            iced_core::font::Weight::Light => 300,
-            iced_core::font::Weight::Normal => 400,
-            iced_core::font::Weight::Medium => 500,
-            iced_core::font::Weight::Semibold => 600,
-            iced_core::font::Weight::Bold => 700,
-            iced_core::font::Weight::ExtraBold => 800,
-            iced_core::font::Weight::Black => 900,
-        };
         Self {
             family: ts.family.name(),
             size: ts.size,
             line_height: ts.line_height,
-            weight,
+            weight: ts.weight.numeric(),
             letter_spacing: ts.tracking * ts.size,
             uppercase: ts.uppercase,
         }

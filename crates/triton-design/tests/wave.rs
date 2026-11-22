@@ -1,4 +1,4 @@
-use iced_core::Point;
+use triton_design::shape::Point;
 use triton_design::wave::{self, LINEAR_AMPLITUDE, LOBES};
 
 #[test]

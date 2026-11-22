@@ -90,7 +90,7 @@ fn concentric_corners_share_a_center() {
 }
 
 mod outline {
-    use iced_core::Point;
+    use triton_design::shape::Point;
     use triton_design::shape::{Segment, flatten, outline, top_edge};
 
     fn close(a: Point, b: Point) -> bool {

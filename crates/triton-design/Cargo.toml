@@ -10,14 +10,13 @@ publish.workspace = true
 [lints]
 workspace = true
 
-# Pure on purpose: iced_core only (no renderer, no widgets), so it builds fast and
-# every token, spring and path is testable without Wayland.
+# Pure on purpose: zero runtime dependencies, so it builds in milliseconds and
+# every token, spring and path is testable without Wayland or a GPU.
 [dependencies]
-iced_core.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
-# The parser fontdb uses, to check the font files the way iced will read them.
+# The parser fontdb uses, to verify the embedded font files match our type scale.
 ttf-parser = "0.25"
 
 [build-dependencies]

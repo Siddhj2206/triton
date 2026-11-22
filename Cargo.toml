@@ -19,7 +19,6 @@ etagere = { version = "0.2", default-features = false }
 glow = { version = "0.16", default-features = false }
 khronos-egl = { version = "6.0", default-features = false }
 libloading = "0.9"
-iced_core = { version = "0.14.0", default-features = false }
 serde_json = "1.0.154"
 smithay-client-toolkit = { version = "0.21", default-features = false }
 taffy = { version = "0.15", default-features = false }

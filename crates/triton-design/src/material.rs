@@ -1,12 +1,11 @@
-//! The four materials. iced paints the tint; niri blurs behind it through layer and
-//! window rules generated from [`MaterialSpec`], so the two can never disagree.
+//! The four materials. `triton-engine` paints the tint; niri blurs behind it through
+//! `ext-background-effect-v1` and layer/window rules generated from [`MaterialSpec`],
+//! so the two can never disagree.
 //!
 //! Rules from the canvas: no glass on glass; if text drops under 4.5:1, go solid;
 //! Mica falls back to Solid on battery saver.
 
-use iced_core::{Color, Shadow, Vector};
-
-use crate::color::{Scheme, Variant, with_alpha};
+use crate::color::{Color, Scheme, Variant, with_alpha};
 use crate::tokens;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -114,8 +113,7 @@ pub const fn veil_hi(variant: Variant) -> Color {
 }
 
 /// A shadow from the tokens. `spread` is kept because the window outline is a
-/// spread-only shadow; iced's [`Shadow`] has no spread, so [`ShadowToken::to_iced`]
-/// drops it and callers draw the outline as a border.
+/// spread-only shadow.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShadowToken {
     pub x: f32,
@@ -130,12 +128,4 @@ impl ShadowToken {
     pub const FLOATING_LARGE: ShadowToken = tokens::SHADOW_FLOATING_LARGE;
     pub const RAISED: ShadowToken = tokens::SHADOW_RAISED;
     pub const WINDOW_OUTLINE: ShadowToken = tokens::WINDOW_OUTLINE;
-
-    pub fn to_iced(self) -> Shadow {
-        Shadow {
-            color: self.color,
-            offset: Vector::new(self.x, self.y),
-            blur_radius: self.blur,
-        }
-    }
 }
