@@ -22,6 +22,7 @@
 //! offscreen FBOs or thrashing the glyph atlas, while the resettable shelf atlas guarantees bounded
 //! VRAM across long-running sessions.
 
+pub mod anim;
 pub mod error;
 pub mod gpu;
 pub mod platform;
@@ -30,12 +31,14 @@ pub mod text;
 pub mod ui;
 pub mod widgets;
 
+pub use anim::{Animator, Presence};
 pub use error::EngineError;
 pub use platform::{
     AppCommand, ShellApp, SurfaceAnchor, SurfaceKeyboard, SurfaceLayer, SurfaceMetrics,
     SurfaceSize, SurfaceSpec, ViewContext, run,
 };
 pub use style::{Corners, DropShadow, Edges, FontSpec, Rect, Rgba, SubtreeTransform, Theme};
+pub use triton_design::motion::Spring;
 pub use ui::{
     BlurRect, BuiltFrame, Element, InputEvent, InteractionState, Key, NodeKey, TextAlign, box_,
     col, icon, row, text,

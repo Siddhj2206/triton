@@ -1,6 +1,6 @@
 # 0003. The UI declares surfaces; the host reconciles them on iced_layershell's `daemon`
 
-Status: proposed, November 2026.
+Status: superseded by ADR-0008 (November 2026). `triton-engine` replaces `iced_layershell` while preserving declarative surface specs.
 
 ## Context
 

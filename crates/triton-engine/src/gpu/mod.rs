@@ -110,8 +110,10 @@ void main() {
     float param = v_misc.z;
     float opacity = v_misc.w;
 
-    // Kind 2: Soft SDF drop shadow. `i_dst` is already expanded by 2 * blur,
-    // so the inner caster half-size is `v_half - param`.
+    // Kind 2: Soft SDF drop shadow. `i_dst` is already expanded by `2 * blur` around
+    // the shifted caster rect, so the shifted caster half-size is `v_half - 2 * blur`.
+    // `v_border` carries `(offset_x, offset_y, spread, cutout)` in buffer px so we can
+    // cleanly cut out the unshifted caster interior under translucent Glass/Thick fills.
     if (kind > 1.5) {
         float blur = max(param, 1.0);
         float pad = blur * 2.0;
@@ -122,6 +124,17 @@ void main() {
         vec2 edge = v_half - abs(p);
         float edge_fade = smoothstep(0.0, max(blur * 0.35, 1.0), min(edge.x, edge.y));
         a *= edge_fade;
+        // Cut out the unshifted caster interior when requested so translucent Glass
+        // panels never get darkened/muddied by their own drop shadow bleeding through.
+        if (v_border.w > 0.5) {
+            vec2 unshifted_p = p + v_border.xy;
+            vec2 unshifted_half = max(caster_half - vec2(v_border.z), vec2(0.5));
+            vec4 unshifted_r = max(v_radii - vec4(v_border.z), vec4(0.0));
+            float d_caster = sd_box(unshifted_p, unshifted_half, unshifted_r, smoothing);
+            float aa_c = max(fwidth(d_caster), 0.7);
+            float outside = smoothstep(-aa_c, aa_c, d_caster);
+            a *= outside;
+        }
         frag = vec4(v_fill.rgb * a, a);
         return;
     }

@@ -1,10 +1,10 @@
 # Triton roadmap
 
-Status: draft, November 2026. Source of truth for the look: the **Triton Shell** design canvas (Material 3 Futura, 30 boards, tokens in `project/triton/tokens.json`). This file decides *what* Triton does and *in what order*. The canvas decides how it looks.
+Status: draft, November 2026. Source of truth for the look: `docs/design-spec.md` and the **Triton Shell** design canvas (Material 3 Futura, 30 boards, tokens in `project/triton/tokens.json`). This file decides *what* Triton does and *in what order*. The design spec and canvas decide how it looks.
 
 ## 1. What Triton is
 
-Triton is a desktop environment built on niri. It is not a bar plus some widgets you bolt onto a compositor. It owns the session from greeter to power-off: the shell surfaces, the lock, login, notifications, theming, the settings app, and niri's configuration. It is one Rust/iced codebase and one blessed set of system services.
+Triton is a desktop environment built on niri. It is not a bar plus some widgets you bolt onto a compositor. It owns the session from greeter to power-off: the shell surfaces, the lock, login, notifications, theming, the settings app, and niri's configuration. It is one Rust codebase built on `triton-engine` (SCTK + EGL/GLES3 + Taffy; see `docs/adr/0008-owned-triton-engine-on-sctk-gles3.md`) and one blessed set of system services.
 
 It does **not** ship its own apps. Files, terminal, editor and viewers are stock GNOME apps, re-skinned (never re-laid out) through matugen-style `gtk.css`, as the Adwaita board shows.
 
@@ -47,7 +47,7 @@ One choice per job. Triton talks to each of these directly (D-Bus, Wayland, niri
 
 | Binary | What | Why separate |
 |---|---|---|
-| `triton` | Bar, panels, OSD, notifications, launcher, clipboard, wallpaper, power menu, capture UI, polkit agent, idle, night light, theming | The long-running daemon (ADR-0003, ADR-0007) |
+| `triton` | Bar, panels, OSD, notifications, launcher, clipboard, wallpaper, power menu, capture UI, polkit agent, idle, night light, theming | The long-running daemon (ADR-0008) |
 | `triton-lock` | Lock screen | A lock client that crashes must leave the session locked, not take the shell down with it |
 | `triton-greeter` | greetd greeter, run in its own niri instance | Runs as the greeter user before login |
 | `triton-settings` | Settings app, a normal floating window | Short-lived, opened on demand |

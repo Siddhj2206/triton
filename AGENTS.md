@@ -1,6 +1,6 @@
 # Triton
 
-A desktop shell for the niri compositor, written in Rust (iced + iced_layershell). The project is being restarted with a new design and direction; the old Dux-derived implementation was removed. What remains are the tech decisions: `docs/adr/` and `docs/rust-conventions.md`.
+A desktop shell for the niri compositor, built on our owned `triton-engine` (SCTK + EGL/GLES3 + Taffy) and `triton-design` token crate. Architecture and design references live in `docs/adr/`, `docs/design-spec.md`, and `docs/rust-conventions.md`.
 
 ## Development loop
 

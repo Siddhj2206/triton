@@ -1038,7 +1038,9 @@ fn paint_node<M>(
     let scissor = clip_rect.map(|c| rect_to_scissor(c, scale));
     let eff_scale = scale * tf.scale;
 
-    // 1. Optional SDF drop shadow (painted behind the element itself)
+    // 1. Optional SDF drop shadow (painted behind the element itself).
+    //    For translucent fills (Glass/Thick/alpha < 0.99), request an interior
+    //    caster cutout so the dark shadow never bleeds through and muddies the glass.
     if let Some(sh) = elem.visual.shadow {
         let pad = sh.blur * 2.0;
         let sx = screen_rect.x + sh.offset_x * tf.scale - sh.spread * tf.scale - pad * tf.scale;
@@ -1050,13 +1052,19 @@ fn paint_node<M>(
             .radii
             .clamped(local_rect.w, local_rect.h)
             .map(|r| (r + sh.spread).max(0.0) * eff_scale);
+        let cutout = elem.visual.fill.is_some_and(|f| f.a > 0.0 && f.a < 0.99);
         draw_list.push_quad(
             scissor,
             QuadInstance {
                 dst: [sx * scale, sy * scale, sw * scale, sh_h * scale],
                 radii,
                 fill: sh.color.to_array(),
-                border: [0.0; 4],
+                border: [
+                    sh.offset_x * eff_scale,
+                    sh.offset_y * eff_scale,
+                    sh.spread * eff_scale,
+                    if cutout { 1.0 } else { 0.0 },
+                ],
                 misc: [
                     KIND_SHADOW,
                     elem.visual.smoothing,

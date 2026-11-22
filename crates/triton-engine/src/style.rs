@@ -293,6 +293,21 @@ pub struct DropShadow {
     pub color: Rgba,
 }
 
+impl DropShadow {
+    /// Minimum transparent gutter (`Edges`) around a caster so the drop shadow
+    /// reaches zero alpha cleanly without clipping against a layer surface edge.
+    #[must_use]
+    pub fn gutter(self) -> Edges {
+        let pad = (self.blur * 2.0 + self.spread).max(0.0);
+        Edges::new(
+            (pad - self.offset_y).max(0.0).ceil(),
+            (pad + self.offset_x).max(0.0).ceil(),
+            (pad + self.offset_y).max(0.0).ceil(),
+            (pad - self.offset_x).max(0.0).ceil(),
+        )
+    }
+}
+
 impl From<ShadowToken> for DropShadow {
     fn from(tok: ShadowToken) -> Self {
         Self {

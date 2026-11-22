@@ -1,6 +1,6 @@
 # 0007. The shell renders with wgpu, with tiny-skia as the fallback
 
-Status: accepted, November 2026. Supersedes ADR-0005.
+Status: superseded by ADR-0008 (November 2026). Kept for its memory measurements and niri blur findings.
 
 ## Context
 

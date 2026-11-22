@@ -57,6 +57,7 @@ use smithay_client_toolkit::shell::wlr_layer::{
 use smithay_client_toolkit::{delegate_registry, registry_handlers};
 use triton_design::shape::rounded_rect_bands;
 
+use crate::anim::Animator;
 use crate::error::EngineError;
 use crate::gpu::{DrawList, Gpu};
 use crate::platform::egl::{Egl, EglSurface};
@@ -168,6 +169,7 @@ pub struct ViewContext<'a> {
     pub scale: f32,
     pub interaction: &'a InteractionState,
     pub text: &'a mut TextEngine,
+    pub anim: &'a mut Animator,
 }
 
 impl fmt::Debug for ViewContext<'_> {
@@ -287,6 +289,7 @@ struct SurfaceHost<A: ShellApp> {
     frame_pending: bool,
     needs_redraw: bool,
     interaction: InteractionState,
+    animator: Animator,
     built: BuiltFrame<A::Message>,
     last_blur: Vec<BlurRect>,
     last_input: Vec<BlurRect>,
@@ -509,6 +512,7 @@ impl<A: ShellApp> Runtime<A> {
                 frame_pending: false,
                 needs_redraw: true,
                 interaction: InteractionState::default(),
+                animator: Animator::new(),
                 built: BuiltFrame::default(),
                 last_blur: Vec::new(),
                 last_input: Vec::new(),
@@ -528,15 +532,20 @@ impl<A: ShellApp> Runtime<A> {
             SurfaceSize::Fixed(w, h) => (w.max(1), h.max(1)),
             SurfaceSize::Stretch => (640, 480),
             SurfaceSize::FitContent { max_w, max_h } => {
+                let now = Instant::now();
                 let interaction = InteractionState::default();
+                let mut anim = Animator::new();
+                anim.begin_frame(now, false);
                 let mut ctx = ViewContext {
-                    now: Instant::now(),
+                    now,
                     logical_size: (max_w.unwrap_or(1200), max_h.unwrap_or(800)),
                     scale: 1.0,
                     interaction: &interaction,
                     text: &mut self.text,
+                    anim: &mut anim,
                 };
                 let tree = self.app.view(id, &mut ctx);
+                anim.end_frame();
                 let (w, h) = measure_tree(
                     &tree,
                     (max_w.map(|v| v as f32), max_h.map(|v| v as f32)),
@@ -623,17 +632,21 @@ impl<A: ShellApp> Runtime<A> {
 
         // 1. Build the declarative element tree safely.
         let element = {
-            let Some(host) = self.hosts.get(&id) else {
+            let Some(host) = self.hosts.get_mut(&id) else {
                 return;
             };
+            host.animator.begin_frame(now, false);
             let mut ctx = ViewContext {
                 now,
                 logical_size: logical,
                 scale,
                 interaction: &host.interaction,
                 text: &mut self.text,
+                anim: &mut host.animator,
             };
-            self.app.view(id, &mut ctx)
+            let el = self.app.view(id, &mut ctx);
+            host.animator.end_frame();
+            el
         };
 
         // 2. Determine available layout constraints.
@@ -677,28 +690,55 @@ impl<A: ShellApp> Runtime<A> {
         }
 
         // 5. Update shaped compositor blur and input regions when changed.
-        let (bw, bh, egl_surface) = {
-            let Some(host) = self.hosts.get_mut(&id) else {
-                return;
-            };
-            if host.last_blur != built.blur_rects {
-                update_blur_region(&self.compositor, host.effect.as_ref(), &built.blur_rects);
-                host.last_blur.clone_from(&built.blur_rects);
-            }
-            if host.spec.shaped_input && host.last_input != built.input_rects {
-                update_input_region(
-                    &self.compositor,
-                    host.layer.wl_surface(),
-                    &built.input_rects,
-                );
-                host.last_input.clone_from(&built.input_rects);
-            }
-            host.built = built;
-            host.frames += 1;
-            (host.buffer.0, host.buffer.1, host.egl_surface)
+        let Some((bw, bh, egl_surface)) = self.sync_surface_regions(id, built) else {
+            return;
         };
 
         // 6. Render with GLES3 and swap with damage.
+        self.render_and_swap(id, bw, bh, egl_surface);
+
+        // 7. Sync surface lifecycle (e.g. closing panel finished its spring) and re-arm pacing.
+        if let Err(e) = self.sync_surfaces(qh) {
+            tracing::error!(%e, "sync_surfaces failed");
+        }
+        let app_animating = self.app.is_animating(id, now);
+        if let Some(host) = self.hosts.get_mut(&id) {
+            host.frame_pending = false;
+            let still_animating = host.animator.is_animating() || app_animating;
+            if still_animating || host.needs_redraw {
+                queue_frame(host, qh);
+            } else {
+                // Reset frame-interval anchor when going idle so the next wake
+                // doesn't record a huge idle gap as a frame interval.
+                host.last_frame = None;
+            }
+        }
+    }
+
+    fn sync_surface_regions(
+        &mut self,
+        id: A::SurfaceId,
+        built: BuiltFrame<A::Message>,
+    ) -> Option<(u32, u32, EglSurface)> {
+        let host = self.hosts.get_mut(&id)?;
+        if host.last_blur != built.blur_rects {
+            update_blur_region(&self.compositor, host.effect.as_ref(), &built.blur_rects);
+            host.last_blur.clone_from(&built.blur_rects);
+        }
+        if host.spec.shaped_input && host.last_input != built.input_rects {
+            update_input_region(
+                &self.compositor,
+                host.layer.wl_surface(),
+                &built.input_rects,
+            );
+            host.last_input.clone_from(&built.input_rects);
+        }
+        host.built = built;
+        host.frames += 1;
+        Some((host.buffer.0, host.buffer.1, host.egl_surface))
+    }
+
+    fn render_and_swap(&mut self, id: A::SurfaceId, bw: u32, bh: u32, egl_surface: EglSurface) {
         if let Err(e) = self.egl.make_current(Some(egl_surface)) {
             tracing::error!(?id, %e, "eglMakeCurrent failed");
             return;
@@ -716,22 +756,6 @@ impl<A: ShellApp> Runtime<A> {
         ]];
         if let Err(e) = self.egl.swap(egl_surface, &damage) {
             tracing::error!(?id, %e, "eglSwapBuffers failed");
-        }
-
-        // 7. Sync surface lifecycle (e.g. closing panel finished its spring) and re-arm pacing.
-        if let Err(e) = self.sync_surfaces(qh) {
-            tracing::error!(%e, "sync_surfaces failed");
-        }
-        let still_animating = self.app.is_animating(id, now);
-        if let Some(host) = self.hosts.get_mut(&id) {
-            host.frame_pending = false;
-            if still_animating || host.needs_redraw {
-                queue_frame(host, qh);
-            } else {
-                // Reset frame-interval anchor when going idle so the next wake
-                // doesn't record a huge idle gap as a frame interval.
-                host.last_frame = None;
-            }
         }
     }
 
@@ -753,8 +777,8 @@ impl<A: ShellApp> Runtime<A> {
         }
         self.apply_commands(all_cmds, qh);
 
-        if (dirty || self.app.is_animating(id, now))
-            && let Some(host) = self.hosts.get_mut(&id)
+        if let Some(host) = self.hosts.get_mut(&id)
+            && (dirty || host.animator.is_animating() || self.app.is_animating(id, now))
         {
             host.needs_redraw = true;
             queue_frame(host, qh);
@@ -958,7 +982,7 @@ impl<A: ShellApp> CompositorHandler for Runtime<A> {
                     .push(now.saturating_duration_since(last).as_secs_f64() * 1000.0);
             }
             host.last_frame = Some(now);
-            host.needs_redraw || self.app.is_animating(id, now)
+            host.needs_redraw || host.animator.is_animating() || self.app.is_animating(id, now)
         };
         if should_present {
             self.present(id, qh);
