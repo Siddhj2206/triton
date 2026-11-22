@@ -27,13 +27,14 @@ binds {
     Mod+Q { quit; }
 }
 
-// Real compositor blur behind every triton layer surface — this is what makes
-// Glass/Thick materials and their drop shadows actually read. `xray false`
-// keeps the host desktop from bleeding through.
+// Use non-xray compositor blur for Triton surfaces while letting Triton's
+// `ext-background-effect-v1` protocol supply the exact rounded blur regions.
+// NEVER set `blur true` here: a layer-rule `blur true` forces niri to blur the
+// entire rectangular layer surface — including transparent shadow gutters and
+// fading overlays — overriding the client's shaped `ext-background-effect` region.
 layer-rule {
     match namespace="^triton"
     background-effect {
-        blur true
         xray false
     }
 }

@@ -155,30 +155,39 @@ fn session_script_runs_niri_as_a_child_so_cleanup_trap_fires() {
 }
 
 #[test]
-fn niri_config_requests_blur_for_triton_namespaces() {
-    // Glass/Thick materials are only real when the compositor blurs behind the
-    // layer surface; every triton namespace is matched by the caret prefix.
-    assert!(NIRI_KDL.contains("layer-rule"), "missing layer-rule");
+fn niri_config_uses_non_xray_without_forcing_rectangular_blur() {
+    // Triton surfaces shape their own blur via `ext-background-effect-v1`.
+    // Setting `blur true` in a niri layer-rule forces niri to blur the entire
+    // rectangular layer surface (including transparent shadow gutters and
+    // fading overlays), overriding the client's shaped blur region.
+    let code: String = NIRI_KDL
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or_default())
+        .collect();
+    assert!(code.contains("layer-rule"), "missing layer-rule");
     assert!(
-        NIRI_KDL.contains("namespace=\"^triton\""),
+        code.contains("namespace=\"^triton\""),
         "layer-rule must match ^triton namespaces"
     );
-    assert!(NIRI_KDL.contains("blur true"), "blur must be enabled");
     assert!(
-        NIRI_KDL.contains("xray false"),
-        "xray must stay off so wallpaper never bleeds through"
+        !code.contains("blur true"),
+        "layer-rule must NOT set `blur true` — that overrides ext-background-effect-v1 and blurs shadow gutters"
     );
-    assert!(NIRI_KDL.contains("prefer-no-csd"), "missing prefer-no-csd");
     assert!(
-        NIRI_KDL.contains("skip-at-startup"),
+        code.contains("xray false"),
+        "xray must stay off so Glass/Thick blur samples windows beneath"
+    );
+    assert!(code.contains("prefer-no-csd"), "missing prefer-no-csd");
+    assert!(
+        code.contains("skip-at-startup"),
         "hotkey overlay should not block the first frame"
     );
     assert!(
-        NIRI_KDL.contains("output \"winit\"") && NIRI_KDL.contains("scale"),
+        code.contains("output \"winit\"") && code.contains("scale"),
         "nested window needs a winit output scale"
     );
     assert!(
-        NIRI_KDL.contains("quit"),
+        code.contains("quit"),
         "a quit bind keeps the nested session easy to leave"
     );
 }
