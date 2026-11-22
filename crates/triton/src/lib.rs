@@ -10,6 +10,7 @@
 
 pub mod cli;
 pub mod ipc;
+pub mod niri_ipc;
 pub mod shell;
 pub mod state;
 
@@ -18,6 +19,7 @@ pub use ipc::{
     BarCommand, IpcCommand, IpcError, IpcResponse, IpcServer, OsdCommand, ThemeCommand,
     resolve_socket_path, send_command,
 };
+pub use niri_ipc::{NIRI_SOCKET_ENV, NiriAction, NiriActionSender, NiriIpc, NiriIpcError};
 pub use shell::{ShellMessage, SurfaceId, TIMER_OSD_HIDE, TritonShell};
 pub use state::{
     BackendMode, BarMode, FocusedWindow, OsdPayload, OsdState, OutputKey, ShellEvent, ShellState,

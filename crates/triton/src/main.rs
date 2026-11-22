@@ -6,12 +6,12 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use triton::cli::USAGE;
 use triton::{
-    CliCommand, DaemonArgs, IpcResponse, IpcServer, MsgArgs, ShellEvent, TritonShell, parse_args,
-    resolve_socket_path, send_command,
+    BackendMode, CliCommand, DaemonArgs, IpcResponse, IpcServer, MsgArgs, NiriIpc, ShellEvent,
+    TritonShell, parse_args, resolve_socket_path, send_command,
 };
 use triton_engine::{event_channel, run_with_events};
 
@@ -85,7 +85,7 @@ fn run_daemon(args: &DaemonArgs) -> Result<()> {
     let socket_path =
         resolve_socket_path(args.socket.as_deref()).context("resolve triton IPC socket path")?;
     let (event_tx, event_rx) = event_channel::<ShellEvent>();
-    let _ipc_server = IpcServer::bind(socket_path.clone(), event_tx)
+    let _ipc_server = IpcServer::bind(socket_path.clone(), event_tx.clone())
         .with_context(|| format!("bind IPC socket at {}", socket_path.display()))?;
 
     info!(
@@ -94,7 +94,25 @@ fn run_daemon(args: &DaemonArgs) -> Result<()> {
         "starting triton shell daemon"
     );
 
-    let app = TritonShell::new(args.backend);
+    let mut app = TritonShell::new(args.backend);
+    // Live niri IPC only under --real-services; default fake dev mode never
+    // touches the host $NIRI_SOCKET.
+    let _niri_ipc = if args.backend == BackendMode::RealServices {
+        match NiriIpc::connect(event_tx) {
+            Ok(ipc) => {
+                info!(socket = %ipc.socket_path().display(), "connected to niri IPC");
+                app.set_niri_action_sink(ipc.action_sink());
+                Some(ipc)
+            }
+            Err(err) => {
+                warn!(error = %err, "niri IPC unavailable; running without compositor integration");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     run_with_events(app, event_rx, TritonShell::handle_event)
         .context("triton Wayland event loop exited with error")?;
 
