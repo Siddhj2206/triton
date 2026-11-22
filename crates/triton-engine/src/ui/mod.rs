@@ -947,6 +947,48 @@ impl<M> std::fmt::Debug for HitEntry<M> {
     }
 }
 
+/// Content kind recorded for a laid-out node in [`BuiltFrame::nodes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NodeKind {
+    Container,
+    Text(String),
+    Image,
+    Polyline,
+}
+
+/// Capability and visual flags recorded for a laid-out node in [`BuiltFrame::nodes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "flat semantic inspector flags mirror Element flags"
+)]
+pub struct NodeFlags {
+    pub scrollable: bool,
+    pub focusable: bool,
+    pub hoverable: bool,
+    pub input_opaque: bool,
+    pub blur: bool,
+    pub captures_input: bool,
+    pub has_shadow: bool,
+}
+
+/// Semantic snapshot of one laid-out element, recorded during [`layout_and_paint`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeInfo {
+    pub key: Option<NodeKey>,
+    /// Key path from the outermost keyed ancestor down to this node (inclusive if keyed).
+    pub path: Vec<NodeKey>,
+    /// Post-transform rectangle in logical surface coordinates.
+    pub rect: Rect,
+    /// Active clip rectangle in logical surface coordinates, if clipped by an ancestor.
+    pub clip: Option<Rect>,
+    pub kind: NodeKind,
+    /// Compounded [`SubtreeTransform`] opacity (`0.0..=1.0`).
+    pub opacity: f32,
+    pub flags: NodeFlags,
+}
+
 /// Result of laying out and painting a surface's declarative element tree.
 #[derive(Debug)]
 pub struct BuiltFrame<M> {
@@ -958,6 +1000,8 @@ pub struct BuiltFrame<M> {
     pub input_rects: Vec<BlurRect>,
     /// Ordered hit targets (back-to-front; hit-testing iterates in reverse).
     pub hits: Vec<HitEntry<M>>,
+    /// Semantic snapshot of every laid-out element (back-to-front paint order).
+    pub nodes: Vec<NodeInfo>,
 }
 
 impl<M> Default for BuiltFrame<M> {
@@ -967,11 +1011,93 @@ impl<M> Default for BuiltFrame<M> {
             blur_rects: Vec::new(),
             input_rects: Vec::new(),
             hits: Vec::new(),
+            nodes: Vec::new(),
         }
     }
 }
 
 impl<M> BuiltFrame<M> {
+    /// Find the topmost laid-out node matching `key`.
+    pub fn node_by_key(&self, key: NodeKey) -> Option<&NodeInfo> {
+        self.nodes.iter().rev().find(|n| n.key == Some(key))
+    }
+
+    /// Find the topmost laid-out node whose key path ends with `path`.
+    ///
+    /// A single-element `path` behaves like [`Self::node_by_key`]; multi-element
+    /// paths match ancestor→descendant key chains (e.g. `slider/knob`), ignoring
+    /// unkeyed containers in between.
+    pub fn node_by_path(&self, path: &[NodeKey]) -> Option<&NodeInfo> {
+        if path.is_empty() {
+            return None;
+        }
+        self.nodes.iter().rev().find(|n| {
+            n.key == path.last().copied()
+                && n.path.len() >= path.len()
+                && n.path[n.path.len() - path.len()..] == *path
+        })
+    }
+
+    /// Serialize the laid-out element tree, blur regions, input regions, and
+    /// `content_size` to pretty-printed JSON for agent inspection and assertions.
+    pub fn tree_json(&self) -> String {
+        let fmt_key = |k: NodeKey| format!("0x{:016x}", k.0);
+        let rect_val = |r: Rect| {
+            serde_json::json!({
+                "x": r.x,
+                "y": r.y,
+                "w": r.w,
+                "h": r.h,
+            })
+        };
+        let blur_val = |b: &BlurRect| {
+            serde_json::json!({
+                "x": b.rect.x,
+                "y": b.rect.y,
+                "w": b.rect.w,
+                "h": b.rect.h,
+                "radius": b.radius,
+            })
+        };
+        let nodes: Vec<serde_json::Value> = self
+            .nodes
+            .iter()
+            .map(|n| {
+                let kind = match &n.kind {
+                    NodeKind::Container => serde_json::json!("container"),
+                    NodeKind::Text(s) => serde_json::json!({ "text": s }),
+                    NodeKind::Image => serde_json::json!("image"),
+                    NodeKind::Polyline => serde_json::json!("polyline"),
+                };
+                serde_json::json!({
+                    "key": n.key.map(fmt_key),
+                    "path": n.path.iter().copied().map(fmt_key).collect::<Vec<_>>(),
+                    "rect": rect_val(n.rect),
+                    "clip": n.clip.map(rect_val),
+                    "kind": kind,
+                    "opacity": n.opacity,
+                    "flags": {
+                        "scrollable": n.flags.scrollable,
+                        "focusable": n.flags.focusable,
+                        "hoverable": n.flags.hoverable,
+                        "input_opaque": n.flags.input_opaque,
+                        "blur": n.flags.blur,
+                        "captures_input": n.flags.captures_input,
+                        "has_shadow": n.flags.has_shadow,
+                    }
+                })
+            })
+            .collect();
+
+        let doc = serde_json::json!({
+            "content_size": [self.content_size.0, self.content_size.1],
+            "blur_rects": self.blur_rects.iter().map(blur_val).collect::<Vec<_>>(),
+            "input_rects": self.input_rects.iter().map(blur_val).collect::<Vec<_>>(),
+            "nodes": nodes,
+        });
+        serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_owned())
+    }
+
     /// Dispatch an [`InputEvent`] against the laid-out hit tree, updating
     /// `interaction` and returning any emitted app messages plus whether a redraw
     /// is required.
@@ -1311,6 +1437,7 @@ pub fn layout_and_paint<M>(
     };
 
     let mut scratch_glyphs = Vec::new();
+    let mut key_path = Vec::new();
     paint_node(
         &tree,
         root_id,
@@ -1326,6 +1453,7 @@ pub fn layout_and_paint<M>(
         images,
         draw_list,
         &mut scratch_glyphs,
+        &mut key_path,
         &mut frame,
     );
     frame
@@ -1414,6 +1542,7 @@ fn paint_node<M>(
     images: &ImageStore,
     draw_list: &mut DrawList,
     scratch_glyphs: &mut Vec<crate::gpu::GlyphInstance>,
+    key_path: &mut Vec<NodeKey>,
     frame: &mut BuiltFrame<M>,
 ) {
     let layout = *tree.layout(node_id).expect("node layout");
@@ -1477,6 +1606,7 @@ fn paint_node<M>(
             images,
             &mut layer_draw_list,
             scratch_glyphs,
+            key_path,
             &mut local_frame,
         );
 
@@ -1514,6 +1644,18 @@ fn paint_node<M>(
             // `content_height` shares units with `rect.h` for scroll clamping.
             hit.content_height *= tf.scale;
             frame.hits.push(hit);
+        }
+        for mut node in local_frame.nodes {
+            node.rect = to_screen(node.rect);
+            node.clip = match node.clip {
+                Some(inner) => Some(match clip_rect {
+                    Some(outer) => to_screen(inner).intersect(outer),
+                    None => to_screen(inner),
+                }),
+                None => clip_rect,
+            };
+            node.opacity = (node.opacity * tf.opacity).clamp(0.0, 1.0);
+            frame.nodes.push(node);
         }
 
         let content_hash = layer_draw_list.content_hash();
@@ -1901,6 +2043,34 @@ fn paint_node<M>(
         content_height = max_bottom + layout.padding.bottom;
     }
 
+    // Record semantic node info for every laid-out element (back-to-front).
+    if let Some(k) = elem.key {
+        key_path.push(k);
+    }
+    let node_kind = match &elem.content {
+        ElementContent::Container => NodeKind::Container,
+        ElementContent::Text { text: content, .. } => NodeKind::Text(content.clone()),
+        ElementContent::Image { .. } => NodeKind::Image,
+        ElementContent::Polyline { .. } => NodeKind::Polyline,
+    };
+    frame.nodes.push(NodeInfo {
+        key: elem.key,
+        path: key_path.clone(),
+        rect: screen_rect,
+        clip: clip_rect,
+        kind: node_kind,
+        opacity: tf.opacity,
+        flags: NodeFlags {
+            scrollable: elem.scrollable,
+            focusable: elem.focusable,
+            hoverable: elem.hoverable,
+            input_opaque: elem.input_opaque,
+            blur: elem.visual.blur,
+            captures_input: elem.captures_input,
+            has_shadow: elem.visual.shadow.is_some(),
+        },
+    });
+
     // Record hit entry BEFORE painting children so children sit later in the
     // vector (higher z-order when reverse-iterating).
     if elem.handlers.on_click.is_some()
@@ -1951,8 +2121,12 @@ fn paint_node<M>(
             images,
             draw_list,
             scratch_glyphs,
+            key_path,
             frame,
         );
+    }
+    if elem.key.is_some() {
+        key_path.pop();
     }
 
     // 8. Overlay scrollbar thumb when scrollable content overflows the viewport.

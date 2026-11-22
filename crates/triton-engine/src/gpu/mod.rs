@@ -14,12 +14,13 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 
 use glow::HasContext;
-use layer_cache::LayerCache;
+use layer_cache::{LayerCache, attach_and_check_fbo, create_rgba8_texture};
 
 use crate::damage::DamageRect;
 use crate::error::EngineError;
 use crate::image::{ImageData, ImageId, ImageStore};
-use crate::text::AtlasUpload;
+use crate::style::Rgba;
+use crate::text::{AtlasUpload, TextEngine};
 
 const QUAD_VS: &str = r"#version 300 es
 precision highp float;
@@ -1681,6 +1682,142 @@ impl Gpu {
             gl.disable(glow::SCISSOR_TEST);
             self.layer_cache.evict_stale(gl);
         }
+    }
+
+    /// Render `draw_list` into an offscreen `RGBA8` FBO of physical size
+    /// `(width, height)`, cleared to transparent, and read back straight
+    /// (un-premultiplied) `RGBA8` pixels in top-to-bottom row order.
+    ///
+    /// Requires a current GLES3 context on the calling thread (for example via
+    /// [`crate::platform::egl::Egl::headless`]).
+    pub fn render_to_rgba(
+        &mut self,
+        width: u32,
+        height: u32,
+        draw_list: &DrawList,
+        text: &mut TextEngine,
+        images: &mut ImageStore,
+    ) -> Result<Vec<u8>, EngineError> {
+        self.render_to_rgba_with_backdrop(width, height, Rgba::TRANSPARENT, draw_list, text, images)
+    }
+
+    /// Render `draw_list` into an offscreen `RGBA8` FBO cleared to `backdrop`
+    /// and read back straight (un-premultiplied) `RGBA8` pixels in top-to-bottom
+    /// row order.
+    pub fn render_to_rgba_with_backdrop(
+        &mut self,
+        width: u32,
+        height: u32,
+        backdrop: Rgba,
+        draw_list: &DrawList,
+        text: &mut TextEngine,
+        images: &mut ImageStore,
+    ) -> Result<Vec<u8>, EngineError> {
+        if width == 0 || height == 0 {
+            return Err(EngineError::Gpu(
+                "offscreen render target must have non-zero width and height".into(),
+            ));
+        }
+        let wi = i32::try_from(width)
+            .map_err(|_| EngineError::Gpu(format!("offscreen width overflows i32: {width}")))?;
+        let hi = i32::try_from(height)
+            .map_err(|_| EngineError::Gpu(format!("offscreen height overflows i32: {height}")))?;
+
+        self.sync_images(images);
+        self.layer_cache.begin_frame();
+
+        // SAFETY: Caller guarantees a current GLES3 context on this thread.
+        let (fbo, tex) = unsafe {
+            let tex = create_rgba8_texture(&self.gl, width, height)?;
+            let fbo = match self.gl.create_framebuffer() {
+                Ok(fbo) => fbo,
+                Err(e) => {
+                    self.gl.delete_texture(tex);
+                    return Err(EngineError::Gpu(format!("create_framebuffer: {e}")));
+                }
+            };
+            if let Err(err) = attach_and_check_fbo(&self.gl, fbo, tex) {
+                self.gl.delete_framebuffer(fbo);
+                self.gl.delete_texture(tex);
+                return Err(err);
+            }
+            (fbo, tex)
+        };
+
+        let mut atlas = text.atlas_upload();
+
+        // SAFETY: `fbo` is complete and bound in the active GLES3 context.
+        unsafe {
+            let gl = &self.gl;
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+            gl.viewport(0, 0, wi, hi);
+            gl.disable(glow::DEPTH_TEST);
+            gl.disable(glow::SCISSOR_TEST);
+            gl.enable(glow::BLEND);
+            gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+            gl.clear_color(
+                backdrop.r * backdrop.a,
+                backdrop.g * backdrop.a,
+                backdrop.b * backdrop.a,
+                backdrop.a,
+            );
+            gl.clear(glow::COLOR_BUFFER_BIT);
+            atlas.upload(gl);
+        }
+
+        self.render_batches(Some(fbo), width, height, None, draw_list, &mut atlas);
+
+        let row_bytes = (width as usize).saturating_mul(4);
+        let byte_len = row_bytes.saturating_mul(height as usize);
+        let mut raw = vec![0u8; byte_len];
+
+        // SAFETY: `fbo` is a valid RGBA8 framebuffer of size `(wi, hi)` and `raw`
+        // holds exactly `width * height * 4` bytes with `PACK_ALIGNMENT = 1`.
+        unsafe {
+            let gl = &self.gl;
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+            gl.disable(glow::SCISSOR_TEST);
+            gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
+            gl.read_pixels(
+                0,
+                0,
+                wi,
+                hi,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut raw)),
+            );
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.delete_framebuffer(fbo);
+            gl.delete_texture(tex);
+            self.layer_cache.evict_stale(gl);
+        }
+
+        // Flip rows vertically (GL bottom-left → top-left) and un-premultiply RGB.
+        let mut out = vec![0u8; byte_len];
+        for y in 0..height as usize {
+            let src_row = (height as usize - 1 - y) * row_bytes;
+            let dst_row = y * row_bytes;
+            for x in 0..width as usize {
+                let s = src_row + x * 4;
+                let d = dst_row + x * 4;
+                let a = raw[s + 3];
+                if a == 0 {
+                    out[d..d + 4].copy_from_slice(&[0, 0, 0, 0]);
+                } else if a == 255 {
+                    out[d..d + 4].copy_from_slice(&raw[s..s + 4]);
+                } else {
+                    let au = u32::from(a);
+                    let unpremul =
+                        |c: u8| -> u8 { ((u32::from(c) * 255 + au / 2) / au).min(255) as u8 };
+                    out[d] = unpremul(raw[s]);
+                    out[d + 1] = unpremul(raw[s + 1]);
+                    out[d + 2] = unpremul(raw[s + 2]);
+                    out[d + 3] = a;
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Execute `draw_list`'s batches into `target_fbo` (`None` = the default

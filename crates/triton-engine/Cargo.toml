@@ -16,6 +16,7 @@ etagere.workspace = true
 glow.workspace = true
 khronos-egl = { workspace = true, features = ["dynamic", "1_5"] }
 libloading.workspace = true
+serde_json.workspace = true
 smithay-client-toolkit = { workspace = true, features = ["calloop", "xkbcommon"] }
 taffy = { workspace = true, features = ["std", "taffy_tree", "flexbox", "block_layout", "grid"] }
 thiserror.workspace = true

@@ -23,6 +23,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use triton_design::color::{STATE_LAYER, Variant};
@@ -32,9 +33,10 @@ use triton_design::motion::{Animated, Motion, Spring};
 use triton_design::shape::{RADII, SIZE};
 use triton_design::typography::TypeStyle;
 use triton_engine::{
-    AppCommand, Edges, Element, FontSpec, ImageData, ImageId, ImageStore, ImageStyle, InputEvent,
-    Key, NodeKey, Rgba, ShellApp, SubtreeTransform, SurfaceAnchor, SurfaceKeyboard, SurfaceLayer,
-    SurfaceMetrics, SurfaceSize, SurfaceSpec, Theme, ViewContext, box_, col, icon, row, run, text,
+    AppCommand, Edges, Element, FontSpec, HeadlessRenderer, HeadlessSession, ImageData, ImageId,
+    ImageStore, ImageStyle, InputEvent, Key, NodeKey, Rgba, ShellApp, SubtreeTransform,
+    SurfaceAnchor, SurfaceKeyboard, SurfaceLayer, SurfaceMetrics, SurfaceSize, SurfaceSpec, Theme,
+    ViewContext, box_, col, icon, row, run, text,
 };
 use triton_kit::{
     Badge, Button, ButtonSize, ButtonTone, CheckState, Chip, ChipKind, Dialog, DividerStyle,
@@ -2522,6 +2524,279 @@ impl ShellApp for ShowcaseApp {
     }
 }
 
+#[derive(Debug)]
+struct HeadlessArgs {
+    snap: Option<PathBuf>,
+    tree: Option<PathBuf>,
+    sections: Vec<usize>,
+    themes: Vec<Variant>,
+    reduce_motion: bool,
+    scale: f32,
+    scroll_y: f32,
+    dialog: bool,
+    transparent: bool,
+}
+
+fn parse_section_arg(raw: &str) -> Result<Vec<usize>, String> {
+    match raw.to_ascii_lowercase().as_str() {
+        "all" => Ok((0..SECTIONS.len()).collect()),
+        "surfaces" => Ok(vec![0]),
+        "buttons" => Ok(vec![1]),
+        "controls" => Ok(vec![2]),
+        "inputs" => Ok(vec![3]),
+        "chrome" => Ok(vec![4]),
+        "overlays" => Ok(vec![5]),
+        other => Err(format!(
+            "unknown --section '{other}' (expected surfaces|buttons|controls|inputs|chrome|overlays|all)"
+        )),
+    }
+}
+
+fn parse_headless_args(args: &[String]) -> Result<Option<HeadlessArgs>, String> {
+    let mut snap: Option<PathBuf> = None;
+    let mut tree: Option<PathBuf> = None;
+    let mut sections: Option<Vec<usize>> = None;
+    let mut themes: Vec<Variant> = vec![Variant::Dark];
+    let mut reduce_motion = false;
+    let mut scale = 1.75_f32;
+    let mut scroll_y = 0.0_f32;
+    let mut dialog = false;
+    let mut transparent = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        let next = |i: &mut usize, flag: &str| -> Result<String, String> {
+            *i += 1;
+            args.get(*i)
+                .cloned()
+                .ok_or_else(|| format!("missing value for {flag}"))
+        };
+        match args[i].as_str() {
+            "--snap" => snap = Some(PathBuf::from(next(&mut i, "--snap")?)),
+            "--tree" => tree = Some(PathBuf::from(next(&mut i, "--tree")?)),
+            "--section" => sections = Some(parse_section_arg(&next(&mut i, "--section")?)?),
+            "--theme" => {
+                let v = next(&mut i, "--theme")?;
+                themes = match v.to_ascii_lowercase().as_str() {
+                    "dark" => vec![Variant::Dark],
+                    "light" => vec![Variant::Light],
+                    "both" => vec![Variant::Dark, Variant::Light],
+                    other => {
+                        return Err(format!(
+                            "unknown --theme '{other}' (expected dark|light|both)"
+                        ));
+                    }
+                };
+            }
+            "--reduce-motion" => reduce_motion = true,
+            "--scale" => {
+                let v = next(&mut i, "--scale")?;
+                scale = v
+                    .parse::<f32>()
+                    .map_err(|e| format!("invalid --scale '{v}': {e}"))?;
+            }
+            "--scroll" => {
+                let v = next(&mut i, "--scroll")?;
+                scroll_y = v
+                    .parse::<f32>()
+                    .map_err(|e| format!("invalid --scroll '{v}': {e}"))?;
+            }
+            "--dialog" => dialog = true,
+            "--transparent" => transparent = true,
+            other => return Err(format!("unknown argument '{other}'")),
+        }
+        i += 1;
+    }
+
+    if snap.is_none() && tree.is_none() {
+        return Ok(None);
+    }
+
+    let default_sections = if snap
+        .as_ref()
+        .is_some_and(|p| p.extension().is_some_and(|e| e == "png"))
+    {
+        vec![0]
+    } else {
+        (0..SECTIONS.len()).collect()
+    };
+
+    Ok(Some(HeadlessArgs {
+        snap,
+        tree,
+        sections: sections.unwrap_or(default_sections),
+        themes,
+        reduce_motion,
+        scale,
+        scroll_y,
+        dialog,
+        transparent,
+    }))
+}
+
+fn section_slug(index: usize) -> &'static str {
+    match SECTIONS[index] {
+        Section::Surfaces => "surfaces",
+        Section::Buttons => "buttons",
+        Section::Controls => "controls",
+        Section::Inputs => "inputs",
+        Section::Chrome => "chrome",
+        Section::Overlays => "overlays",
+    }
+}
+
+fn theme_slug(variant: Variant) -> &'static str {
+    match variant {
+        Variant::Dark => "dark",
+        Variant::Light => "light",
+    }
+}
+
+fn run_headless(opts: &HeadlessArgs) -> Result<(), String> {
+    let mut renderer = if opts.snap.is_some() {
+        Some(HeadlessRenderer::new().map_err(|e| format!("HeadlessRenderer::new: {e}"))?)
+    } else {
+        None
+    };
+
+    let single_target = opts.sections.len() == 1 && opts.themes.len() == 1;
+    let snap_is_file = opts
+        .snap
+        .as_ref()
+        .is_some_and(|p| p.extension().is_some_and(|e| e == "png"));
+    let tree_is_file = opts
+        .tree
+        .as_ref()
+        .is_some_and(|p| p.extension().is_some_and(|e| e == "json"));
+
+    let write_artifact = |base: &Path, is_file: bool, stem: &str, ext: &str| -> PathBuf {
+        if single_target && is_file {
+            base.to_path_buf()
+        } else {
+            base.join(format!("{stem}.{ext}"))
+        }
+    };
+
+    for &variant in &opts.themes {
+        let backdrop = if opts.transparent {
+            Rgba::TRANSPARENT
+        } else {
+            match variant {
+                Variant::Dark => Rgba::new(0.11, 0.12, 0.15, 1.0),
+                Variant::Light => Rgba::new(0.84, 0.86, 0.90, 1.0),
+            }
+        };
+
+        for &sec_idx in &opts.sections {
+            let mut session = HeadlessSession::<Msg>::new((1200.0, 900.0), opts.scale);
+            session.set_reduce_motion(opts.reduce_motion);
+            let now = session.now();
+            let mut app = ShowcaseApp::new(now);
+            app.theme = match variant {
+                Variant::Dark => Theme::dark(),
+                Variant::Light => Theme::light(),
+            };
+            app.reduce_motion = opts.reduce_motion;
+            app.gallery_open = true;
+            app.gallery_anim.snap(1.0, now);
+            app.section = sec_idx;
+            app.dialog_open = opts.dialog;
+
+            if opts.scroll_y > 0.0 {
+                session.interaction_mut().set_scroll_offset(
+                    NodeKey::from_pair("section-scroll", sec_idx),
+                    opts.scroll_y,
+                );
+            }
+
+            let sizing = app
+                .surfaces()
+                .into_iter()
+                .find(|(id, _)| *id == SurfaceId::Gallery)
+                .map_or(
+                    SurfaceSize::FitContent {
+                        max_w: Some(1320),
+                        max_h: Some(1280),
+                    },
+                    |(_, spec)| spec.sizing,
+                );
+            session.render_surface(&mut app, SurfaceId::Gallery, sizing);
+
+            let stem = format!("{}-{}", section_slug(sec_idx), theme_slug(variant));
+            if let (Some(snap_base), Some(r)) = (&opts.snap, renderer.as_mut()) {
+                let out_path = write_artifact(snap_base, snap_is_file, &stem, "png");
+                let (w, h) = r
+                    .snap_png_with_backdrop(&mut session, backdrop, &out_path)
+                    .map_err(|e| format!("snap_png {}: {e}", out_path.display()))?;
+                eprintln!("snapped {} ({w}x{h})", out_path.display());
+            }
+            if let Some(tree_base) = &opts.tree {
+                let out_path = write_artifact(tree_base, tree_is_file, &stem, "json");
+                if let Some(parent) = out_path.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("create_dir_all {}: {e}", parent.display()))?;
+                }
+                std::fs::write(&out_path, session.tree_json())
+                    .map_err(|e| format!("write {}: {e}", out_path.display()))?;
+            }
+        }
+
+        // When snapping multiple sections into a directory, also snap both bar islands.
+        if opts.sections.len() > 1
+            && let (Some(snap_base), Some(r)) = (&opts.snap, renderer.as_mut())
+            && !snap_is_file
+        {
+            snap_islands(opts, variant, backdrop, snap_base, r)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn snap_islands(
+    opts: &HeadlessArgs,
+    variant: Variant,
+    backdrop: Rgba,
+    snap_base: &Path,
+    renderer: &mut HeadlessRenderer,
+) -> Result<(), String> {
+    for (surface_id, name) in [
+        (SurfaceId::LeftIsland, "left-island"),
+        (SurfaceId::RightIsland, "right-island"),
+    ] {
+        let mut session = HeadlessSession::<Msg>::new((1200.0, 220.0), opts.scale);
+        session.set_reduce_motion(opts.reduce_motion);
+        let now = session.now();
+        let mut app = ShowcaseApp::new(now);
+        app.theme = match variant {
+            Variant::Dark => Theme::dark(),
+            Variant::Light => Theme::light(),
+        };
+        app.reduce_motion = opts.reduce_motion;
+        let sizing = app
+            .surfaces()
+            .into_iter()
+            .find(|(id, _)| *id == surface_id)
+            .map_or(
+                SurfaceSize::FitContent {
+                    max_w: Some(1400),
+                    max_h: Some(220),
+                },
+                |(_, spec)| spec.sizing,
+            );
+        session.render_surface(&mut app, surface_id, sizing);
+        let stem = format!("{name}-{}", theme_slug(variant));
+        let out_path = snap_base.join(format!("{stem}.png"));
+        let (w, h) = renderer
+            .snap_png_with_backdrop(&mut session, backdrop, &out_path)
+            .map_err(|e| format!("snap_png {}: {e}", out_path.display()))?;
+        eprintln!("snapped {} ({w}x{h})", out_path.display());
+    }
+    Ok(())
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -2530,9 +2805,25 @@ fn main() {
         )
         .init();
 
+    let raw_args: Vec<String> = std::env::args().skip(1).collect();
+    match parse_headless_args(&raw_args) {
+        Ok(Some(opts)) => {
+            if let Err(err) = run_headless(&opts) {
+                eprintln!("triton-kit showcase headless error: {err}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        Err(err) => {
+            eprintln!("triton-kit showcase: {err}");
+            std::process::exit(2);
+        }
+        Ok(None) => {}
+    }
+
     if std::env::var_os("WAYLAND_DISPLAY").is_none() {
         eprintln!(
-            "triton-kit showcase: WAYLAND_DISPLAY is not set — run `mise run dev` for an isolated nested session!"
+            "triton-kit showcase: WAYLAND_DISPLAY is not set — run `mise run dev` for an isolated nested session, or pass `--snap <dir>` for headless PNG rendering!"
         );
         std::process::exit(2);
     }

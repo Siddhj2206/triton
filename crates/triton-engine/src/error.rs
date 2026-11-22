@@ -25,4 +25,12 @@ pub enum EngineError {
     /// Event loop initialization or runtime failure.
     #[error("event loop error: {0}")]
     EventLoop(String),
+
+    /// Headless script parsing or key resolution failure.
+    #[error("headless script error: {0}")]
+    Script(String),
+
+    /// Filesystem I/O failure (e.g. writing PNG/tree snapshots).
+    #[error("I/O error: {0}")]
+    Io(String),
 }
