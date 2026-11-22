@@ -6,7 +6,7 @@
 //!   [`shadow_gutter`]), [`card`], [`scrim`], [`dialog`], [`divider`],
 //!   [`empty_state`], [`list_group`] + [`list_row`], [`scroll_area`].
 //! - [`button`]: [`button`], [`icon_button`], [`ButtonTone`].
-//! - [`control`]: [`slider`], [`SwitchState`] + [`switch`].
+//! - [`control`]: [`switch`], [`checkbox`], [`radio`], [`slider`] (`Animator`-driven).
 //! - [`input`]: [`TextInputState`] + [`text_input`].
 //! - [`chrome`]: [`pill`], [`icon_disc`].
 //!
@@ -22,7 +22,9 @@ mod surface;
 
 pub use button::{ButtonTone, button, icon_button};
 pub use chrome::{icon_disc, pill};
-pub use control::{SwitchState, slider, switch};
+pub use control::{
+    CheckState, SliderMode, SliderOptions, SliderSurface, checkbox, radio, slider, switch,
+};
 pub use input::{TextInputAction, TextInputState, text_input};
 pub use surface::{
     Dialog, DividerStyle, ListFill, Orientation, ScrollAreaOptions, card, concentric_inner, dialog,
