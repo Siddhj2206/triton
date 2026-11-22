@@ -39,8 +39,8 @@ Binaries: triton, triton-lock, triton-greeter, triton-settings
 | Crate | Status | Responsibility | Hard Boundaries |
 |---|---|---|---|
 | `triton-design` | **Done** (30 tests) | Generated constants from `tokens.json`, `Color`, `Scheme`, `Material`, `Spring`, `Wave`, embedded fonts | Zero runtime dependencies |
-| `triton-engine` | **Done** (60 tests) | SCTK 0.21 + calloop + dynamic EGL/GLES3 SDF renderer, Figma 256×256 corner LUT, 9-lobe wave SDF, textured image pass (crossfade/blur/desaturate), `LayerCache` FBOs, `EGL_BUFFER_AGE_KHR` damage, `Animator`, `etagere` LRU glyph atlas, `TimerScheduler`, `StableExtent` | Zero Triton-specific widgets; `unsafe` quarantined to `platform/egl.rs`, `platform/wl_egl.rs`, `gpu/`, and `text/` uploads |
-| `triton-kit` | **Scaffolded** | Shared Material 3 Futura components (`panel`, `island`, `button`, `switch`, `slider`, `text_input`, `toggle_tile`, `list_group`, `toast`, `wavy_progress`, etc.) + `showcase` example | 100% safe Rust; zero D-Bus, tokio, or niri IPC; tested headlessly via `DrawList` |
+| `triton-engine` | **Done** (86 tests) | SCTK 0.21 + calloop + dynamic EGL/GLES3 SDF renderer, Figma 256×256 corner LUT, 9-lobe wave SDF, analytic capsule/polyline SDF, Gaussian `erfc` shadows, textured image pass, `LayerCache` FBOs, `EGL_BUFFER_AGE_KHR` damage, single-commit vsync pacing, `Animator`, `etagere` LRU glyph atlas, `TimerScheduler`, `StableExtent`, plus Rune-style headless dev loop (`NodeInfo`/`tree_json`, `HeadlessSession` + JSON `Script`, `Egl::headless` → offscreen PNG) | Zero Triton-specific widgets; `unsafe` quarantined to `platform/egl.rs`, `platform/wl_egl.rs`, `gpu/`, and `text/` uploads |
+| `triton-kit` | **Done** (118 tests) | Shared Material 3 Futura components (`panel`, `island`, `card`, `dialog`, `scrim`, `divider`, `empty_state`, `list_group`/`list_row`, `scroll_area`, `button`, `icon_button`, `chip`, `toggle_tile`, `segmented`, `power_menu`, `switch`, `checkbox`, `radio`, `slider`, `text_input`, `search_field`, `password_field`, `pill`/`status_pill`/`overflow_pill`, `icon_disc`, `wave_avatar`, `badge`/`badged`, `keycap`, `hint_bar`, `wavy_progress`, `wavy_ring`, `level_meter`, `menu`, `tooltip`, `toast_card`) + interactive 6-section `showcase` (`--snap`/`--tree` + `mise run dev`) | `#![forbid(unsafe_code)]`; zero D-Bus, tokio, or niri IPC; tested headlessly via `DrawList` |
 | `triton` | **Phase 1B** | Main shell daemon (bar, panels, OSD, notifications, launcher, clipboard, wallpaper, power, capture, polkit, idle, night light, theming, `triton msg` CLI) | Composes `triton-kit`; never hand-styles |
 | `triton-lock` | **Phase 1D** | Separate `ext-session-lock-v1` + PAM binary (crash-isolated from shell) | Reuses `triton-kit` login components; no D-Bus bloat |
 | `triton-settings` | **Phase 3** | Floating `xdg-shell` settings app (1100×760, Mica sidebar + Solid pane) | Reuses `triton-kit` controls/lists |
@@ -81,13 +81,13 @@ Every milestone ends with `mise run check` green (fmt + clippy `-D warnings` + t
 - ✅ Design audit: all 30 boards mapped and conflicts resolved in `docs/design-spec.md`.
 - ✅ Workspace cleaned: `triton-kit` extracted, zero `iced` deps anywhere.
 
-### Phase 1A — `triton-kit` Component Library & Visual Runner
-Build the complete Material 3 Futura component library in `crates/triton-kit`, backed by headless `DrawList` tests and a live `showcase` gallery:
-- **Surfaces & layout:** `panel`, `island`, `card`, `dialog`, `scrim`, `empty_state`, `list_group` (24/6 radii), `scroll_area`, `divider`.
-- **Controls:** `button` (4 kinds × 4 sizes + veil), `icon_button`, `chip`, `toggle_tile` (`r36↔r20` morph), `segmented`, `switch`, `checkbox`, `radio`, `slider` (standard, stepped, on-glass).
-- **Inputs:** `text_input`, `search_field` (mode wave-disc + keycap hint), `password_field` (masked dots, eye-reveal, submit disc, wrong-password shake, caps-lock chip).
-- **Chrome & indicators:** `pill`, `icon_disc`, `wave_avatar`, `wavy_progress`, `wavy_ring`, `level_meter` (3-bar equalizer), `badge`, `keycap`, `hint_bar`, `menu`, `tooltip`, `toast_card`.
-- **Isolated visual runner:** Re-introduce a clean nested-niri dev runner (`mise run dev` / `mise run preview`) targeting `triton-kit`'s `showcase` and `triton` so every visual change can be verified on real niri blur/shadows without touching the host session.
+### Phase 1A — `triton-kit` Component Library & Visual Runner ✅ Complete
+Complete Material 3 Futura component library in `crates/triton-kit` (`#![forbid(unsafe_code)]`), backed by headless `DrawList` tests, a 6-section interactive `showcase` gallery, a Rune-style headless dev loop in `triton-engine`, and an isolated nested-niri visual runner:
+- ✅ **Surfaces & layout:** `panel`, `island`, `shadow_gutter`, `card`, `dialog`, `scrim`, `empty_state`, `list_group` / `list_row` (24/6 radii), `scroll_area` (auto-widening 4→10 px draggable scrollbar, scroll-aware `edge_fade`), `divider`.
+- ✅ **Buttons & controls:** `button` (all tones × 4 sizes + veil), `icon_button`, `chip`, `toggle_tile` (`r36↔r20` morph), `segmented` (incl. `LargeVeil`), `power_menu`, `switch`, `checkbox`, `radio`, `slider` (continuous, stepped, on-glass).
+- ✅ **Inputs:** `text_input`, `search_field` (mode wave-disc + keycap hint), `password_field` (masked dots, eye-reveal, submit disc, wrong-password shake, live Caps Lock chip).
+- ✅ **Chrome, progress & overlays:** `pill`, `status_pill`, `overflow_pill`, `icon_disc`, `wave_avatar` / `wave_avatar_image`, `wavy_progress`, `wavy_ring`, `level_meter`, `badge` / `badged`, `keycap`, `hint_bar`, `menu` (concentric rows + submenus), `tooltip`, `toast_card`.
+- ✅ **Headless dev loop & isolated visual runner:** `triton-engine` offscreen `Egl::headless` → PNG snapshots + semantic `tree_json()` + key-addressed `HeadlessSession` scripts (`showcase --snap --tree`), plus `mise run dev` isolated nested-niri session (`dev/nested/session.sh` + `dev/nested/niri.kdl`) for real compositor blur/shadow QA without touching the host session.
 
 ### Phase 1B — `triton` Core Daemon, Bar, OSD & Wallpaper
 Stand up `crates/triton` cleanly from scratch:
@@ -136,4 +136,4 @@ Screen recording pipeline, screenshot markup editor, Users page (AccountsService
 - **Window live previews** depend on a niri release carrying `ext-image-copy-capture` toplevel (merged upstream post-26.04); icon-card fallback is designed in.
 - **Audio native deps:** check whether `libpipewire` / `libpulse` are available via `nx` when starting Phase 1C so we don't fall back to shelling out.
 - **Light-scheme hexes** in `tokens.json` are hand-picked; regenerate via `material-colors` in Phase 1B and verify contrast against the boards.
-- **Blur correctness:** never combine niri's `geometry-corner-radius` with rule-side `blur` (see `docs/research/niri-layer-blur-alpha.md`); `triton-engine` requests shaped blur via `ext-background-effect-v1` directly.
+- **Blur correctness:** never set rule-side `blur true` (or combine `geometry-corner-radius` with rule-side blur) on Triton `layer-rule` blocks — `blur true` forces niri to blur the entire rectangular layer surface including transparent shadow gutters, overriding `ext-background-effect-v1`. Use only `xray false` in niri `layer-rule` and let `triton-engine` submit shaped rounded blur regions via `ext-background-effect-v1` directly (see `dev/nested/niri.kdl` and `docs/research/niri-layer-blur-alpha.md`).
