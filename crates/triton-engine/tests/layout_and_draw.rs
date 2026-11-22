@@ -6,12 +6,13 @@
 
 use triton_design::material::Material;
 use triton_engine::gpu::{
-    DrawBatch, DrawList, KIND_FILL, KIND_SHADOW, KIND_TOP_HIGHLIGHT, QuadInstance, ScissorRect,
+    DrawBatch, DrawList, EdgeFade, KIND_FILL, KIND_SHADOW, KIND_TOP_HIGHLIGHT, KIND_WAVE,
+    QuadInstance, ScissorRect,
 };
-use triton_engine::style::{DropShadow, Rect, Rgba, SubtreeTransform, Theme};
+use triton_engine::style::{DropShadow, Edges, FontSpec, Rect, Rgba, SubtreeTransform, Theme};
 use triton_engine::text::TextEngine;
 use triton_engine::ui::{
-    Element, InputEvent, InteractionState, NodeKey, box_, col, layout_and_paint, row,
+    Element, InputEvent, InteractionState, NodeKey, box_, col, layout_and_paint, row, text,
 };
 use triton_engine::widgets::{panel, scroll_area};
 
@@ -38,7 +39,10 @@ fn assert_rect_approx(actual: [f32; 4], expected: [f32; 4], label: &str) {
 fn collect_quads(draw_list: &DrawList) -> Vec<(Option<ScissorRect>, QuadInstance)> {
     let mut out = Vec::new();
     for batch in &draw_list.batches {
-        if let DrawBatch::Quads { scissor, instances } = batch {
+        if let DrawBatch::Quads {
+            scissor, instances, ..
+        } = batch
+        {
             for &q in instances {
                 out.push((*scissor, q));
             }
@@ -666,4 +670,132 @@ fn drop_shadow_cutout_flag_and_gutter_margins() {
         0.0,
         "opaque fill disables cutout",
     );
+}
+
+// ── 8. Wave element emits KIND_WAVE quad ─────────────────────────────────────
+
+#[test]
+fn wave_element_emits_kind_wave_quad() {
+    let mut text_engine = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+
+    let root: Element<()> = row()
+        .w(200.0)
+        .h(100.0)
+        .gap(16.0)
+        .child(box_().w(48.0).h(48.0).bg(Rgba::WHITE).wave())
+        .child(
+            box_()
+                .w(48.0)
+                .h(48.0)
+                .bg(Rgba::new(0.2, 0.5, 1.0, 1.0))
+                .wave_animated(1.25, 0.04),
+        );
+
+    layout_and_paint(
+        root,
+        (Some(200.0), Some(100.0)),
+        2.0,
+        &interaction,
+        &mut text_engine,
+        &mut draw_list,
+    );
+
+    let quads = collect_quads(&draw_list);
+    assert_eq!(quads.len(), 2, "two wave quads emitted");
+
+    let (_, default_wave) = quads[0];
+    assert_approx(default_wave.misc[0], KIND_WAVE, "default wave kind");
+    assert_rect_approx(
+        default_wave.radii,
+        [0.0, 0.075, 9.0, 0.0],
+        "default wave params",
+    );
+
+    let (_, anim_wave) = quads[1];
+    assert_approx(anim_wave.misc[0], KIND_WAVE, "animated wave kind");
+    assert_rect_approx(
+        anim_wave.radii,
+        [1.25, 0.04, 9.0, 0.0],
+        "animated wave params",
+    );
+}
+
+// ── 9. EdgeFade propagates to child quads and glyphs ─────────────────────────
+
+#[test]
+fn edge_fade_propagates_to_child_quads_and_glyphs() {
+    let mut text_engine = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+
+    let scale = 1.5_f32;
+    let fade_edges = Edges {
+        top: 6.0,
+        right: 12.0,
+        bottom: 8.0,
+        left: 10.0,
+    };
+
+    let root: Element<()> = col().w(240.0).h(120.0).p(20.0).child(
+        col()
+            .w(200.0)
+            .h(80.0)
+            .bg(Rgba::new(0.1, 0.1, 0.1, 1.0))
+            .edge_fade(fade_edges)
+            .child(box_().w(100.0).h(20.0).bg(Rgba::WHITE))
+            .child(text("Hello", FontSpec::ui(14.0), Rgba::WHITE)),
+    );
+
+    layout_and_paint(
+        root,
+        (Some(240.0), Some(120.0)),
+        scale,
+        &interaction,
+        &mut text_engine,
+        &mut draw_list,
+    );
+
+    let expected_fade = EdgeFade {
+        rect: [20.0 * scale, 20.0 * scale, 200.0 * scale, 80.0 * scale],
+        widths: [
+            fade_edges.left * scale,
+            fade_edges.right * scale,
+            fade_edges.top * scale,
+            fade_edges.bottom * scale,
+        ],
+    };
+
+    let mut quad_batches = Vec::new();
+    let mut glyph_batches = Vec::new();
+    for batch in &draw_list.batches {
+        match batch {
+            DrawBatch::Quads {
+                edge_fade,
+                instances,
+                ..
+            } => quad_batches.push((*edge_fade, instances.len())),
+            DrawBatch::Glyphs {
+                edge_fade,
+                instances,
+                ..
+            } => glyph_batches.push((*edge_fade, instances.len())),
+        }
+    }
+
+    // First quad batch is the parent container itself (no edge_fade),
+    // second quad batch is the child box (with expected_fade).
+    assert_eq!(
+        quad_batches.len(),
+        2,
+        "parent and child should be in separate quad batches"
+    );
+    assert_eq!(quad_batches[0], (None, 1));
+    assert_eq!(quad_batches[1], (Some(expected_fade), 1));
+
+    // Glyph batch for the child text inherits the same edge_fade.
+    assert_eq!(glyph_batches.len(), 1, "one faded glyph batch");
+    assert_eq!(glyph_batches[0].0, Some(expected_fade));
+    assert!(glyph_batches[0].1 > 0, "glyphs emitted for 'Hello'");
 }

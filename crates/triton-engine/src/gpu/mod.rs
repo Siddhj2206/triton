@@ -6,6 +6,8 @@
 
 #![allow(unsafe_code)] // GLES3 calls via `glow::HasContext`
 
+pub mod corner_lut;
+
 use glow::HasContext;
 
 use crate::error::EngineError;
@@ -24,6 +26,7 @@ uniform vec2 u_view;
 
 out vec2 v_local;
 out vec2 v_half;
+out vec2 v_px;
 flat out vec4 v_radii;
 flat out vec4 v_fill;
 flat out vec4 v_border;
@@ -33,6 +36,7 @@ void main() {
     vec2 px = i_dst.xy + a_pos * i_dst.zw;
     v_local = a_pos * i_dst.zw;
     v_half = i_dst.zw * 0.5;
+    v_px = px;
     v_radii = i_radii;
     v_fill = i_fill;
     v_border = i_border;
@@ -49,14 +53,39 @@ void main() {
 const QUAD_FS: &str = r"#version 300 es
 precision highp float;
 
+uniform sampler2D u_corner_lut;
+uniform vec4 u_fade_rect;
+uniform vec4 u_fade_widths;
+
 in vec2 v_local;
 in vec2 v_half;
+in vec2 v_px;
 flat in vec4 v_radii;
 flat in vec4 v_fill;
 flat in vec4 v_border;
 flat in vec4 v_misc;
 
 out vec4 frag;
+
+float edge_fade_alpha(vec2 px, vec4 rect, vec4 w) {
+    if (w.x <= 0.0 && w.y <= 0.0 && w.z <= 0.0 && w.w <= 0.0) {
+        return 1.0;
+    }
+    float a = 1.0;
+    if (w.x > 0.0) {
+        a *= smoothstep(0.0, w.x, px.x - rect.x);
+    }
+    if (w.y > 0.0) {
+        a *= smoothstep(0.0, w.y, (rect.x + rect.z) - px.x);
+    }
+    if (w.z > 0.0) {
+        a *= smoothstep(0.0, w.z, px.y - rect.y);
+    }
+    if (w.w > 0.0) {
+        a *= smoothstep(0.0, w.w, (rect.y + rect.w) - px.y);
+    }
+    return a;
+}
 
 // Standard circular rounded-rect SDF.
 float sd_round(vec2 p, vec2 b, vec4 r) {
@@ -67,7 +96,7 @@ float sd_round(vec2 p, vec2 b, vec4 r) {
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rr;
 }
 
-// Continuous smooth-corner (superellipse n = 4) SDF with exact straight edges.
+// Exact Figma smooth-corner SDF sampled from the 256x256 corner LUT.
 float sd_smooth(vec2 p, vec2 b, vec4 r) {
     float rr = (p.y < 0.0) ? ((p.x < 0.0) ? r.x : r.y)
                            : ((p.x < 0.0) ? r.w : r.z);
@@ -76,14 +105,15 @@ float sd_smooth(vec2 p, vec2 b, vec4 r) {
         vec2 q0 = abs(p) - b;
         return length(max(q0, 0.0)) + min(max(q0.x, q0.y), 0.0);
     }
-    vec2 q = abs(p) - b + rr;
-    if (q.x > 0.0 && q.y > 0.0) {
-        vec2 e = q / rr;
-        vec2 e2 = e * e;
-        float norm4 = pow(dot(e2, e2), 0.25);
-        return (norm4 - 1.0) * rr;
+    float s_eff = clamp(min(b.x, b.y) / rr - 1.0, 0.0, 0.6);
+    vec2 c = b - abs(p);
+    const float LUT_EXTENT = 1.6;
+    if (c.x < LUT_EXTENT * rr && c.y < LUT_EXTENT * rr) {
+        vec2 uv = clamp(c / (LUT_EXTENT * rr), 0.0, 1.0);
+        float d_lut = (texture(u_corner_lut, uv).r - 0.5) * 2.0 * rr;
+        return mix(sd_round(p, b, r), d_lut, s_eff / 0.6);
     }
-    return max(q.x, q.y) - rr;
+    return -min(c.x, c.y);
 }
 
 float sd_box(vec2 p, vec2 b, vec4 r, float smoothing) {
@@ -109,6 +139,33 @@ void main() {
     float smoothing = v_misc.y;
     float param = v_misc.z;
     float opacity = v_misc.w;
+    float fade = edge_fade_alpha(v_px, u_fade_rect, u_fade_widths);
+
+    // Kind 3: Analytic 9-lobe Wave SDF (`i_radii` = phase, lobe_amp, lobes, 0).
+    if (kind > 2.5) {
+        float phase = v_radii.x;
+        float amp = v_radii.y;
+        float lobes = v_radii.z;
+        float base_r = min(v_half.x, v_half.y) / (1.0 + amp);
+        float ang = atan(p.y, p.x);
+        float r_wave = base_r * (1.0 + amp * cos(lobes * ang + phase));
+        float d = length(p) - r_wave;
+        float aa = max(fwidth(d), 0.7);
+        float cover = 1.0 - smoothstep(-aa, aa, d);
+        vec4 col = v_fill;
+        float border_w = param;
+        if (border_w > 0.0) {
+            float inner = -d - border_w;
+            float bcov = cover * (1.0 - smoothstep(-aa, aa, inner));
+            float ba = v_border.a * bcov;
+            float out_a = ba + col.a * (1.0 - ba);
+            vec3 out_rgb = (v_border.rgb * ba + col.rgb * col.a * (1.0 - ba)) / max(out_a, 1e-5);
+            col = vec4(out_rgb, out_a);
+        }
+        float a = col.a * cover * opacity * fade;
+        frag = vec4(col.rgb * a, a);
+        return;
+    }
 
     // Kind 2: Soft SDF drop shadow. `i_dst` is already expanded by `2 * blur` around
     // the shifted caster rect, so the shifted caster half-size is `v_half - 2 * blur`.
@@ -135,6 +192,7 @@ void main() {
             float outside = smoothstep(-aa_c, aa_c, d_caster);
             a *= outside;
         }
+        a *= fade;
         frag = vec4(v_fill.rgb * a, a);
         return;
     }
@@ -168,7 +226,7 @@ void main() {
         col = vec4(out_rgb, out_a);
     }
 
-    float a = col.a * cover * opacity;
+    float a = col.a * cover * opacity * fade;
     frag = vec4(col.rgb * a, a);
 }
 ";
@@ -184,12 +242,14 @@ layout(location = 4) in vec4 i_misc;   // kind (0 mask, 1 color), opacity, 0, 0
 uniform vec2 u_view;
 
 out vec2 v_uv;
+out vec2 v_px;
 flat out vec4 v_color;
 flat out vec4 v_misc;
 
 void main() {
     vec2 px = i_dst.xy + a_pos * i_dst.zw;
     v_uv = i_uv.xy + a_pos * i_uv.zw;
+    v_px = px;
     v_color = i_color;
     v_misc = i_misc;
     gl_Position = vec4(
@@ -206,21 +266,45 @@ precision highp float;
 
 uniform sampler2D u_mask;
 uniform sampler2D u_bitmap;
+uniform vec4 u_fade_rect;
+uniform vec4 u_fade_widths;
 
 in vec2 v_uv;
+in vec2 v_px;
 flat in vec4 v_color;
 flat in vec4 v_misc;
 
 out vec4 frag;
 
+float edge_fade_alpha(vec2 px, vec4 rect, vec4 w) {
+    if (w.x <= 0.0 && w.y <= 0.0 && w.z <= 0.0 && w.w <= 0.0) {
+        return 1.0;
+    }
+    float a = 1.0;
+    if (w.x > 0.0) {
+        a *= smoothstep(0.0, w.x, px.x - rect.x);
+    }
+    if (w.y > 0.0) {
+        a *= smoothstep(0.0, w.y, (rect.x + rect.z) - px.x);
+    }
+    if (w.z > 0.0) {
+        a *= smoothstep(0.0, w.z, px.y - rect.y);
+    }
+    if (w.w > 0.0) {
+        a *= smoothstep(0.0, w.w, (rect.y + rect.w) - px.y);
+    }
+    return a;
+}
+
 void main() {
+    float fade = edge_fade_alpha(v_px, u_fade_rect, u_fade_widths);
     if (v_misc.x > 0.5) {
         vec4 c = texture(u_bitmap, v_uv);
-        float a = c.a * v_misc.y;
+        float a = c.a * v_misc.y * fade;
         frag = vec4(c.rgb * a, a);
     } else {
         float m = texture(u_mask, v_uv).r;
-        float a = v_color.a * m * v_misc.y;
+        float a = v_color.a * m * v_misc.y * fade;
         frag = vec4(v_color.rgb * a, a);
     }
 }
@@ -230,6 +314,7 @@ void main() {
 pub const KIND_FILL: f32 = 0.0;
 pub const KIND_TOP_HIGHLIGHT: f32 = 1.0;
 pub const KIND_SHADOW: f32 = 2.0;
+pub const KIND_WAVE: f32 = 3.0;
 
 /// One SDF shape or shadow instance (20 floats, 80 bytes).
 #[repr(C)]
@@ -263,15 +348,25 @@ pub struct ScissorRect {
     pub h: i32,
 }
 
-/// A batch of primitives sharing one scissor clip rect, preserving z-order.
+/// Edge-fade mask in physical buffer pixels: `rect = [x, y, w, h]`,
+/// `widths = [left, right, top, bottom]`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct EdgeFade {
+    pub rect: [f32; 4],
+    pub widths: [f32; 4],
+}
+
+/// A batch of primitives sharing one scissor clip rect and edge fade, preserving z-order.
 #[derive(Debug, Clone)]
 pub enum DrawBatch {
     Quads {
         scissor: Option<ScissorRect>,
+        edge_fade: Option<EdgeFade>,
         instances: Vec<QuadInstance>,
     },
     Glyphs {
         scissor: Option<ScissorRect>,
+        edge_fade: Option<EdgeFade>,
         instances: Vec<GlyphInstance>,
     },
 }
@@ -288,36 +383,60 @@ impl DrawList {
     }
 
     pub fn push_quad(&mut self, scissor: Option<ScissorRect>, quad: QuadInstance) {
+        self.push_quad_faded(scissor, None, quad);
+    }
+
+    pub fn push_quad_faded(
+        &mut self,
+        scissor: Option<ScissorRect>,
+        edge_fade: Option<EdgeFade>,
+        quad: QuadInstance,
+    ) {
         if let Some(DrawBatch::Quads {
             scissor: last_sc,
+            edge_fade: last_ef,
             instances,
         }) = self.batches.last_mut()
             && *last_sc == scissor
+            && *last_ef == edge_fade
         {
             instances.push(quad);
             return;
         }
         self.batches.push(DrawBatch::Quads {
             scissor,
+            edge_fade,
             instances: vec![quad],
         });
     }
 
     pub fn push_glyphs(&mut self, scissor: Option<ScissorRect>, glyphs: &[GlyphInstance]) {
+        self.push_glyphs_faded(scissor, None, glyphs);
+    }
+
+    pub fn push_glyphs_faded(
+        &mut self,
+        scissor: Option<ScissorRect>,
+        edge_fade: Option<EdgeFade>,
+        glyphs: &[GlyphInstance],
+    ) {
         if glyphs.is_empty() {
             return;
         }
         if let Some(DrawBatch::Glyphs {
             scissor: last_sc,
+            edge_fade: last_ef,
             instances,
         }) = self.batches.last_mut()
             && *last_sc == scissor
+            && *last_ef == edge_fade
         {
             instances.extend_from_slice(glyphs);
             return;
         }
         self.batches.push(DrawBatch::Glyphs {
             scissor,
+            edge_fade,
             instances: glyphs.to_vec(),
         });
     }
@@ -353,10 +472,16 @@ pub struct Gpu {
     unit_vbo: glow::Buffer,
     quad_bo: glow::Buffer,
     glyph_bo: glow::Buffer,
+    corner_lut_tex: glow::Texture,
     view_loc_quad: Option<glow::UniformLocation>,
+    corner_lut_loc: Option<glow::UniformLocation>,
+    fade_rect_loc_quad: Option<glow::UniformLocation>,
+    fade_widths_loc_quad: Option<glow::UniformLocation>,
     view_loc_glyph: Option<glow::UniformLocation>,
     mask_loc: Option<glow::UniformLocation>,
     bitmap_loc: Option<glow::UniformLocation>,
+    fade_rect_loc_glyph: Option<glow::UniformLocation>,
+    fade_widths_loc_glyph: Option<glow::UniformLocation>,
 }
 
 impl Gpu {
@@ -380,6 +505,47 @@ impl Gpu {
                 .create_buffer()
                 .map_err(|e| EngineError::Gpu(format!("create unit_vbo: {e}")))?;
 
+            let lut_data =
+                corner_lut::bake_smooth_corner_lut(triton_design::shape::CORNER_SMOOTHING);
+            let corner_lut_tex = gl
+                .create_texture()
+                .map_err(|e| EngineError::Gpu(format!("create corner_lut_tex: {e}")))?;
+            gl.bind_texture(glow::TEXTURE_2D, Some(corner_lut_tex));
+            gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::LINEAR.cast_signed(),
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::LINEAR.cast_signed(),
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE.cast_signed(),
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE.cast_signed(),
+            );
+            let lut_dim = i32::try_from(corner_lut::LUT_SIZE).unwrap_or(256);
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                glow::R8.cast_signed(),
+                lut_dim,
+                lut_dim,
+                0,
+                glow::RED,
+                glow::UNSIGNED_BYTE,
+                glow::PixelUnpackData::Slice(Some(&lut_data)),
+            );
+            gl.bind_texture(glow::TEXTURE_2D, None);
+
             gl.bind_vertex_array(Some(vao));
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(unit_vbo));
             let verts: [f32; 8] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
@@ -391,9 +557,14 @@ impl Gpu {
 
             Ok(Self {
                 view_loc_quad: gl.get_uniform_location(quad_prog, "u_view"),
+                corner_lut_loc: gl.get_uniform_location(quad_prog, "u_corner_lut"),
+                fade_rect_loc_quad: gl.get_uniform_location(quad_prog, "u_fade_rect"),
+                fade_widths_loc_quad: gl.get_uniform_location(quad_prog, "u_fade_widths"),
                 view_loc_glyph: gl.get_uniform_location(glyph_prog, "u_view"),
                 mask_loc: gl.get_uniform_location(glyph_prog, "u_mask"),
                 bitmap_loc: gl.get_uniform_location(glyph_prog, "u_bitmap"),
+                fade_rect_loc_glyph: gl.get_uniform_location(glyph_prog, "u_fade_rect"),
+                fade_widths_loc_glyph: gl.get_uniform_location(glyph_prog, "u_fade_widths"),
                 gl,
                 quad_prog,
                 glyph_prog,
@@ -401,6 +572,7 @@ impl Gpu {
                 unit_vbo,
                 quad_bo,
                 glyph_bo,
+                corner_lut_tex,
             })
         }
     }
@@ -425,13 +597,21 @@ impl Gpu {
 
             for batch in &draw_list.batches {
                 match batch {
-                    DrawBatch::Quads { scissor, instances } if !instances.is_empty() => {
+                    DrawBatch::Quads {
+                        scissor,
+                        edge_fade,
+                        instances,
+                    } if !instances.is_empty() => {
                         self.apply_scissor(hi, *scissor);
-                        self.draw_quads_inner(w, h, instances);
+                        self.draw_quads_inner(w, h, *edge_fade, instances);
                     }
-                    DrawBatch::Glyphs { scissor, instances } if !instances.is_empty() => {
+                    DrawBatch::Glyphs {
+                        scissor,
+                        edge_fade,
+                        instances,
+                    } if !instances.is_empty() => {
                         self.apply_scissor(hi, *scissor);
-                        self.draw_glyphs_inner(w, h, atlas, instances);
+                        self.draw_glyphs_inner(w, h, *edge_fade, atlas, instances);
                     }
                     _ => {}
                 }
@@ -455,14 +635,38 @@ impl Gpu {
         }
     }
 
-    unsafe fn draw_quads_inner(&self, w: u32, h: u32, quads: &[QuadInstance]) {
+    unsafe fn draw_quads_inner(
+        &self,
+        w: u32,
+        h: u32,
+        edge_fade: Option<EdgeFade>,
+        quads: &[QuadInstance],
+    ) {
         let gl = &self.gl;
+        let ef = edge_fade.unwrap_or_default();
         // SAFETY: Caller holds a current GLES3 context and `quads` is non-empty.
         unsafe {
             gl.use_program(Some(self.quad_prog));
             if let Some(loc) = &self.view_loc_quad {
                 gl.uniform_2_f32(Some(loc), w as f32, h as f32);
             }
+            if let Some(loc) = &self.corner_lut_loc {
+                gl.uniform_1_i32(Some(loc), 2);
+            }
+            if let Some(loc) = &self.fade_rect_loc_quad {
+                gl.uniform_4_f32(Some(loc), ef.rect[0], ef.rect[1], ef.rect[2], ef.rect[3]);
+            }
+            if let Some(loc) = &self.fade_widths_loc_quad {
+                gl.uniform_4_f32(
+                    Some(loc),
+                    ef.widths[0],
+                    ef.widths[1],
+                    ef.widths[2],
+                    ef.widths[3],
+                );
+            }
+            gl.active_texture(glow::TEXTURE2);
+            gl.bind_texture(glow::TEXTURE_2D, Some(self.corner_lut_tex));
             gl.bind_vertex_array(Some(self.vao));
             self.bind_instance_attribs(
                 self.quad_bo,
@@ -485,10 +689,12 @@ impl Gpu {
         &self,
         w: u32,
         h: u32,
+        edge_fade: Option<EdgeFade>,
         atlas: &AtlasUpload<'_>,
         glyphs: &[GlyphInstance],
     ) {
         let gl = &self.gl;
+        let ef = edge_fade.unwrap_or_default();
         // SAFETY: Caller holds a current GLES3 context and `glyphs` is non-empty.
         unsafe {
             gl.use_program(Some(self.glyph_prog));
@@ -500,6 +706,18 @@ impl Gpu {
             }
             if let Some(loc) = &self.bitmap_loc {
                 gl.uniform_1_i32(Some(loc), 1);
+            }
+            if let Some(loc) = &self.fade_rect_loc_glyph {
+                gl.uniform_4_f32(Some(loc), ef.rect[0], ef.rect[1], ef.rect[2], ef.rect[3]);
+            }
+            if let Some(loc) = &self.fade_widths_loc_glyph {
+                gl.uniform_4_f32(
+                    Some(loc),
+                    ef.widths[0],
+                    ef.widths[1],
+                    ef.widths[2],
+                    ef.widths[3],
+                );
             }
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, atlas.mask_tex());
@@ -552,6 +770,7 @@ impl Drop for Gpu {
     fn drop(&mut self) {
         // SAFETY: Best-effort cleanup of GL objects when the engine shuts down.
         unsafe {
+            self.gl.delete_texture(self.corner_lut_tex);
             self.gl.delete_buffer(self.unit_vbo);
             self.gl.delete_buffer(self.quad_bo);
             self.gl.delete_buffer(self.glyph_bo);

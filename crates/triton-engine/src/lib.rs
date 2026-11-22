@@ -23,21 +23,27 @@
 //! VRAM across long-running sessions.
 
 pub mod anim;
+pub mod damage;
 pub mod error;
 pub mod gpu;
+pub mod image;
 pub mod platform;
 pub mod style;
 pub mod text;
+pub mod timer;
 pub mod ui;
 pub mod widgets;
 
 pub use anim::{Animator, Presence};
+pub use damage::{DamageRect, DamageTracker};
 pub use error::EngineError;
+pub use image::{ImageData, ImageFit, ImageId, ImageStore, ImageStyle};
 pub use platform::{
     AppCommand, ShellApp, SurfaceAnchor, SurfaceKeyboard, SurfaceLayer, SurfaceMetrics,
     SurfaceSize, SurfaceSpec, ViewContext, run,
 };
 pub use style::{Corners, DropShadow, Edges, FontSpec, Rect, Rgba, SubtreeTransform, Theme};
+pub use timer::TimerScheduler;
 pub use triton_design::motion::Spring;
 pub use ui::{
     BlurRect, BuiltFrame, Element, InputEvent, InteractionState, Key, NodeKey, TextAlign, box_,

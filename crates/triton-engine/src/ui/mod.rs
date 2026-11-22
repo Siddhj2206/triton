@@ -15,7 +15,10 @@ use triton_design::icon::{Icon, IconStyle};
 use triton_design::material::Material;
 use triton_design::shape::CORNER_SMOOTHING;
 
-use crate::gpu::{DrawList, KIND_FILL, KIND_SHADOW, KIND_TOP_HIGHLIGHT, QuadInstance, ScissorRect};
+use crate::gpu::{
+    DrawList, EdgeFade, KIND_FILL, KIND_SHADOW, KIND_TOP_HIGHLIGHT, KIND_WAVE, QuadInstance,
+    ScissorRect,
+};
 use crate::style::{Corners, DropShadow, Edges, FontSpec, Rect, Rgba, SubtreeTransform, Theme};
 use crate::text::TextEngine;
 
@@ -250,6 +253,10 @@ pub struct Element<M> {
     /// Marks whether this element claims pointer input for Wayland input regions
     /// (defaults to true when it has a fill or interaction handler).
     pub captures_input: bool,
+    /// Optional 9-lobe wave SDF `(phase_rad, amp_ratio)`.
+    pub wave: Option<(f32, f32)>,
+    /// Optional edge-fade widths (logical px) applied to this element's children.
+    pub edge_fade: Option<Edges>,
 }
 
 impl<M> Element<M> {
@@ -268,6 +275,8 @@ impl<M> Element<M> {
             scrollable: false,
             focusable: false,
             captures_input: false,
+            wave: None,
+            edge_fade: None,
         }
     }
 
@@ -576,6 +585,21 @@ impl<M> Element<M> {
         self
     }
 
+    pub fn wave(mut self) -> Self {
+        self.wave = Some((0.0, 0.075));
+        self
+    }
+
+    pub fn wave_animated(mut self, phase: f32, amp_ratio: f32) -> Self {
+        self.wave = Some((phase, amp_ratio));
+        self
+    }
+
+    pub fn edge_fade(mut self, widths: Edges) -> Self {
+        self.edge_fade = Some(widths);
+        self
+    }
+
     // ── interaction ──────────────────────────────────────────────────────────
 
     pub fn on_click(mut self, f: impl Fn() -> M + 'static) -> Self {
@@ -646,6 +670,8 @@ pub fn text<M>(
         scrollable: false,
         focusable: false,
         captures_input: false,
+        wave: None,
+        edge_fade: None,
     }
 }
 
@@ -926,6 +952,7 @@ pub fn layout_and_paint<M>(
         (0.0, 0.0),
         SubtreeTransform::IDENTITY,
         None,
+        None,
         scale,
         interaction,
         text,
@@ -1008,6 +1035,7 @@ fn paint_node<M>(
     origin: (f32, f32),
     parent_tf: SubtreeTransform,
     clip_rect: Option<Rect>,
+    edge_fade: Option<EdgeFade>,
     scale: f32,
     interaction: &InteractionState,
     text: &mut TextEngine,
@@ -1053,8 +1081,9 @@ fn paint_node<M>(
             .clamped(local_rect.w, local_rect.h)
             .map(|r| (r + sh.spread).max(0.0) * eff_scale);
         let cutout = elem.visual.fill.is_some_and(|f| f.a > 0.0 && f.a < 0.99);
-        draw_list.push_quad(
+        draw_list.push_quad_faded(
             scissor,
+            edge_fade,
             QuadInstance {
                 dst: [sx * scale, sy * scale, sw * scale, sh_h * scale],
                 radii,
@@ -1075,7 +1104,7 @@ fn paint_node<M>(
         );
     }
 
-    // 2. Background fill / hover-press state / border / top highlight
+    // 2. Background fill / hover-press state / border / top highlight / wave
     let hovered = elem.key.is_some_and(|k| interaction.is_hovered(k));
     let pressed = elem.key.is_some_and(|k| interaction.is_pressed(k));
     let fill = if pressed && elem.visual.press_fill.is_some() {
@@ -1086,21 +1115,35 @@ fn paint_node<M>(
         elem.visual.fill
     };
 
-    let has_shape =
-        fill.is_some() || elem.visual.border_width > 0.0 || elem.visual.top_highlight.is_some();
+    let has_shape = fill.is_some()
+        || elem.visual.border_width > 0.0
+        || elem.visual.top_highlight.is_some()
+        || elem.wave.is_some();
 
     let clamped_radii = elem.visual.radii.clamped(local_rect.w, local_rect.h);
     if has_shape && screen_rect.w > 0.0 && screen_rect.h > 0.0 {
         let fill_arr = fill.unwrap_or(Rgba::TRANSPARENT).to_array();
-        let (kind, border_arr, border_w) = if let Some(hl) = elem.visual.top_highlight {
+        let (kind, radii, border_arr, border_w) = if let Some((phase, amp)) = elem.wave {
+            (
+                KIND_WAVE,
+                [phase, amp, 9.0, 0.0],
+                elem.visual
+                    .border_color
+                    .unwrap_or(Rgba::TRANSPARENT)
+                    .to_array(),
+                elem.visual.border_width * eff_scale,
+            )
+        } else if let Some(hl) = elem.visual.top_highlight {
             (
                 KIND_TOP_HIGHLIGHT,
+                clamped_radii.map(|r| r * eff_scale),
                 hl.to_array(),
                 elem.visual.border_width * eff_scale,
             )
         } else {
             (
                 KIND_FILL,
+                clamped_radii.map(|r| r * eff_scale),
                 elem.visual
                     .border_color
                     .unwrap_or(Rgba::TRANSPARENT)
@@ -1108,8 +1151,9 @@ fn paint_node<M>(
                 elem.visual.border_width * eff_scale,
             )
         };
-        draw_list.push_quad(
+        draw_list.push_quad_faded(
             scissor,
+            edge_fade,
             QuadInstance {
                 dst: [
                     screen_rect.x * scale,
@@ -1117,7 +1161,7 @@ fn paint_node<M>(
                     screen_rect.w * scale,
                     screen_rect.h * scale,
                 ],
-                radii: clamped_radii.map(|r| r * eff_scale),
+                radii,
                 fill: fill_arr,
                 border: border_arr,
                 misc: [kind, elem.visual.smoothing, border_w, tf.opacity],
@@ -1170,15 +1214,16 @@ fn paint_node<M>(
             tf.opacity,
             scratch_glyphs,
         );
-        draw_list.push_glyphs(scissor, scratch_glyphs);
+        draw_list.push_glyphs_faded(scissor, edge_fade, scratch_glyphs);
     }
 
     // 4. Optional text caret (rendered inside this node's clip)
     if let Some((cx_off, ch, ccol)) = elem.visual.caret {
         let caret_x = screen_rect.x + cx_off * tf.scale;
         let caret_y = screen_rect.y + (screen_rect.h - ch * tf.scale) * 0.5;
-        draw_list.push_quad(
+        draw_list.push_quad_faded(
             scissor,
+            edge_fade,
             QuadInstance {
                 dst: [
                     caret_x * scale,
@@ -1194,7 +1239,7 @@ fn paint_node<M>(
         );
     }
 
-    // 5. Scroll & clipping setup for children
+    // 5. Scroll, clipping, and edge-fade setup for children
     let child_clip = if elem.visual.clip {
         Some(match clip_rect {
             Some(prev) => prev.intersect(screen_rect),
@@ -1202,6 +1247,25 @@ fn paint_node<M>(
         })
     } else {
         clip_rect
+    };
+
+    let child_edge_fade = if let Some(widths) = elem.edge_fade {
+        Some(EdgeFade {
+            rect: [
+                screen_rect.x * scale,
+                screen_rect.y * scale,
+                screen_rect.w * scale,
+                screen_rect.h * scale,
+            ],
+            widths: [
+                widths.left * eff_scale,
+                widths.right * eff_scale,
+                widths.top * eff_scale,
+                widths.bottom * eff_scale,
+            ],
+        })
+    } else {
+        edge_fade
     };
 
     let scroll_y = if elem.scrollable {
@@ -1254,6 +1318,7 @@ fn paint_node<M>(
             child_origin,
             tf,
             child_clip,
+            child_edge_fade,
             scale,
             interaction,
             text,
@@ -1274,8 +1339,9 @@ fn paint_node<M>(
         let thumb_w = 3.5;
         let thumb_x = screen_rect.x + screen_rect.w - (thumb_w + 2.0) * tf.scale;
         let scroll_scissor = child_clip.map(|c| rect_to_scissor(c, scale));
-        draw_list.push_quad(
+        draw_list.push_quad_faded(
             scroll_scissor,
+            edge_fade,
             QuadInstance {
                 dst: [
                     thumb_x * scale,

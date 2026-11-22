@@ -16,6 +16,9 @@ use crate::platform::wl_egl::EglWindow;
 /// `EGL_PLATFORM_WAYLAND_KHR` (0x31D8).
 const PLATFORM_WAYLAND: egl::Enum = 0x31D8;
 
+/// `EGL_BUFFER_AGE_KHR` / `EGL_BUFFER_AGE_EXT` (0x313D).
+const BUFFER_AGE_KHR: egl::Int = 0x313D;
+
 type SwapWithDamageFn =
     unsafe extern "system" fn(*mut c_void, *mut c_void, *const egl::Int, egl::Int) -> egl::Boolean;
 
@@ -26,6 +29,7 @@ pub struct Egl {
     context: egl::Context,
     config: egl::Config,
     swap_with_damage: Option<SwapWithDamageFn>,
+    has_buffer_age: bool,
 }
 
 impl fmt::Debug for Egl {
@@ -33,6 +37,7 @@ impl fmt::Debug for Egl {
         f.debug_struct("Egl")
             .field("display", &self.display)
             .field("swap_with_damage", &self.swap_with_damage.is_some())
+            .field("has_buffer_age", &self.has_buffer_age)
             .finish_non_exhaustive()
     }
 }
@@ -92,6 +97,13 @@ impl Egl {
             .create_context(display, config, None, &ctx_attribs)
             .map_err(|e| EngineError::Egl(format!("eglCreateContext(ES3): {e}")))?;
 
+        let extensions = instance
+            .query_string(Some(display), egl::EXTENSIONS)
+            .map_or_else(|_| String::new(), |s| s.to_string_lossy().into_owned());
+        let has_buffer_age = extensions
+            .split_whitespace()
+            .any(|ext| ext == "EGL_EXT_buffer_age" || ext == "EGL_KHR_partial_update");
+
         let swap_with_damage = instance
             .get_proc_address("eglSwapBuffersWithDamageKHR")
             .map(|f| {
@@ -100,6 +112,7 @@ impl Egl {
             });
         tracing::debug!(
             swap_with_damage = swap_with_damage.is_some(),
+            has_buffer_age,
             "queried EGL extensions"
         );
 
@@ -109,6 +122,7 @@ impl Egl {
             context,
             config,
             swap_with_damage,
+            has_buffer_age,
         })
     }
 
@@ -157,6 +171,20 @@ impl Egl {
     /// `wl_surface.frame` callbacks pace presentation without stalling inside Mesa.
     pub fn set_swap_interval(&self, interval: i32) {
         let _ = self.instance.swap_interval(self.display, interval);
+    }
+
+    /// Query `EGL_BUFFER_AGE_KHR` for `surface` when the buffer-age extension is supported.
+    ///
+    /// Returns `None` if the extension is unavailable, the query fails, or EGL reports a negative age.
+    pub fn buffer_age(&self, surface: EglSurface) -> Option<u32> {
+        if !self.has_buffer_age {
+            return None;
+        }
+        let age = self
+            .instance
+            .query_surface(self.display, surface.raw, BUFFER_AGE_KHR)
+            .ok()?;
+        u32::try_from(age).ok()
     }
 
     /// Present `surface`, reporting buffer-pixel damage rects when supported.
