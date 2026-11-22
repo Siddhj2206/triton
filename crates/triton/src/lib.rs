@@ -8,12 +8,19 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bar;
 pub mod cli;
 pub mod ipc;
 pub mod niri_config;
 pub mod niri_ipc;
 pub mod shell;
 pub mod state;
+
+pub use bar::{
+    BAR_HIDE_DELAY, BAR_REVEAL_DELAY_DEFAULT, BAR_REVEAL_DELAY_FULLSCREEN, BAR_REVEAL_EDGE_HEIGHT,
+    BAR_TOP_OFFSET, BarClock, BarConfig, BarController, TIMER_BAR_CLOCK, bar_hide_timer_tag,
+    bar_reveal_timer_tag,
+};
 
 pub use cli::{CliCommand, CliError, DaemonArgs, MsgArgs, parse_args};
 pub use ipc::{
