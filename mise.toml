@@ -27,11 +27,11 @@ description = "Build all crates (debug)"
 run = "cargo build"
 
 [tasks.check]
-description = "fmt check, clippy (warnings are errors), tests"
+description = "fmt check, clippy (warnings are errors), tests (incl. example tests)"
 run = [
   "cargo fmt --all --check",
   "cargo clippy --workspace --all-targets -- -D warnings",
-  "cargo test --workspace",
+  "cargo test --workspace --all-targets",
 ]
 
 [tasks.fmt]
@@ -45,6 +45,18 @@ run = "cargo test --workspace"
 [tasks.showcase]
 description = "Run the triton-kit showcase example (needs a Wayland session)"
 run = "cargo run -p triton-kit --example showcase"
+
+# ── isolated dev session ─────────────────────────────────────────────────────
+# Runs the showcase gallery inside a NESTED niri window: private session bus
+# (dbus-run-session), private XDG_RUNTIME_DIR, scratch HOME/XDG dirs — never
+# the host session or the real ~/.config/niri. See dev/nested/session.sh.
+
+[tasks.dev]
+description = "Nested niri dev session running the showcase gallery (isolated)"
+run = """
+cargo build -p triton-kit --example showcase
+REPO="$PWD" dbus-run-session -- sh dev/nested/session.sh "$PWD/target/debug/examples/showcase"
+"""
 
 # ── assets ───────────────────────────────────────────────────────────────────
 

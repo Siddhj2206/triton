@@ -1,0 +1,39 @@
+// dev/nested/niri.kdl — nested-niri config copied into the scratch
+// $XDG_CONFIG_HOME/niri by dev/nested/session.sh. Runs niri as a winit window
+// inside the host session; never applied to the real session.
+
+output "winit" {
+    scale 1.75
+}
+
+prefer-no-csd
+
+hotkey-overlay {
+    skip-at-startup
+}
+
+layout {
+    gaps 0
+    focus-ring {
+        off
+    }
+    border {
+        off
+    }
+}
+
+binds {
+    Mod+Shift+E { quit; }
+    Mod+Q { quit; }
+}
+
+// Real compositor blur behind every triton layer surface — this is what makes
+// Glass/Thick materials and their drop shadows actually read. `xray false`
+// keeps the host desktop from bleeding through.
+layer-rule {
+    match namespace="^triton"
+    background-effect {
+        blur true
+        xray false
+    }
+}
