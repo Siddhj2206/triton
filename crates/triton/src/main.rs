@@ -9,11 +9,11 @@ use anyhow::{Context, Result};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use triton::cli::USAGE;
-use triton::niri_config;
 use triton::{
     BackendMode, CliCommand, DaemonArgs, IpcResponse, IpcServer, MsgArgs, NiriIpc, ShellEvent,
-    TritonShell, parse_args, resolve_socket_path, send_command,
+    ThemeSyncConfig, TritonShell, parse_args, resolve_socket_path, send_command,
 };
+use triton::{niri_config, theme_pipeline};
 use triton_engine::{event_channel, run_with_events};
 
 fn main() -> ExitCode {
@@ -101,9 +101,11 @@ fn run_daemon(args: &DaemonArgs) -> Result<()> {
     app.set_event_sender(event_tx.clone());
 
     // ADR-0004: the only write the host `config.kdl` ever gets, and only under
-    // `--real-services`. The fake dev backend never touches niri config.
+    // `--real-services`. The fake dev backend never touches niri config, GTK
+    // CSS, or host `gsettings`.
     if args.backend == BackendMode::RealServices {
         install_niri_config(&app);
+        configure_theme_sync(&mut app);
     }
 
     // Live niri IPC only under --real-services; default fake dev mode never
@@ -151,6 +153,25 @@ fn install_niri_config(app: &TritonShell) {
             error!(dir = %config_dir.display(), error = %err, "owned niri config install failed");
         }
     }
+}
+
+/// Wire live GTK3/4 `gtk.css`, `triton/colors.kdl`, and `gsettings` syncing
+/// under `--real-services`, and perform the initial startup sync.
+fn configure_theme_sync(app: &mut TritonShell) {
+    let Some(config_root) = theme_pipeline::xdg_config_home() else {
+        warn!("HOME/XDG_CONFIG_HOME unset; skipping GTK/gsettings theme sync");
+        return;
+    };
+    let state = app.state();
+    if let Err(err) =
+        theme_pipeline::write_gtk_css(&config_root, &state.theme.scheme, state.theme.variant)
+    {
+        error!(dir = %config_root.display(), error = %err, "initial GTK css write failed");
+    }
+    if let Err(err) = theme_pipeline::apply_gsettings(state.theme.variant, state.backend) {
+        warn!(error = %err, "initial gsettings color-scheme update failed");
+    }
+    app.set_theme_sync(ThemeSyncConfig::real_services(config_root));
 }
 
 fn init_logging() {
