@@ -48,5 +48,5 @@ pub use timer::TimerScheduler;
 pub use triton_design::motion::Spring;
 pub use ui::{
     BlurRect, BuiltFrame, Element, InputEvent, InteractionState, Key, NodeKey, ScrollbarStyle,
-    TextAlign, box_, col, icon, image, row, text,
+    TextAlign, box_, col, icon, image, polyline, row, text,
 };

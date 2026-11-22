@@ -421,7 +421,9 @@ pub fn scroll_area<M>(
     children: impl IntoIterator<Item = Element<M>>,
 ) -> Element<M> {
     let key = key.into();
-    let active = interaction.is_scroll_hovered(key) || interaction.dragging == Some(key);
+    let active = interaction.is_scroll_hovered(key)
+        || interaction.is_scrollbar_dragging(key)
+        || interaction.is_dragging(key);
 
     let width = anim.spring_px(
         NodeKey(key.0 ^ SB_WIDTH_SALT),

@@ -149,6 +149,25 @@ void main() {
     float opacity = v_misc.w;
     float fade = edge_fade_alpha(v_px, u_fade_rect, u_fade_widths);
 
+    // Kind 4: Analytic round-capped line segment (capsule) SDF.
+    // `i_dst` is the segment's bounding quad padded by radius + AA margin;
+    // `i_radii` = (ax, ay, bx, by) in local quad coordinates (buffer px);
+    // `v_misc.z` = stroke half-width (radius, buffer px).
+    if (kind > 3.5) {
+        vec2 a = v_radii.xy;
+        vec2 b = v_radii.zw;
+        vec2 pa = v_local - a;
+        vec2 ba = b - a;
+        float denom = dot(ba, ba);
+        float h = (denom > 1e-6) ? clamp(dot(pa, ba) / denom, 0.0, 1.0) : 0.0;
+        float d = length(pa - ba * h) - param;
+        float aa = max(fwidth(d), 0.7);
+        float cover = 1.0 - smoothstep(-aa, aa, d);
+        float a_out = v_fill.a * cover * opacity * fade;
+        frag = vec4(v_fill.rgb * a_out, a_out);
+        return;
+    }
+
     // Kind 3: Analytic 9-lobe Wave SDF (`i_radii` = phase, lobe_amp, lobes, 0).
     if (kind > 2.5) {
         float phase = v_radii.x;
@@ -546,6 +565,7 @@ pub const KIND_FILL: f32 = 0.0;
 pub const KIND_TOP_HIGHLIGHT: f32 = 1.0;
 pub const KIND_SHADOW: f32 = 2.0;
 pub const KIND_WAVE: f32 = 3.0;
+pub const KIND_CAPSULE: f32 = 4.0;
 
 /// Highest per-instance vertex attribute location used by any pass (`IMAGE`
 /// uses locations `1..=7`; `QUAD` `1..=5`; `GLYPH` `1..=4`).

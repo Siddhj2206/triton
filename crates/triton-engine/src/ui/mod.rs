@@ -13,11 +13,11 @@ use taffy::style_helpers::{auto, length, percent};
 use taffy::{LayoutOutput, Overflow};
 use triton_design::icon::{Icon, IconStyle};
 use triton_design::material::Material;
-use triton_design::shape::CORNER_SMOOTHING;
+use triton_design::shape::{CORNER_SMOOTHING, Point};
 
 use crate::gpu::{
-    DrawList, EdgeFade, IMAGE_CLIP_ROUNDED, IMAGE_CLIP_WAVE, ImageInstance, KIND_FILL, KIND_SHADOW,
-    KIND_TOP_HIGHLIGHT, KIND_WAVE, QuadInstance, ScissorRect,
+    DrawList, EdgeFade, IMAGE_CLIP_ROUNDED, IMAGE_CLIP_WAVE, ImageInstance, KIND_CAPSULE,
+    KIND_FILL, KIND_SHADOW, KIND_TOP_HIGHLIGHT, KIND_WAVE, QuadInstance, ScissorRect,
 };
 use crate::image::{
     ImageFit, ImageId, ImageStore, ImageStyle, compute_contain_dst, compute_uv_rect,
@@ -86,6 +86,7 @@ pub enum InputEvent {
         ctrl: bool,
         shift: bool,
         alt: bool,
+        caps_lock: bool,
     },
 }
 
@@ -122,8 +123,16 @@ pub enum TextAlign {
 #[derive(Debug, Default)]
 pub struct InteractionState {
     pub hovered: Option<NodeKey>,
+    /// Keyed elements under the pointer from topmost downward, stopping at any
+    /// `input_opaque` barrier. Lets containers (e.g. hover-pausing toasts or
+    /// menus) detect pointer presence even over interactive children.
+    pub hovered_keys: Vec<NodeKey>,
     pub pressed: Option<NodeKey>,
     pub dragging: Option<NodeKey>,
+    /// Active scrollbar thumb drag target, if the user is dragging a scroll
+    /// container's scrollbar directly.
+    pub scrollbar_dragging: Option<NodeKey>,
+    pub scrollbar_grab_offset: f32,
     pub focused: Option<NodeKey>,
     /// The topmost scroll container under the pointer, if any. Unlike
     /// [`Self::hovered`] this also tracks non-interactive children, so it is
@@ -131,11 +140,20 @@ pub struct InteractionState {
     pub scroll_hovered: Option<NodeKey>,
     pub scroll_offsets: HashMap<NodeKey, f32>,
     pub pointer_pos: Option<(f32, f32)>,
+    /// Live keyboard Caps Lock latch state (synced from Wayland modifiers and
+    /// [`InputEvent::KeyDown`]).
+    pub caps_lock: bool,
 }
 
 impl InteractionState {
     pub fn is_hovered(&self, key: NodeKey) -> bool {
         self.hovered == Some(key)
+    }
+
+    /// Whether the pointer is anywhere within `key` (including over interactive
+    /// descendants), respecting `input_opaque` barriers above it.
+    pub fn is_hovered_within(&self, key: NodeKey) -> bool {
+        self.hovered_keys.contains(&key)
     }
 
     /// Whether the pointer is anywhere over the scroll viewport of `key`,
@@ -148,8 +166,20 @@ impl InteractionState {
         self.pressed == Some(key)
     }
 
+    pub fn is_dragging(&self, key: NodeKey) -> bool {
+        self.dragging == Some(key)
+    }
+
+    pub fn is_scrollbar_dragging(&self, key: NodeKey) -> bool {
+        self.scrollbar_dragging == Some(key)
+    }
+
     pub fn is_focused(&self, key: NodeKey) -> bool {
         self.focused == Some(key)
+    }
+
+    pub fn caps_lock(&self) -> bool {
+        self.caps_lock
     }
 
     pub fn scroll_offset(&self, key: NodeKey) -> f32 {
@@ -283,6 +313,13 @@ pub enum ElementContent {
         id: ImageId,
         style: ImageStyle,
     },
+    /// Open or closed polyline stroked with round-capped SDF capsules.
+    /// Points are in local logical coordinates relative to this element's top-left.
+    Polyline {
+        points: Vec<Point>,
+        width: f32,
+        color: Rgba,
+    },
 }
 
 /// A declarative UI element producing layout, paint commands, blur regions, and
@@ -304,6 +341,9 @@ pub struct Element<M> {
     /// Scrollbar appearance when [`Self::scrollable`] (see [`ScrollbarStyle`]).
     pub scrollbar: ScrollbarStyle,
     pub focusable: bool,
+    /// Opt this container into hover hit-testing (`InteractionState::is_hovered_within`)
+    /// without giving it click/drag handlers (e.g. hover-pausing toast cards).
+    pub hoverable: bool,
     /// Hit-testing treats this element as opaque: interactive elements painted
     /// beneath it cannot be reached through it (modal card over a scrim).
     /// Pair with [`Element::id`] so a press started here cannot release onto a
@@ -337,6 +377,7 @@ impl<M> Element<M> {
             scrollable: false,
             scrollbar: ScrollbarStyle::default(),
             focusable: false,
+            hoverable: false,
             input_opaque: false,
             captures_input: false,
             wave: None,
@@ -710,6 +751,14 @@ impl<M> Element<M> {
         self
     }
 
+    /// Track pointer presence over this element (and its descendants) in
+    /// [`InteractionState::is_hovered_within`] without adding click/drag handlers.
+    pub fn hoverable(mut self) -> Self {
+        self.hoverable = true;
+        self.captures_input = true;
+        self
+    }
+
     /// Make this element opaque to hit-testing: pointer events cannot reach
     /// interactive elements painted beneath it (e.g. a modal card over a
     /// dismiss scrim). Give the element an [`Element::id`] so a press started
@@ -763,6 +812,7 @@ pub fn text<M>(
         scrollable: false,
         scrollbar: ScrollbarStyle::default(),
         focusable: false,
+        hoverable: false,
         input_opaque: false,
         captures_input: false,
         wave: None,
@@ -804,6 +854,37 @@ pub fn image<M>(id: ImageId, style: ImageStyle) -> Element<M> {
         scrollable: false,
         scrollbar: ScrollbarStyle::default(),
         focusable: false,
+        hoverable: false,
+        input_opaque: false,
+        captures_input: false,
+        wave: None,
+        edge_fade: None,
+        layer_key: None,
+    }
+}
+
+/// Round-capped SDF polyline leaf stroked at `width` logical px.
+///
+/// `points` are in local logical coordinates relative to this element's top-left
+/// corner (matching the geometry returned by `triton_design::wave::wavy_line`
+/// and `triton_design::wave::wavy_ring`). Give the element explicit dimensions
+/// via `.size(w, h)` / `.w()` / `.h()`.
+pub fn polyline<M>(points: Vec<Point>, width: f32, color: impl Into<Rgba>) -> Element<M> {
+    Element {
+        key: None,
+        layout: Style::default(),
+        visual: VisualStyle::default(),
+        content: ElementContent::Polyline {
+            points,
+            width,
+            color: color.into(),
+        },
+        children: Vec::new(),
+        handlers: Handlers::default(),
+        scrollable: false,
+        scrollbar: ScrollbarStyle::default(),
+        focusable: false,
+        hoverable: false,
         input_opaque: false,
         captures_input: false,
         wave: None,
@@ -831,16 +912,22 @@ impl<M> Element<M> {
 // ── laid-out tree & hit testing ──────────────────────────────────────────────
 
 /// One interactive hit target extracted automatically during layout/paint.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "flat hit-test capability flags mirror Element flags"
+)]
 pub struct HitEntry<M> {
     pub key: Option<NodeKey>,
     pub rect: Rect,
     pub clip: Option<Rect>,
     pub scrollable: bool,
+    pub scrollbar: ScrollbarStyle,
     /// Element is opaque to hit-testing: interactive entries painted beneath
     /// it (earlier in the hit list) cannot receive pointer events.
     pub input_opaque: bool,
     pub content_height: f32,
     pub focusable: bool,
+    pub hoverable: bool,
     pub on_click: Option<ClickHandler<M>>,
     pub on_drag: Option<DragHandler<M>>,
     pub on_key: Option<KeyHandler<M>>,
@@ -896,6 +983,22 @@ impl<M> BuiltFrame<M> {
         match *event {
             InputEvent::PointerMove { x, y } => {
                 interaction.pointer_pos = Some((x, y));
+                if let Some(sb_key) = interaction.scrollbar_dragging {
+                    if let Some(entry) = self
+                        .hits
+                        .iter()
+                        .rev()
+                        .find(|e| e.key == Some(sb_key) && e.scrollable)
+                    {
+                        let next =
+                            scrollbar_offset_for_y(entry, y, interaction.scrollbar_grab_offset);
+                        if (next - interaction.scroll_offset(sb_key)).abs() > 0.1 {
+                            interaction.set_scroll_offset(sb_key, next);
+                            dirty = true;
+                        }
+                    }
+                    return (msgs, dirty);
+                }
                 if let Some(drag_key) = interaction.dragging {
                     if let Some(entry) = self
                         .hits
@@ -914,6 +1017,11 @@ impl<M> BuiltFrame<M> {
                     interaction.hovered = new_hover;
                     dirty = true;
                 }
+                let new_hovered_keys = self.hovered_keys_at(x, y);
+                if new_hovered_keys != interaction.hovered_keys {
+                    interaction.hovered_keys = new_hovered_keys;
+                    dirty = true;
+                }
                 let new_scroll_hover = self.top_scrollable_at(x, y).and_then(|e| e.key);
                 if new_scroll_hover != interaction.scroll_hovered {
                     interaction.scroll_hovered = new_scroll_hover;
@@ -926,6 +1034,10 @@ impl<M> BuiltFrame<M> {
                     interaction.hovered = None;
                     dirty = true;
                 }
+                if !interaction.hovered_keys.is_empty() {
+                    interaction.hovered_keys.clear();
+                    dirty = true;
+                }
                 if interaction.scroll_hovered.is_some() {
                     interaction.scroll_hovered = None;
                     dirty = true;
@@ -933,6 +1045,16 @@ impl<M> BuiltFrame<M> {
             }
             InputEvent::PointerDown { x, y, .. } => {
                 interaction.pointer_pos = Some((x, y));
+                if let Some((entry, key, grab_offset, initial_scroll)) =
+                    self.scrollbar_hit_at(x, y, interaction)
+                {
+                    let _ = entry;
+                    interaction.scrollbar_dragging = Some(key);
+                    interaction.scrollbar_grab_offset = grab_offset;
+                    interaction.set_scroll_offset(key, initial_scroll);
+                    dirty = true;
+                    return (msgs, dirty);
+                }
                 if let Some(entry) = self.top_interactive_at(x, y) {
                     if entry.focusable {
                         interaction.focused = entry.key;
@@ -958,12 +1080,14 @@ impl<M> BuiltFrame<M> {
                 }
             }
             InputEvent::PointerUp { x, y, .. } => {
+                let was_sb_dragging = interaction.scrollbar_dragging.take();
                 let was_dragging = interaction.dragging.take();
                 let was_pressed = interaction.pressed.take();
-                if was_dragging.is_some() || was_pressed.is_some() {
+                if was_sb_dragging.is_some() || was_dragging.is_some() || was_pressed.is_some() {
                     dirty = true;
                 }
-                if was_dragging.is_none()
+                if was_sb_dragging.is_none()
+                    && was_dragging.is_none()
                     && let Some(entry) = self.top_interactive_at(x, y)
                     && (was_pressed.is_none() || entry.key == was_pressed)
                     && let Some(on_click) = &entry.on_click
@@ -984,7 +1108,11 @@ impl<M> BuiltFrame<M> {
                     }
                 }
             }
-            InputEvent::KeyDown { .. } => {
+            InputEvent::KeyDown { caps_lock, .. } => {
+                if interaction.caps_lock != caps_lock {
+                    interaction.caps_lock = caps_lock;
+                    dirty = true;
+                }
                 // Deliver to focused node first, then fall back to any key handler.
                 if let Some(focused) = interaction.focused
                     && let Some(entry) = self
@@ -1035,6 +1163,73 @@ impl<M> BuiltFrame<M> {
         }
         None
     }
+
+    /// All keyed hit entries under `(x, y)` from topmost down, stopping after
+    /// the first `input_opaque` entry so modal overlays shield lower layers.
+    fn hovered_keys_at(&self, x: f32, y: f32) -> Vec<NodeKey> {
+        let mut keys = Vec::new();
+        for e in self.hits.iter().rev() {
+            if !e.rect.contains(x, y) || e.clip.is_some_and(|c| !c.contains(x, y)) {
+                continue;
+            }
+            if let Some(k) = e.key
+                && !keys.contains(&k)
+            {
+                keys.push(k);
+            }
+            if e.input_opaque {
+                break;
+            }
+        }
+        keys
+    }
+
+    /// Hit-test the scrollbar strip of the topmost overflowing scroll container
+    /// at `(x, y)`, returning `(entry, key, grab_offset, initial_scroll)`.
+    fn scrollbar_hit_at(
+        &self,
+        x: f32,
+        y: f32,
+        interaction: &InteractionState,
+    ) -> Option<(&HitEntry<M>, NodeKey, f32, f32)> {
+        let entry = self.top_scrollable_at(x, y)?;
+        let key = entry.key?;
+        let sb = entry.scrollbar;
+        if entry.content_height <= entry.rect.h + 1.0 || sb.width <= 0.0 || sb.color.a <= 0.0 {
+            return None;
+        }
+        let hit_w = sb.width.max(12.0) + sb.margin + 2.0;
+        if x < entry.rect.x + entry.rect.w - hit_w {
+            return None;
+        }
+        let (track_h, thumb_h, max_scroll) = scrollbar_metrics(entry);
+        let cur = interaction.scroll_offset(key);
+        let progress = (cur / max_scroll).clamp(0.0, 1.0);
+        let thumb_y = entry.rect.y + sb.track_inset + progress * (track_h - thumb_h);
+        let (grab_offset, initial_scroll) = if y >= thumb_y && y <= thumb_y + thumb_h {
+            (y - thumb_y, cur)
+        } else {
+            let grab = thumb_h * 0.5;
+            (grab, scrollbar_offset_for_y(entry, y, grab))
+        };
+        Some((entry, key, grab_offset, initial_scroll))
+    }
+}
+
+fn scrollbar_metrics<M>(entry: &HitEntry<M>) -> (f32, f32, f32) {
+    let sb = entry.scrollbar;
+    let track_h = (entry.rect.h - sb.track_inset * 2.0).max(8.0);
+    let thumb_h =
+        ((entry.rect.h / entry.content_height) * track_h).clamp(sb.min_thumb.min(track_h), track_h);
+    let max_scroll = (entry.content_height - entry.rect.h).max(1.0);
+    (track_h, thumb_h, max_scroll)
+}
+
+fn scrollbar_offset_for_y<M>(entry: &HitEntry<M>, y: f32, grab_offset: f32) -> f32 {
+    let (track_h, thumb_h, max_scroll) = scrollbar_metrics(entry);
+    let travel = (track_h - thumb_h).max(1.0);
+    let thumb_top = y - (entry.rect.y + entry.scrollbar.track_inset) - grab_offset;
+    ((thumb_top / travel).clamp(0.0, 1.0)) * max_scroll
 }
 
 /// Measure the natural logical size of `root` using Taffy + `TextEngine`,
@@ -1137,9 +1332,9 @@ fn build_taffy_nodes<M>(tree: &mut TaffyTree<TextMeasureContext>, elem: &Element
                 },
             )
             .expect("taffy text leaf"),
-        ElementContent::Image { .. } => tree
-            .new_leaf(elem.layout.clone())
-            .expect("taffy image leaf"),
+        ElementContent::Image { .. } | ElementContent::Polyline { .. } => {
+            tree.new_leaf(elem.layout.clone()).expect("taffy leaf")
+        }
         ElementContent::Container => {
             let child_ids: Vec<NodeId> = elem
                 .children
@@ -1565,6 +1760,56 @@ fn paint_node<M>(
         );
     }
 
+    // 4b. Polyline content (round-capped SDF capsule segments)
+    if let ElementContent::Polyline {
+        points,
+        width,
+        color,
+    } = &elem.content
+        && !points.is_empty()
+        && *width > 0.0
+        && color.a > 0.0
+    {
+        let radius = (*width * 0.5 * eff_scale).max(0.5);
+        let pad = radius + 2.0;
+        let to_buf = |pt: Point| -> (f32, f32) {
+            (
+                (screen_rect.x + pt.x * tf.scale) * scale,
+                (screen_rect.y + pt.y * tf.scale) * scale,
+            )
+        };
+        let emit_capsule = |draw_list: &mut DrawList, p0: (f32, f32), p1: (f32, f32)| {
+            let min_x = p0.0.min(p1.0) - pad;
+            let min_y = p0.1.min(p1.1) - pad;
+            let max_x = p0.0.max(p1.0) + pad;
+            let max_y = p0.1.max(p1.1) + pad;
+            draw_list.push_quad_faded(
+                scissor,
+                edge_fade,
+                QuadInstance {
+                    dst: [
+                        min_x,
+                        min_y,
+                        (max_x - min_x).max(1.0),
+                        (max_y - min_y).max(1.0),
+                    ],
+                    radii: [p0.0 - min_x, p0.1 - min_y, p1.0 - min_x, p1.1 - min_y],
+                    fill: color.to_array(),
+                    border: [0.0; 4],
+                    misc: [KIND_CAPSULE, 0.0, radius, tf.opacity],
+                },
+            );
+        };
+        if points.len() == 1 {
+            let p = to_buf(points[0]);
+            emit_capsule(draw_list, p, p);
+        } else {
+            for seg in points.windows(2) {
+                emit_capsule(draw_list, to_buf(seg[0]), to_buf(seg[1]));
+            }
+        }
+    }
+
     // 5. Optional text caret (rendered inside this node's clip)
     if let Some((cx_off, ch, ccol)) = elem.visual.caret {
         let caret_x = screen_rect.x + cx_off * tf.scale;
@@ -1642,6 +1887,7 @@ fn paint_node<M>(
         || elem.handlers.on_key.is_some()
         || elem.scrollable
         || elem.focusable
+        || elem.hoverable
         || elem.input_opaque
     {
         frame.hits.push(HitEntry {
@@ -1649,9 +1895,11 @@ fn paint_node<M>(
             rect: screen_rect,
             clip: clip_rect,
             scrollable: elem.scrollable,
+            scrollbar: elem.scrollbar,
             input_opaque: elem.input_opaque,
             content_height,
             focusable: elem.focusable,
+            hoverable: elem.hoverable,
             on_click: elem.handlers.on_click,
             on_drag: elem.handlers.on_drag,
             on_key: elem.handlers.on_key,

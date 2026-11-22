@@ -593,7 +593,10 @@ impl<A: ShellApp> Runtime<A> {
                 configured: false,
                 frame_pending: false,
                 needs_redraw: true,
-                interaction: InteractionState::default(),
+                interaction: InteractionState {
+                    caps_lock: self.modifiers.caps_lock,
+                    ..InteractionState::default()
+                },
                 animator: Animator::new(),
                 built: BuiltFrame::default(),
                 last_blur: Vec::new(),
@@ -1379,14 +1382,22 @@ impl<A: ShellApp> KeyboardHandler for Runtime<A> {
     fn update_modifiers(
         &mut self,
         _: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
         modifiers: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        let caps_changed = modifiers.caps_lock != self.modifiers.caps_lock;
         self.modifiers = modifiers;
+        if caps_changed {
+            for host in self.hosts.values_mut() {
+                host.interaction.caps_lock = modifiers.caps_lock;
+                host.needs_redraw = true;
+                queue_frame(host, qh);
+            }
+        }
     }
 }
 
@@ -1402,6 +1413,7 @@ impl<A: ShellApp> Runtime<A> {
             ctrl: self.modifiers.ctrl,
             shift: self.modifiers.shift,
             alt: self.modifiers.alt,
+            caps_lock: self.modifiers.caps_lock,
         };
         self.dispatch_ui_event(id, &ev, qh);
     }
