@@ -15,7 +15,7 @@ use crate::error::EngineError;
 use crate::gpu::{DrawList, Gpu};
 use crate::image::ImageStore;
 use crate::platform::egl::Egl;
-use crate::platform::{ShellApp, SurfaceSize, ViewContext};
+use crate::platform::{AppCommand, EventReceiver, OutputInfo, ShellApp, SurfaceSize, ViewContext};
 use crate::style::{Rect, Rgba};
 use crate::text::TextEngine;
 use crate::ui::{
@@ -38,6 +38,7 @@ pub struct HeadlessSession<M> {
     images: ImageStore,
     draw_list: DrawList,
     frame: BuiltFrame<M>,
+    outputs: Vec<OutputInfo>,
 }
 
 impl<M> std::fmt::Debug for HeadlessSession<M> {
@@ -65,6 +66,7 @@ impl<M> HeadlessSession<M> {
             images: ImageStore::new(),
             draw_list: DrawList::default(),
             frame: BuiltFrame::default(),
+            outputs: Vec::new(),
         }
     }
 
@@ -140,6 +142,75 @@ impl<M> HeadlessSession<M> {
     /// Sync images from a [`ShellApp`] into this session's [`ImageStore`].
     pub fn sync_app_images<A: ShellApp>(&mut self, app: &mut A) {
         app.sync_images(&mut self.images);
+    }
+
+    /// Return the current headless output inventory.
+    pub fn outputs(&self) -> &[OutputInfo] {
+        &self.outputs
+    }
+
+    /// Replace the headless output inventory and deliver `on_outputs_changed` to `app`.
+    pub fn set_outputs<A: ShellApp>(
+        &mut self,
+        app: &mut A,
+        outputs: Vec<OutputInfo>,
+    ) -> Vec<AppCommand<A::SurfaceId>> {
+        self.outputs = outputs;
+        let cmds = app.on_outputs_changed(&self.outputs, self.now);
+        app.sync_images(&mut self.images);
+        cmds
+    }
+
+    /// Add or update an output (matched by `output.name`) and notify `app`.
+    pub fn add_output<A: ShellApp>(
+        &mut self,
+        app: &mut A,
+        output: OutputInfo,
+    ) -> Vec<AppCommand<A::SurfaceId>> {
+        if let Some(existing) = self.outputs.iter_mut().find(|o| o.name == output.name) {
+            *existing = output;
+        } else {
+            self.outputs.push(output);
+        }
+        let cmds = app.on_outputs_changed(&self.outputs, self.now);
+        app.sync_images(&mut self.images);
+        cmds
+    }
+
+    /// Remove an output by `name` and notify `app` (no-op if absent).
+    pub fn remove_output<A: ShellApp>(
+        &mut self,
+        app: &mut A,
+        name: &str,
+    ) -> Vec<AppCommand<A::SurfaceId>> {
+        let before = self.outputs.len();
+        self.outputs.retain(|o| o.name != name);
+        if self.outputs.len() == before {
+            return Vec::new();
+        }
+        let cmds = app.on_outputs_changed(&self.outputs, self.now);
+        app.sync_images(&mut self.images);
+        cmds
+    }
+
+    /// Drain all pending external events from `receiver` in FIFO order, invoking
+    /// `on_event` at the session's virtual clock and syncing images afterward.
+    pub fn drain_events<A, E, F>(
+        &mut self,
+        app: &mut A,
+        receiver: &EventReceiver<E>,
+        mut on_event: F,
+    ) -> Vec<AppCommand<A::SurfaceId>>
+    where
+        A: ShellApp,
+        F: FnMut(&mut A, E, Instant) -> Vec<AppCommand<A::SurfaceId>>,
+    {
+        let mut cmds = Vec::new();
+        for ev in receiver.drain() {
+            cmds.extend(on_event(app, ev, self.now));
+        }
+        app.sync_images(&mut self.images);
+        cmds
     }
 
     /// Render a single frame from `view` at the session's current `size` and virtual clock.
@@ -228,6 +299,45 @@ impl<M> HeadlessSession<M> {
             );
         }
         &self.frame
+    }
+
+    /// Simulate the pointer entering surface `id` at logical coordinates `pos`.
+    ///
+    /// Invokes [`ShellApp::on_pointer_enter`] at the session's virtual clock and
+    /// dispatches `InputEvent::PointerMove` so widget hover hit-testing updates
+    /// identically to the live Wayland runtime.
+    pub fn pointer_enter<A: ShellApp<Message = M>>(
+        &mut self,
+        app: &mut A,
+        id: A::SurfaceId,
+        pos: (f32, f32),
+    ) -> Vec<AppCommand<A::SurfaceId>> {
+        let mut cmds = app.on_pointer_enter(id, pos, self.now);
+        let msgs = self.dispatch(&InputEvent::PointerMove { x: pos.0, y: pos.1 });
+        for msg in msgs {
+            cmds.extend(app.update(id, msg, self.now));
+        }
+        app.sync_images(&mut self.images);
+        cmds
+    }
+
+    /// Simulate the pointer leaving surface `id`.
+    ///
+    /// Clears widget hover/press state via `InputEvent::PointerLeave` and
+    /// invokes [`ShellApp::on_pointer_leave`] at the session's virtual clock.
+    pub fn pointer_leave<A: ShellApp<Message = M>>(
+        &mut self,
+        app: &mut A,
+        id: A::SurfaceId,
+    ) -> Vec<AppCommand<A::SurfaceId>> {
+        let mut cmds = Vec::new();
+        let msgs = self.dispatch(&InputEvent::PointerLeave);
+        for msg in msgs {
+            cmds.extend(app.update(id, msg, self.now));
+        }
+        cmds.extend(app.on_pointer_leave(id, self.now));
+        app.sync_images(&mut self.images);
+        cmds
     }
 
     /// Dispatch a raw [`InputEvent`] against the last rendered frame.

@@ -2218,6 +2218,7 @@ impl ShellApp for ShowcaseApp {
                         max_h: Some(760 + 64 + 96),
                     },
                     shaped_input: true,
+                    output: None,
                 },
             ));
         }

@@ -45,8 +45,9 @@ pub use headless::{
 };
 pub use image::{ImageData, ImageFit, ImageId, ImageStore, ImageStyle};
 pub use platform::{
-    AppCommand, ShellApp, SurfaceAnchor, SurfaceKeyboard, SurfaceLayer, SurfaceMetrics,
-    SurfaceSize, SurfaceSpec, ViewContext, run,
+    AppCommand, EventReceiver, EventSender, OutputInfo, ShellApp, SurfaceAnchor, SurfaceKeyboard,
+    SurfaceLayer, SurfaceMetrics, SurfaceSize, SurfaceSpec, ViewContext, event_channel, run,
+    run_with_events,
 };
 pub use style::{Corners, DropShadow, Edges, FontSpec, Rect, Rgba, SubtreeTransform, Theme};
 pub use timer::TimerScheduler;
