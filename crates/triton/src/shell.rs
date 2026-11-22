@@ -18,6 +18,7 @@ use triton_kit::{
 };
 
 use crate::ipc::{BarCommand, IpcCommand, IpcResponse, OsdCommand, ThemeCommand};
+use crate::niri_ipc::{NiriAction, NiriActionSender};
 use crate::state::{
     BackendMode, BarMode, OsdPayload, OsdState, OutputKey, ShellEvent, ShellState,
     ShellStatusSnapshot, SurfaceRole, SurfaceSummary, variant_as_str,
@@ -67,6 +68,8 @@ pub struct TritonShell {
     name_to_key: HashMap<String, OutputKey>,
     key_to_name: HashMap<OutputKey, String>,
     next_output_key: u32,
+    /// Non-blocking niri action dispatch (set only under `--real-services`).
+    niri_sink: Option<NiriActionSender>,
 }
 
 impl TritonShell {
@@ -78,6 +81,7 @@ impl TritonShell {
             name_to_key: HashMap::new(),
             key_to_name: HashMap::new(),
             next_output_key: 1,
+            niri_sink: None,
         };
         let initial_outputs = shell.state.outputs.clone();
         shell.sync_output_registry(&initial_outputs);
@@ -87,6 +91,17 @@ impl TritonShell {
     /// Borrow the current [`ShellState`].
     pub fn state(&self) -> &ShellState {
         &self.state
+    }
+
+    /// Inject the niri action sink used to dispatch compositor actions
+    /// (workspace pill clicks) off the UI thread under `--real-services`.
+    pub fn set_niri_action_sink(&mut self, sink: NiriActionSender) {
+        self.niri_sink = Some(sink);
+    }
+
+    /// Current niri action sink, if live compositor integration is active.
+    pub fn niri_action_sink(&self) -> Option<&NiriActionSender> {
+        self.niri_sink.as_ref()
     }
 
     /// Mutably borrow the current [`ShellState`].
@@ -701,6 +716,9 @@ impl ShellApp for TritonShell {
     ) -> Vec<AppCommand<Self::SurfaceId>> {
         match msg {
             ShellMessage::FocusWorkspace(ws_id) => {
+                if let Some(sink) = &self.niri_sink {
+                    sink.send(NiriAction::FocusWorkspace(ws_id));
+                }
                 for ws in &mut self.state.workspaces {
                     ws.is_active = ws.id == ws_id;
                     ws.is_focused = ws.id == ws_id;

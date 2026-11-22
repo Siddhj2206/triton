@@ -11,6 +11,7 @@
 pub mod cli;
 pub mod ipc;
 pub mod niri_config;
+pub mod niri_ipc;
 pub mod shell;
 pub mod state;
 
@@ -24,6 +25,7 @@ pub use niri_config::{
     render_colors, render_index, render_layer_rules, write_colors, write_layer_rules,
     write_owned_files,
 };
+pub use niri_ipc::{NIRI_SOCKET_ENV, NiriAction, NiriActionSender, NiriIpc, NiriIpcError};
 pub use shell::{ShellMessage, SurfaceId, TIMER_OSD_HIDE, TritonShell};
 pub use state::{
     BackendMode, BarMode, FocusedWindow, OsdPayload, OsdState, OutputKey, ShellEvent, ShellState,
