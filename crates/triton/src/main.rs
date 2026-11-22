@@ -86,7 +86,7 @@ fn run_daemon(args: &DaemonArgs) -> Result<()> {
     let socket_path =
         resolve_socket_path(args.socket.as_deref()).context("resolve triton IPC socket path")?;
     let (event_tx, event_rx) = event_channel::<ShellEvent>();
-    let _ipc_server = IpcServer::bind(socket_path.clone(), event_tx)
+    let _ipc_server = IpcServer::bind(socket_path.clone(), event_tx.clone())
         .with_context(|| format!("bind IPC socket at {}", socket_path.display()))?;
 
     info!(
@@ -95,7 +95,10 @@ fn run_daemon(args: &DaemonArgs) -> Result<()> {
         "starting triton shell daemon"
     );
 
-    let app = TritonShell::new(args.backend);
+    let mut app = TritonShell::new(args.backend);
+    // Lets `SetWallpaper` spawn off-thread decode workers that deliver
+    // `WallpaperReady`/`WallpaperFailed` back into this same event loop.
+    app.set_event_sender(event_tx);
 
     // ADR-0004: the only write the host `config.kdl` ever gets, and only under
     // `--real-services`. The fake dev backend never touches niri config.

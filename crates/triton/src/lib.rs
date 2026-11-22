@@ -13,6 +13,7 @@ pub mod ipc;
 pub mod niri_config;
 pub mod shell;
 pub mod state;
+pub mod wallpaper;
 
 pub use cli::{CliCommand, CliError, DaemonArgs, MsgArgs, parse_args};
 pub use ipc::{
@@ -24,8 +25,13 @@ pub use niri_config::{
     render_colors, render_index, render_layer_rules, write_colors, write_layer_rules,
     write_owned_files,
 };
-pub use shell::{ShellMessage, SurfaceId, TIMER_OSD_HIDE, TritonShell};
+pub use shell::{ShellMessage, SurfaceId, TIMER_OSD_HIDE, TIMER_WALLPAPER_SETTLE, TritonShell};
 pub use state::{
     BackendMode, BarMode, FocusedWindow, OsdPayload, OsdState, OutputKey, ShellEvent, ShellState,
     ShellStatusSnapshot, StatusSummary, SurfaceRole, SurfaceSummary, WallpaperState, WorkspaceInfo,
+};
+pub use wallpaper::{
+    BRIGHT_BACKDROP_THRESHOLD, CROSSFADE_DURATION, CROSSFADE_DURATION_REDUCED, Crossfade,
+    WallpaperError, WallpaperImage, WallpaperSet, crossfade_duration, mean_relative_luminance,
+    spawn_decode, view_background,
 };

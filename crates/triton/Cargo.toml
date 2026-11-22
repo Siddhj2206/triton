@@ -16,6 +16,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
+image = { workspace = true, features = ["png", "jpeg", "webp", "gif"] }
 serde = { workspace = true, features = ["derive", "std"] }
 serde_json.workspace = true
 thiserror.workspace = true
