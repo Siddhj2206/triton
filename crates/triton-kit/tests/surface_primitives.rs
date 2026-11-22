@@ -256,6 +256,26 @@ fn scrim_covers_surface_at_45_percent_and_captures_input() {
     assert_eq!(frame.input_rects.len(), 1, "scrim captures all input");
 }
 
+fn action_button(
+    key: &str,
+    label: &str,
+    tone: triton_kit::ButtonTone,
+    tag: &'static str,
+) -> Element<Msg> {
+    triton_kit::button(
+        &Theme::dark(),
+        &InteractionState::default(),
+        &mut Animator::new(),
+        triton_kit::Button {
+            key: key.into(),
+            label: label.into(),
+            tone,
+            on_click: Some(Box::new(move || Msg::Action(tag))),
+            ..Default::default()
+        },
+    )
+}
+
 #[test]
 fn dialog_paints_scrim_thick_card_and_blocks_dismiss_on_card() {
     let mut text = TextEngine::new();
@@ -270,21 +290,12 @@ fn dialog_paints_scrim_thick_card_and_blocks_dismiss_on_card() {
                 title: Some("Delete items?".into()),
                 body: Some("They can be restored for 30 days.".into()),
                 actions: vec![
-                    triton_kit::button(
-                        "cancel",
-                        "Cancel",
-                        None,
-                        triton_kit::ButtonTone::Ghost,
-                        &theme,
-                        || Msg::Action("cancel"),
-                    ),
-                    triton_kit::button(
+                    action_button("cancel", "Cancel", triton_kit::ButtonTone::Text, "cancel"),
+                    action_button(
                         "del",
                         "Delete",
-                        None,
                         triton_kit::ButtonTone::Destructive,
-                        &theme,
-                        || Msg::Action("delete"),
+                        "delete",
                     ),
                 ],
                 on_dismiss: Some(Box::new(|| Msg::Dismiss)),
@@ -366,12 +377,16 @@ fn destructive_button_tone_uses_error_container() {
     let theme = Theme::dark();
     paint::<Msg>(
         triton_kit::button(
-            "d",
-            "X",
-            None,
-            triton_kit::ButtonTone::Destructive,
             &theme,
-            || Msg::Dismiss,
+            &InteractionState::default(),
+            &mut Animator::new(),
+            triton_kit::Button {
+                key: "d".into(),
+                label: "X".into(),
+                tone: triton_kit::ButtonTone::Destructive,
+                on_click: Some(Box::new(|| Msg::Dismiss)),
+                ..Default::default()
+            },
         ),
         (200.0, 100.0),
         1.0,

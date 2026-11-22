@@ -5,7 +5,8 @@
 //! - [`surface`]: [`panel`] & [`island`] (materials, top highlight, blur reporting,
 //!   [`shadow_gutter`]), [`card`], [`scrim`], [`dialog`], [`divider`],
 //!   [`empty_state`], [`list_group`] + [`list_row`], [`scroll_area`].
-//! - [`button`]: [`button`], [`icon_button`], [`ButtonTone`].
+//! - [`button`]: [`button`], [`icon_button`], [`chip`], [`toggle_tile`],
+//!   [`segmented`], [`power_menu`], and their spec structs.
 //! - [`control`]: [`slider`], [`SwitchState`] + [`switch`].
 //! - [`input`]: [`TextInputState`] + [`text_input`].
 //! - [`chrome`]: [`pill`], [`icon_disc`].
@@ -20,7 +21,11 @@ mod control;
 mod input;
 mod surface;
 
-pub use button::{ButtonTone, button, icon_button};
+pub use button::{
+    Button, ButtonSize, ButtonTone, Chip, ChipKind, IconButton, PowerCellTone, PowerItem,
+    SegmentedItem, SegmentedStyle, ToggleTile, button, chip, icon_button, power_menu, segmented,
+    toggle_tile,
+};
 pub use chrome::{icon_disc, pill};
 pub use control::{SwitchState, slider, switch};
 pub use input::{TextInputAction, TextInputState, text_input};
