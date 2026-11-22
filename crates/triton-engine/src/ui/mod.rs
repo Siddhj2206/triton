@@ -13,11 +13,11 @@ use taffy::style_helpers::{auto, length, percent};
 use taffy::{LayoutOutput, Overflow};
 use triton_design::icon::{Icon, IconStyle};
 use triton_design::material::Material;
-use triton_design::shape::CORNER_SMOOTHING;
+use triton_design::shape::{CORNER_SMOOTHING, Point};
 
 use crate::gpu::{
-    DrawList, EdgeFade, IMAGE_CLIP_ROUNDED, IMAGE_CLIP_WAVE, ImageInstance, KIND_FILL, KIND_SHADOW,
-    KIND_TOP_HIGHLIGHT, KIND_WAVE, QuadInstance, ScissorRect,
+    DrawList, EdgeFade, IMAGE_CLIP_ROUNDED, IMAGE_CLIP_WAVE, ImageInstance, KIND_CAPSULE,
+    KIND_FILL, KIND_SHADOW, KIND_TOP_HIGHLIGHT, KIND_WAVE, QuadInstance, ScissorRect,
 };
 use crate::image::{
     ImageFit, ImageId, ImageStore, ImageStyle, compute_contain_dst, compute_uv_rect,
@@ -86,6 +86,7 @@ pub enum InputEvent {
         ctrl: bool,
         shift: bool,
         alt: bool,
+        caps_lock: bool,
     },
 }
 
@@ -122,11 +123,26 @@ pub enum TextAlign {
 #[derive(Debug, Default)]
 pub struct InteractionState {
     pub hovered: Option<NodeKey>,
+    /// Keyed elements under the pointer from topmost downward, stopping at any
+    /// `input_opaque` barrier. Lets containers (e.g. hover-pausing toasts or
+    /// menus) detect pointer presence even over interactive children.
+    pub hovered_keys: Vec<NodeKey>,
     pub pressed: Option<NodeKey>,
     pub dragging: Option<NodeKey>,
+    /// Active scrollbar thumb drag target, if the user is dragging a scroll
+    /// container's scrollbar directly.
+    pub scrollbar_dragging: Option<NodeKey>,
+    pub scrollbar_grab_offset: f32,
     pub focused: Option<NodeKey>,
+    /// The topmost scroll container under the pointer, if any. Unlike
+    /// [`Self::hovered`] this also tracks non-interactive children, so it is
+    /// always set while the pointer is anywhere over a scroll viewport.
+    pub scroll_hovered: Option<NodeKey>,
     pub scroll_offsets: HashMap<NodeKey, f32>,
     pub pointer_pos: Option<(f32, f32)>,
+    /// Live keyboard Caps Lock latch state (synced from Wayland modifiers and
+    /// [`InputEvent::KeyDown`]).
+    pub caps_lock: bool,
 }
 
 impl InteractionState {
@@ -134,12 +150,36 @@ impl InteractionState {
         self.hovered == Some(key)
     }
 
+    /// Whether the pointer is anywhere within `key` (including over interactive
+    /// descendants), respecting `input_opaque` barriers above it.
+    pub fn is_hovered_within(&self, key: NodeKey) -> bool {
+        self.hovered_keys.contains(&key)
+    }
+
+    /// Whether the pointer is anywhere over the scroll viewport of `key`,
+    /// including over interactive children inside it.
+    pub fn is_scroll_hovered(&self, key: NodeKey) -> bool {
+        self.scroll_hovered == Some(key)
+    }
+
     pub fn is_pressed(&self, key: NodeKey) -> bool {
         self.pressed == Some(key)
     }
 
+    pub fn is_dragging(&self, key: NodeKey) -> bool {
+        self.dragging == Some(key)
+    }
+
+    pub fn is_scrollbar_dragging(&self, key: NodeKey) -> bool {
+        self.scrollbar_dragging == Some(key)
+    }
+
     pub fn is_focused(&self, key: NodeKey) -> bool {
         self.focused == Some(key)
+    }
+
+    pub fn caps_lock(&self) -> bool {
+        self.caps_lock
     }
 
     pub fn scroll_offset(&self, key: NodeKey) -> f32 {
@@ -156,6 +196,37 @@ impl InteractionState {
 pub struct BlurRect {
     pub rect: Rect,
     pub radius: f32,
+}
+
+/// Scrollbar appearance for a `scroll_y()` container.
+///
+/// The default reproduces the engine's subtle always-on thumb; widgets restyle
+/// it (width, color, track geometry) without touching renderer internals.
+/// Set `width` to `0.0` to hide the scrollbar entirely.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollbarStyle {
+    /// Thumb width in logical px; `0.0` hides the scrollbar.
+    pub width: f32,
+    /// Gap between the thumb and the container's right edge in logical px.
+    pub margin: f32,
+    /// Inset of the thumb track from the container's top and bottom edges.
+    pub track_inset: f32,
+    /// Smallest thumb length for very tall content in logical px.
+    pub min_thumb: f32,
+    /// Thumb fill color.
+    pub color: Rgba,
+}
+
+impl Default for ScrollbarStyle {
+    fn default() -> Self {
+        Self {
+            width: 3.5,
+            margin: 2.0,
+            track_inset: 6.0,
+            min_thumb: 24.0,
+            color: Rgba::new(1.0, 1.0, 1.0, 0.24),
+        }
+    }
 }
 
 pub type ClickHandler<M> = Box<dyn Fn() -> M>;
@@ -242,12 +313,23 @@ pub enum ElementContent {
         id: ImageId,
         style: ImageStyle,
     },
+    /// Open or closed polyline stroked with round-capped SDF capsules.
+    /// Points are in local logical coordinates relative to this element's top-left.
+    Polyline {
+        points: Vec<Point>,
+        width: f32,
+        color: Rgba,
+    },
 }
 
 /// A declarative UI element producing layout, paint commands, blur regions, and
 /// hit-test regions automatically.
 #[must_use]
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "flat per-element flags are the builder API; a state machine would obscure them"
+)]
 pub struct Element<M> {
     pub key: Option<NodeKey>,
     pub layout: Style,
@@ -256,7 +338,17 @@ pub struct Element<M> {
     pub children: Vec<Element<M>>,
     pub handlers: Handlers<M>,
     pub scrollable: bool,
+    /// Scrollbar appearance when [`Self::scrollable`] (see [`ScrollbarStyle`]).
+    pub scrollbar: ScrollbarStyle,
     pub focusable: bool,
+    /// Opt this container into hover hit-testing (`InteractionState::is_hovered_within`)
+    /// without giving it click/drag handlers (e.g. hover-pausing toast cards).
+    pub hoverable: bool,
+    /// Hit-testing treats this element as opaque: interactive elements painted
+    /// beneath it cannot be reached through it (modal card over a scrim).
+    /// Pair with [`Element::id`] so a press started here cannot release onto a
+    /// lower interactive element.
+    pub input_opaque: bool,
     /// Marks whether this element claims pointer input for Wayland input regions
     /// (defaults to true when it has a fill or interaction handler).
     pub captures_input: bool,
@@ -269,12 +361,19 @@ pub struct Element<M> {
     pub layer_key: Option<NodeKey>,
 }
 
+/// Minimum compounded `SubtreeTransform` opacity required before emitting a
+/// compositor blur region (`ext-background-effect`). Prevents fading surfaces
+/// from smearing underlying surfaces with full-strength compositor blur while
+/// nearly transparent.
+const BLUR_OPACITY_THRESHOLD: f32 = 0.85;
+
 impl<M> Element<M> {
     fn container(dir: FlexDirection) -> Self {
         Self {
             key: None,
             layout: Style {
                 display: Display::Flex,
+                position: Position::Relative,
                 flex_direction: dir,
                 ..Style::default()
             },
@@ -283,7 +382,10 @@ impl<M> Element<M> {
             children: Vec::new(),
             handlers: Handlers::default(),
             scrollable: false,
+            scrollbar: ScrollbarStyle::default(),
             focusable: false,
+            hoverable: false,
+            input_opaque: false,
             captures_input: false,
             wave: None,
             edge_fade: None,
@@ -307,7 +409,10 @@ impl<M> Element<M> {
     }
 
     pub fn child_opt(mut self, child: Option<Element<M>>) -> Self {
-        if let Some(c) = child {
+        if let Some(mut c) = child {
+            if self.scrollable {
+                c.layout.flex_shrink = 0.0;
+            }
             self.children.push(c);
         }
         self
@@ -581,6 +686,12 @@ impl<M> Element<M> {
         self
     }
 
+    /// Restyle the scrollbar thumb of a `scroll_y()` container.
+    pub fn scrollbar_style(mut self, style: ScrollbarStyle) -> Self {
+        self.scrollbar = style;
+        self
+    }
+
     pub fn transform(mut self, tf: SubtreeTransform) -> Self {
         self.visual.transform = tf;
         self
@@ -646,6 +757,24 @@ impl<M> Element<M> {
         self.captures_input = true;
         self
     }
+
+    /// Track pointer presence over this element (and its descendants) in
+    /// [`InteractionState::is_hovered_within`] without adding click/drag handlers.
+    pub fn hoverable(mut self) -> Self {
+        self.hoverable = true;
+        self.captures_input = true;
+        self
+    }
+
+    /// Make this element opaque to hit-testing: pointer events cannot reach
+    /// interactive elements painted beneath it (e.g. a modal card over a
+    /// dismiss scrim). Give the element an [`Element::id`] so a press started
+    /// here cannot release onto a lower interactive element.
+    pub fn input_opaque(mut self) -> Self {
+        self.input_opaque = true;
+        self.captures_input = true;
+        self
+    }
 }
 
 // ── ergonomic constructors ───────────────────────────────────────────────────
@@ -688,7 +817,10 @@ pub fn text<M>(
         children: Vec::new(),
         handlers: Handlers::default(),
         scrollable: false,
+        scrollbar: ScrollbarStyle::default(),
         focusable: false,
+        hoverable: false,
+        input_opaque: false,
         captures_input: false,
         wave: None,
         edge_fade: None,
@@ -727,7 +859,40 @@ pub fn image<M>(id: ImageId, style: ImageStyle) -> Element<M> {
         children: Vec::new(),
         handlers: Handlers::default(),
         scrollable: false,
+        scrollbar: ScrollbarStyle::default(),
         focusable: false,
+        hoverable: false,
+        input_opaque: false,
+        captures_input: false,
+        wave: None,
+        edge_fade: None,
+        layer_key: None,
+    }
+}
+
+/// Round-capped SDF polyline leaf stroked at `width` logical px.
+///
+/// `points` are in local logical coordinates relative to this element's top-left
+/// corner (matching the geometry returned by `triton_design::wave::wavy_line`
+/// and `triton_design::wave::wavy_ring`). Give the element explicit dimensions
+/// via `.size(w, h)` / `.w()` / `.h()`.
+pub fn polyline<M>(points: Vec<Point>, width: f32, color: impl Into<Rgba>) -> Element<M> {
+    Element {
+        key: None,
+        layout: Style::default(),
+        visual: VisualStyle::default(),
+        content: ElementContent::Polyline {
+            points,
+            width,
+            color: color.into(),
+        },
+        children: Vec::new(),
+        handlers: Handlers::default(),
+        scrollable: false,
+        scrollbar: ScrollbarStyle::default(),
+        focusable: false,
+        hoverable: false,
+        input_opaque: false,
         captures_input: false,
         wave: None,
         edge_fade: None,
@@ -754,13 +919,26 @@ impl<M> Element<M> {
 // ── laid-out tree & hit testing ──────────────────────────────────────────────
 
 /// One interactive hit target extracted automatically during layout/paint.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "flat hit-test capability flags mirror Element flags"
+)]
 pub struct HitEntry<M> {
     pub key: Option<NodeKey>,
     pub rect: Rect,
     pub clip: Option<Rect>,
     pub scrollable: bool,
+    pub scrollbar: ScrollbarStyle,
+    /// Enclosing scrollable container key when this element is painted inside a
+    /// `scroll_y()` subtree, so `input_opaque` descendants inside a scroll area
+    /// still route wheel scrolling and `scroll_hovered` to their own scroller.
+    pub scroll_ancestor: Option<NodeKey>,
+    /// Element is opaque to hit-testing: interactive entries painted beneath
+    /// it (earlier in the hit list) cannot receive pointer events.
+    pub input_opaque: bool,
     pub content_height: f32,
     pub focusable: bool,
+    pub hoverable: bool,
     pub on_click: Option<ClickHandler<M>>,
     pub on_drag: Option<DragHandler<M>>,
     pub on_key: Option<KeyHandler<M>>,
@@ -776,6 +954,48 @@ impl<M> std::fmt::Debug for HitEntry<M> {
     }
 }
 
+/// Content kind recorded for a laid-out node in [`BuiltFrame::nodes`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NodeKind {
+    Container,
+    Text(String),
+    Image,
+    Polyline,
+}
+
+/// Capability and visual flags recorded for a laid-out node in [`BuiltFrame::nodes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "flat semantic inspector flags mirror Element flags"
+)]
+pub struct NodeFlags {
+    pub scrollable: bool,
+    pub focusable: bool,
+    pub hoverable: bool,
+    pub input_opaque: bool,
+    pub blur: bool,
+    pub captures_input: bool,
+    pub has_shadow: bool,
+}
+
+/// Semantic snapshot of one laid-out element, recorded during [`layout_and_paint`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct NodeInfo {
+    pub key: Option<NodeKey>,
+    /// Key path from the outermost keyed ancestor down to this node (inclusive if keyed).
+    pub path: Vec<NodeKey>,
+    /// Post-transform rectangle in logical surface coordinates.
+    pub rect: Rect,
+    /// Active clip rectangle in logical surface coordinates, if clipped by an ancestor.
+    pub clip: Option<Rect>,
+    pub kind: NodeKind,
+    /// Compounded [`SubtreeTransform`] opacity (`0.0..=1.0`).
+    pub opacity: f32,
+    pub flags: NodeFlags,
+}
+
 /// Result of laying out and painting a surface's declarative element tree.
 #[derive(Debug)]
 pub struct BuiltFrame<M> {
@@ -787,6 +1007,8 @@ pub struct BuiltFrame<M> {
     pub input_rects: Vec<BlurRect>,
     /// Ordered hit targets (back-to-front; hit-testing iterates in reverse).
     pub hits: Vec<HitEntry<M>>,
+    /// Semantic snapshot of every laid-out element (back-to-front paint order).
+    pub nodes: Vec<NodeInfo>,
 }
 
 impl<M> Default for BuiltFrame<M> {
@@ -796,11 +1018,93 @@ impl<M> Default for BuiltFrame<M> {
             blur_rects: Vec::new(),
             input_rects: Vec::new(),
             hits: Vec::new(),
+            nodes: Vec::new(),
         }
     }
 }
 
 impl<M> BuiltFrame<M> {
+    /// Find the topmost laid-out node matching `key`.
+    pub fn node_by_key(&self, key: NodeKey) -> Option<&NodeInfo> {
+        self.nodes.iter().rev().find(|n| n.key == Some(key))
+    }
+
+    /// Find the topmost laid-out node whose key path ends with `path`.
+    ///
+    /// A single-element `path` behaves like [`Self::node_by_key`]; multi-element
+    /// paths match ancestor→descendant key chains (e.g. `slider/knob`), ignoring
+    /// unkeyed containers in between.
+    pub fn node_by_path(&self, path: &[NodeKey]) -> Option<&NodeInfo> {
+        if path.is_empty() {
+            return None;
+        }
+        self.nodes.iter().rev().find(|n| {
+            n.key == path.last().copied()
+                && n.path.len() >= path.len()
+                && n.path[n.path.len() - path.len()..] == *path
+        })
+    }
+
+    /// Serialize the laid-out element tree, blur regions, input regions, and
+    /// `content_size` to pretty-printed JSON for agent inspection and assertions.
+    pub fn tree_json(&self) -> String {
+        let fmt_key = |k: NodeKey| format!("0x{:016x}", k.0);
+        let rect_val = |r: Rect| {
+            serde_json::json!({
+                "x": r.x,
+                "y": r.y,
+                "w": r.w,
+                "h": r.h,
+            })
+        };
+        let blur_val = |b: &BlurRect| {
+            serde_json::json!({
+                "x": b.rect.x,
+                "y": b.rect.y,
+                "w": b.rect.w,
+                "h": b.rect.h,
+                "radius": b.radius,
+            })
+        };
+        let nodes: Vec<serde_json::Value> = self
+            .nodes
+            .iter()
+            .map(|n| {
+                let kind = match &n.kind {
+                    NodeKind::Container => serde_json::json!("container"),
+                    NodeKind::Text(s) => serde_json::json!({ "text": s }),
+                    NodeKind::Image => serde_json::json!("image"),
+                    NodeKind::Polyline => serde_json::json!("polyline"),
+                };
+                serde_json::json!({
+                    "key": n.key.map(fmt_key),
+                    "path": n.path.iter().copied().map(fmt_key).collect::<Vec<_>>(),
+                    "rect": rect_val(n.rect),
+                    "clip": n.clip.map(rect_val),
+                    "kind": kind,
+                    "opacity": n.opacity,
+                    "flags": {
+                        "scrollable": n.flags.scrollable,
+                        "focusable": n.flags.focusable,
+                        "hoverable": n.flags.hoverable,
+                        "input_opaque": n.flags.input_opaque,
+                        "blur": n.flags.blur,
+                        "captures_input": n.flags.captures_input,
+                        "has_shadow": n.flags.has_shadow,
+                    }
+                })
+            })
+            .collect();
+
+        let doc = serde_json::json!({
+            "content_size": [self.content_size.0, self.content_size.1],
+            "blur_rects": self.blur_rects.iter().map(blur_val).collect::<Vec<_>>(),
+            "input_rects": self.input_rects.iter().map(blur_val).collect::<Vec<_>>(),
+            "nodes": nodes,
+        });
+        serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_owned())
+    }
+
     /// Dispatch an [`InputEvent`] against the laid-out hit tree, updating
     /// `interaction` and returning any emitted app messages plus whether a redraw
     /// is required.
@@ -816,6 +1120,22 @@ impl<M> BuiltFrame<M> {
         match *event {
             InputEvent::PointerMove { x, y } => {
                 interaction.pointer_pos = Some((x, y));
+                if let Some(sb_key) = interaction.scrollbar_dragging {
+                    if let Some(entry) = self
+                        .hits
+                        .iter()
+                        .rev()
+                        .find(|e| e.key == Some(sb_key) && e.scrollable)
+                    {
+                        let next =
+                            scrollbar_offset_for_y(entry, y, interaction.scrollbar_grab_offset);
+                        if (next - interaction.scroll_offset(sb_key)).abs() > 0.1 {
+                            interaction.set_scroll_offset(sb_key, next);
+                            dirty = true;
+                        }
+                    }
+                    return (msgs, dirty);
+                }
                 if let Some(drag_key) = interaction.dragging {
                     if let Some(entry) = self
                         .hits
@@ -834,6 +1154,16 @@ impl<M> BuiltFrame<M> {
                     interaction.hovered = new_hover;
                     dirty = true;
                 }
+                let new_hovered_keys = self.hovered_keys_at(x, y);
+                if new_hovered_keys != interaction.hovered_keys {
+                    interaction.hovered_keys = new_hovered_keys;
+                    dirty = true;
+                }
+                let new_scroll_hover = self.top_scrollable_at(x, y).and_then(|e| e.key);
+                if new_scroll_hover != interaction.scroll_hovered {
+                    interaction.scroll_hovered = new_scroll_hover;
+                    dirty = true;
+                }
             }
             InputEvent::PointerLeave => {
                 interaction.pointer_pos = None;
@@ -841,9 +1171,26 @@ impl<M> BuiltFrame<M> {
                     interaction.hovered = None;
                     dirty = true;
                 }
+                if !interaction.hovered_keys.is_empty() {
+                    interaction.hovered_keys.clear();
+                    dirty = true;
+                }
+                if interaction.scroll_hovered.is_some() {
+                    interaction.scroll_hovered = None;
+                    dirty = true;
+                }
             }
             InputEvent::PointerDown { x, y, .. } => {
                 interaction.pointer_pos = Some((x, y));
+                if let Some((key, grab_offset, initial_scroll)) =
+                    self.scrollbar_hit_at(x, y, interaction)
+                {
+                    interaction.scrollbar_dragging = Some(key);
+                    interaction.scrollbar_grab_offset = grab_offset;
+                    interaction.set_scroll_offset(key, initial_scroll);
+                    dirty = true;
+                    return (msgs, dirty);
+                }
                 if let Some(entry) = self.top_interactive_at(x, y) {
                     if entry.focusable {
                         interaction.focused = entry.key;
@@ -856,7 +1203,10 @@ impl<M> BuiltFrame<M> {
                             msgs.push(on_drag(x, y, entry.rect));
                         }
                         dirty = true;
-                    } else if entry.on_click.is_some() {
+                    } else if entry.on_click.is_some() || entry.input_opaque {
+                        // `input_opaque` with no handlers still records the
+                        // press so a release over a lower interactive element
+                        // cannot fire it (scrim-safe modal surfaces).
                         interaction.pressed = entry.key;
                         dirty = true;
                     }
@@ -866,12 +1216,14 @@ impl<M> BuiltFrame<M> {
                 }
             }
             InputEvent::PointerUp { x, y, .. } => {
+                let was_sb_dragging = interaction.scrollbar_dragging.take();
                 let was_dragging = interaction.dragging.take();
                 let was_pressed = interaction.pressed.take();
-                if was_dragging.is_some() || was_pressed.is_some() {
+                if was_sb_dragging.is_some() || was_dragging.is_some() || was_pressed.is_some() {
                     dirty = true;
                 }
-                if was_dragging.is_none()
+                if was_sb_dragging.is_none()
+                    && was_dragging.is_none()
                     && let Some(entry) = self.top_interactive_at(x, y)
                     && (was_pressed.is_none() || entry.key == was_pressed)
                     && let Some(on_click) = &entry.on_click
@@ -880,20 +1232,23 @@ impl<M> BuiltFrame<M> {
                 }
             }
             InputEvent::Scroll { x, y, delta_y } => {
-                if let Some(entry) = self.hits.iter().rev().find(|e| {
-                    e.scrollable && e.rect.contains(x, y) && e.clip.is_none_or(|c| c.contains(x, y))
-                }) && let Some(key) = entry.key
+                if let Some(entry) = self.top_scrollable_at(x, y)
+                    && let Some(key) = entry.key
                 {
                     let max_scroll = (entry.content_height - entry.rect.h).max(0.0);
                     let cur = interaction.scroll_offset(key);
                     let next = (cur + delta_y).clamp(0.0, max_scroll);
-                    if (next - cur).abs() > 0.1 {
+                    if (next - cur).abs() > 0.01 {
                         interaction.set_scroll_offset(key, next);
                         dirty = true;
                     }
                 }
             }
-            InputEvent::KeyDown { .. } => {
+            InputEvent::KeyDown { caps_lock, .. } => {
+                if interaction.caps_lock != caps_lock {
+                    interaction.caps_lock = caps_lock;
+                    dirty = true;
+                }
                 // Deliver to focused node first, then fall back to any key handler.
                 if let Some(focused) = interaction.focused
                     && let Some(entry) = self
@@ -925,11 +1280,107 @@ impl<M> BuiltFrame<M> {
 
     fn top_interactive_at(&self, x: f32, y: f32) -> Option<&HitEntry<M>> {
         self.hits.iter().rev().find(|e| {
-            (e.on_click.is_some() || e.on_drag.is_some() || e.focusable)
+            (e.on_click.is_some() || e.on_drag.is_some() || e.focusable || e.input_opaque)
                 && e.rect.contains(x, y)
                 && e.clip.is_none_or(|c| c.contains(x, y))
         })
     }
+
+    /// Topmost scrollable entry under `(x, y)`; an `input_opaque` overlay painted
+    /// outside a scroll container blocks wheel events from reaching lower scroll
+    /// containers, while `input_opaque` descendants inside a scroll container
+    /// still route to their enclosing scroller.
+    fn top_scrollable_at(&self, x: f32, y: f32) -> Option<&HitEntry<M>> {
+        for e in self.hits.iter().rev() {
+            if !e.rect.contains(x, y) || e.clip.is_some_and(|c| !c.contains(x, y)) {
+                continue;
+            }
+            if e.scrollable {
+                return Some(e);
+            }
+            if e.input_opaque {
+                let anc = e.scroll_ancestor?;
+                return self.hits.iter().rev().find(|h| {
+                    h.scrollable
+                        && h.key == Some(anc)
+                        && h.rect.contains(x, y)
+                        && h.clip.is_none_or(|c| c.contains(x, y))
+                });
+            }
+        }
+        None
+    }
+
+    /// All keyed hit entries under `(x, y)` from topmost down, stopping after
+    /// the first `input_opaque` entry so modal overlays shield lower layers.
+    fn hovered_keys_at(&self, x: f32, y: f32) -> Vec<NodeKey> {
+        let mut keys = Vec::new();
+        for e in self.hits.iter().rev() {
+            if !e.rect.contains(x, y) || e.clip.is_some_and(|c| !c.contains(x, y)) {
+                continue;
+            }
+            if let Some(k) = e.key
+                && !keys.contains(&k)
+            {
+                keys.push(k);
+            }
+            if e.input_opaque {
+                break;
+            }
+        }
+        keys
+    }
+
+    /// Hit-test the scrollbar strip of the topmost overflowing scroll container
+    /// at `(x, y)`, returning `(key, grab_offset, initial_scroll)`.
+    fn scrollbar_hit_at(
+        &self,
+        x: f32,
+        y: f32,
+        interaction: &InteractionState,
+    ) -> Option<(NodeKey, f32, f32)> {
+        let entry = self.top_scrollable_at(x, y)?;
+        let key = entry.key?;
+        let sb = entry.scrollbar;
+        if entry.content_height <= entry.rect.h + 1.0 || sb.width <= 0.0 || sb.color.a <= 0.0 {
+            return None;
+        }
+        let hit_w = sb.width.max(12.0) + sb.margin + 2.0;
+        if x < entry.rect.x + entry.rect.w - hit_w {
+            return None;
+        }
+        let (track_h, thumb_h, max_scroll) =
+            compute_scrollbar_geometry(entry.rect.h, entry.content_height, sb);
+        let cur = interaction.scroll_offset(key);
+        let progress = (cur / max_scroll).clamp(0.0, 1.0);
+        let thumb_y = entry.rect.y + sb.track_inset + progress * (track_h - thumb_h);
+        let (grab_offset, initial_scroll) = if y >= thumb_y && y <= thumb_y + thumb_h {
+            (y - thumb_y, cur)
+        } else {
+            let grab = thumb_h * 0.5;
+            (grab, scrollbar_offset_for_y(entry, y, grab))
+        };
+        Some((key, grab_offset, initial_scroll))
+    }
+}
+
+fn compute_scrollbar_geometry(
+    viewport_h: f32,
+    content_h: f32,
+    sb: ScrollbarStyle,
+) -> (f32, f32, f32) {
+    let track_h = (viewport_h - sb.track_inset * 2.0).max(8.0);
+    let thumb_h = ((viewport_h / content_h) * track_h).clamp(sb.min_thumb.min(track_h), track_h);
+    let max_scroll = (content_h - viewport_h).max(1.0);
+    (track_h, thumb_h, max_scroll)
+}
+
+fn scrollbar_offset_for_y<M>(entry: &HitEntry<M>, y: f32, grab_offset: f32) -> f32 {
+    let (track_h, thumb_h, max_scroll) =
+        compute_scrollbar_geometry(entry.rect.h, entry.content_height, entry.scrollbar);
+    let travel = (track_h - thumb_h).max(1.0);
+    let thumb_top = y - (entry.rect.y + entry.scrollbar.track_inset) - grab_offset;
+    ((thumb_top / travel).clamp(0.0, 1.0)) * max_scroll
 }
 
 /// Measure the natural logical size of `root` using Taffy + `TextEngine`,
@@ -993,6 +1444,7 @@ pub fn layout_and_paint<M>(
     };
 
     let mut scratch_glyphs = Vec::new();
+    let mut key_path = Vec::new();
     paint_node(
         &tree,
         root_id,
@@ -1001,12 +1453,16 @@ pub fn layout_and_paint<M>(
         SubtreeTransform::IDENTITY,
         None,
         None,
+        None,
+        None,
+        None,
         scale,
         interaction,
         text,
         images,
         draw_list,
         &mut scratch_glyphs,
+        &mut key_path,
         &mut frame,
     );
     frame
@@ -1032,9 +1488,9 @@ fn build_taffy_nodes<M>(tree: &mut TaffyTree<TextMeasureContext>, elem: &Element
                 },
             )
             .expect("taffy text leaf"),
-        ElementContent::Image { .. } => tree
-            .new_leaf(elem.layout.clone())
-            .expect("taffy image leaf"),
+        ElementContent::Image { .. } | ElementContent::Polyline { .. } => {
+            tree.new_leaf(elem.layout.clone()).expect("taffy leaf")
+        }
         ElementContent::Container => {
             let child_ids: Vec<NodeId> = elem
                 .children
@@ -1088,12 +1544,16 @@ fn paint_node<M>(
     parent_tf: SubtreeTransform,
     clip_rect: Option<Rect>,
     edge_fade: Option<EdgeFade>,
+    scroll_ancestor: Option<NodeKey>,
+    blur_ancestor: Option<Rect>,
+    input_ancestor: Option<Rect>,
     scale: f32,
     interaction: &InteractionState,
     text: &mut TextEngine,
     images: &ImageStore,
     draw_list: &mut DrawList,
     scratch_glyphs: &mut Vec<crate::gpu::GlyphInstance>,
+    key_path: &mut Vec<NodeKey>,
     frame: &mut BuiltFrame<M>,
 ) {
     let layout = *tree.layout(node_id).expect("node layout");
@@ -1150,12 +1610,16 @@ fn paint_node<M>(
             SubtreeTransform::IDENTITY,
             None,
             None,
+            scroll_ancestor,
+            None,
+            None,
             scale,
             interaction,
             text,
             images,
             &mut layer_draw_list,
             scratch_glyphs,
+            key_path,
             &mut local_frame,
         );
 
@@ -1169,18 +1633,30 @@ fn paint_node<M>(
                 r.h,
             ))
         };
-        frame
-            .blur_rects
-            .extend(local_frame.blur_rects.iter().map(|br| BlurRect {
-                rect: to_screen(br.rect),
-                radius: br.radius * tf.scale,
-            }));
-        frame
-            .input_rects
-            .extend(local_frame.input_rects.iter().map(|br| BlurRect {
-                rect: to_screen(br.rect),
-                radius: br.radius * tf.scale,
-            }));
+        if tf.opacity >= BLUR_OPACITY_THRESHOLD {
+            for br in &local_frame.blur_rects {
+                let mapped = to_screen(br.rect);
+                let clipped = clip_rect.map_or(mapped, |c| mapped.intersect(c));
+                let covered = blur_ancestor.is_some_and(|a| rect_contains(a, clipped));
+                if !clipped.is_empty() && !covered {
+                    frame.blur_rects.push(BlurRect {
+                        rect: clipped,
+                        radius: br.radius * tf.scale,
+                    });
+                }
+            }
+        }
+        for br in &local_frame.input_rects {
+            let mapped = to_screen(br.rect);
+            let clipped = clip_rect.map_or(mapped, |c| mapped.intersect(c));
+            let covered = input_ancestor.is_some_and(|a| rect_contains(a, clipped));
+            if !clipped.is_empty() && !covered {
+                frame.input_rects.push(BlurRect {
+                    rect: clipped,
+                    radius: br.radius * tf.scale,
+                });
+            }
+        }
         for mut hit in local_frame.hits {
             hit.rect = to_screen(hit.rect);
             hit.clip = match hit.clip {
@@ -1193,6 +1669,18 @@ fn paint_node<M>(
             // `content_height` shares units with `rect.h` for scroll clamping.
             hit.content_height *= tf.scale;
             frame.hits.push(hit);
+        }
+        for mut node in local_frame.nodes {
+            node.rect = to_screen(node.rect);
+            node.clip = match node.clip {
+                Some(inner) => Some(match clip_rect {
+                    Some(outer) => to_screen(inner).intersect(outer),
+                    None => to_screen(inner),
+                }),
+                None => clip_rect,
+            };
+            node.opacity = (node.opacity * tf.opacity).clamp(0.0, 1.0);
+            frame.nodes.push(node);
         }
 
         let content_hash = layer_draw_list.content_hash();
@@ -1228,39 +1716,43 @@ fn paint_node<M>(
     // 1. Optional SDF drop shadow (painted behind the element itself).
     //    For translucent fills (Glass/Thick/alpha < 0.99), request an interior
     //    caster cutout so the dark shadow never bleeds through and muddies the glass.
+    let in_viewport = clip_rect.is_none_or(|c| !screen_rect.intersect(c).is_empty());
     if let Some(sh) = elem.visual.shadow {
         let pad = sh.blur * 2.0;
         let sx = screen_rect.x + sh.offset_x * tf.scale - sh.spread * tf.scale - pad * tf.scale;
         let sy = screen_rect.y + sh.offset_y * tf.scale - sh.spread * tf.scale - pad * tf.scale;
         let sw = screen_rect.w + (sh.spread + pad) * 2.0 * tf.scale;
         let sh_h = screen_rect.h + (sh.spread + pad) * 2.0 * tf.scale;
-        let radii = elem
-            .visual
-            .radii
-            .clamped(local_rect.w, local_rect.h)
-            .map(|r| (r + sh.spread).max(0.0) * eff_scale);
-        let cutout = elem.visual.fill.is_some_and(|f| f.a > 0.0 && f.a < 0.99);
-        draw_list.push_quad_faded(
-            scissor,
-            edge_fade,
-            QuadInstance {
-                dst: [sx * scale, sy * scale, sw * scale, sh_h * scale],
-                radii,
-                fill: sh.color.to_array(),
-                border: [
-                    sh.offset_x * eff_scale,
-                    sh.offset_y * eff_scale,
-                    sh.spread * eff_scale,
-                    if cutout { 1.0 } else { 0.0 },
-                ],
-                misc: [
-                    KIND_SHADOW,
-                    elem.visual.smoothing,
-                    sh.blur * eff_scale,
-                    tf.opacity,
-                ],
-            },
-        );
+        let shadow_rect = Rect::new(sx, sy, sw, sh_h);
+        if clip_rect.is_none_or(|c| !shadow_rect.intersect(c).is_empty()) {
+            let radii = elem
+                .visual
+                .radii
+                .clamped(local_rect.w, local_rect.h)
+                .map(|r| (r + sh.spread).max(0.0) * eff_scale);
+            let cutout = elem.visual.fill.is_some_and(|f| f.a > 0.0 && f.a < 0.99);
+            draw_list.push_quad_faded(
+                scissor,
+                edge_fade,
+                QuadInstance {
+                    dst: [sx * scale, sy * scale, sw * scale, sh_h * scale],
+                    radii,
+                    fill: sh.color.to_array(),
+                    border: [
+                        sh.offset_x * eff_scale,
+                        sh.offset_y * eff_scale,
+                        sh.spread * eff_scale,
+                        if cutout { 1.0 } else { 0.0 },
+                    ],
+                    misc: [
+                        KIND_SHADOW,
+                        elem.visual.smoothing,
+                        sh.blur * eff_scale,
+                        tf.opacity,
+                    ],
+                },
+            );
+        }
     }
 
     // 2. Background fill / hover-press state / border / top highlight / wave
@@ -1285,7 +1777,7 @@ fn paint_node<M>(
         || (!is_image && (elem.visual.border_width > 0.0 || elem.wave.is_some()));
 
     let clamped_radii = elem.visual.radii.clamped(local_rect.w, local_rect.h);
-    if has_shape && screen_rect.w > 0.0 && screen_rect.h > 0.0 {
+    if has_shape && in_viewport && screen_rect.w > 0.0 && screen_rect.h > 0.0 {
         let fill_arr = fill.unwrap_or(Rgba::TRANSPARENT).to_array();
         let quad_border_w = if is_image {
             0.0
@@ -1339,28 +1831,54 @@ fn paint_node<M>(
     }
 
     // Report compositor blur & Wayland input regions in logical surface coords.
+    // Blur regions are gated on effective opacity (so fading surfaces never
+    // smear content below at full compositor blur strength), clipped to any
+    // enclosing clip_rect (so scrolled-off materials never leak blur outside
+    // their viewport), and deduplicated when an ancestor already registered blur.
     let blur_r = elem.visual.radii.max_clamped(local_rect.w, local_rect.h) * tf.scale;
-    if elem.visual.blur && !screen_rect.is_empty() {
+    let clipped_screen_rect = clip_rect.map_or(screen_rect, |c| screen_rect.intersect(c));
+    let covered_by_blur_ancestor =
+        blur_ancestor.is_some_and(|a| rect_contains(a, clipped_screen_rect));
+    let emitted_blur = elem.visual.blur
+        && !covered_by_blur_ancestor
+        && tf.opacity >= BLUR_OPACITY_THRESHOLD
+        && !clipped_screen_rect.is_empty();
+    if emitted_blur {
         frame.blur_rects.push(BlurRect {
-            rect: screen_rect,
+            rect: clipped_screen_rect,
             radius: blur_r,
         });
     }
-    if elem.captures_input && !screen_rect.is_empty() {
+    let covered_by_input_ancestor =
+        input_ancestor.is_some_and(|a| rect_contains(a, clipped_screen_rect));
+    let emitted_input =
+        elem.captures_input && !covered_by_input_ancestor && !clipped_screen_rect.is_empty();
+    if emitted_input {
         frame.input_rects.push(BlurRect {
-            rect: screen_rect,
+            rect: clipped_screen_rect,
             radius: blur_r,
         });
     }
+    let child_blur_ancestor = if emitted_blur {
+        Some(clipped_screen_rect)
+    } else {
+        blur_ancestor
+    };
+    let child_input_ancestor = if emitted_input {
+        Some(clipped_screen_rect)
+    } else {
+        input_ancestor
+    };
 
     // 3. Text content
-    if let ElementContent::Text {
-        text: content,
-        font,
-        color,
-        align,
-        wrap,
-    } = &elem.content
+    if in_viewport
+        && let ElementContent::Text {
+            text: content,
+            font,
+            color,
+            align,
+            wrap,
+        } = &elem.content
         && !content.is_empty()
     {
         let max_w = if *wrap { Some(local_rect.w) } else { None };
@@ -1387,7 +1905,8 @@ fn paint_node<M>(
     }
 
     // 4. Image content (textured quad batch, z-ordered with quads/glyphs)
-    if let ElementContent::Image { id, style } = &elem.content
+    if in_viewport
+        && let ElementContent::Image { id, style } = &elem.content
         && !screen_rect.is_empty()
     {
         let (src_w, src_h) = images
@@ -1460,6 +1979,57 @@ fn paint_node<M>(
         );
     }
 
+    // 4b. Polyline content (round-capped SDF capsule segments)
+    if in_viewport
+        && let ElementContent::Polyline {
+            points,
+            width,
+            color,
+        } = &elem.content
+        && !points.is_empty()
+        && *width > 0.0
+        && color.a > 0.0
+    {
+        let radius = (*width * 0.5 * eff_scale).max(0.5);
+        let pad = radius + 2.0;
+        let to_buf = |pt: Point| -> (f32, f32) {
+            (
+                (screen_rect.x + pt.x * tf.scale) * scale,
+                (screen_rect.y + pt.y * tf.scale) * scale,
+            )
+        };
+        let emit_capsule = |draw_list: &mut DrawList, p0: (f32, f32), p1: (f32, f32)| {
+            let min_x = p0.0.min(p1.0) - pad;
+            let min_y = p0.1.min(p1.1) - pad;
+            let max_x = p0.0.max(p1.0) + pad;
+            let max_y = p0.1.max(p1.1) + pad;
+            draw_list.push_quad_faded(
+                scissor,
+                edge_fade,
+                QuadInstance {
+                    dst: [
+                        min_x,
+                        min_y,
+                        (max_x - min_x).max(1.0),
+                        (max_y - min_y).max(1.0),
+                    ],
+                    radii: [p0.0 - min_x, p0.1 - min_y, p1.0 - min_x, p1.1 - min_y],
+                    fill: color.to_array(),
+                    border: [0.0; 4],
+                    misc: [KIND_CAPSULE, 0.0, radius, tf.opacity],
+                },
+            );
+        };
+        if points.len() == 1 {
+            let p = to_buf(points[0]);
+            emit_capsule(draw_list, p, p);
+        } else {
+            for seg in points.windows(2) {
+                emit_capsule(draw_list, to_buf(seg[0]), to_buf(seg[1]));
+            }
+        }
+    }
+
     // 5. Optional text caret (rendered inside this node's clip)
     if let Some((cx_off, ch, ccol)) = elem.visual.caret {
         let caret_x = screen_rect.x + cx_off * tf.scale;
@@ -1492,32 +2062,13 @@ fn paint_node<M>(
         clip_rect
     };
 
-    let child_edge_fade = if let Some(widths) = elem.edge_fade {
-        Some(EdgeFade {
-            rect: [
-                screen_rect.x * scale,
-                screen_rect.y * scale,
-                screen_rect.w * scale,
-                screen_rect.h * scale,
-            ],
-            widths: [
-                widths.left * eff_scale,
-                widths.right * eff_scale,
-                widths.top * eff_scale,
-                widths.bottom * eff_scale,
-            ],
-        })
-    } else {
-        edge_fade
-    };
-
     let scroll_y = if elem.scrollable {
         elem.key.map_or(0.0, |k| interaction.scroll_offset(k))
     } else {
         0.0
     };
 
-    // Compute total content height for scroll clamping.
+    // Compute total content height for scroll clamping and scroll-aware edge fades.
     let child_ids: Vec<NodeId> = tree.children(node_id).unwrap_or_default();
     let mut content_height = local_rect.h;
     if elem.scrollable {
@@ -1530,6 +2081,71 @@ fn paint_node<M>(
         content_height = max_bottom + layout.padding.bottom;
     }
 
+    let child_edge_fade = if let Some(widths) = elem.edge_fade {
+        let (top_w, bottom_w) = if elem.scrollable {
+            let max_scroll = (content_height - local_rect.h).max(0.0);
+            (
+                widths.top.min(scroll_y).max(0.0),
+                widths.bottom.min((max_scroll - scroll_y).max(0.0)).max(0.0),
+            )
+        } else {
+            (widths.top.max(0.0), widths.bottom.max(0.0))
+        };
+        let local_widths = [
+            widths.left.max(0.0) * eff_scale,
+            widths.right.max(0.0) * eff_scale,
+            top_w * eff_scale,
+            bottom_w * eff_scale,
+        ];
+        if local_widths.iter().any(|&w| w > 0.0) {
+            let local_ef = EdgeFade {
+                rect: [
+                    screen_rect.x * scale,
+                    screen_rect.y * scale,
+                    screen_rect.w * scale,
+                    screen_rect.h * scale,
+                ],
+                widths: local_widths,
+            };
+            Some(match edge_fade {
+                Some(outer) => intersect_edge_fade(outer, local_ef),
+                None => local_ef,
+            })
+        } else {
+            edge_fade
+        }
+    } else {
+        edge_fade
+    };
+
+    // Record semantic node info for every laid-out element (back-to-front).
+    if let Some(k) = elem.key {
+        key_path.push(k);
+    }
+    let node_kind = match &elem.content {
+        ElementContent::Container => NodeKind::Container,
+        ElementContent::Text { text: content, .. } => NodeKind::Text(content.clone()),
+        ElementContent::Image { .. } => NodeKind::Image,
+        ElementContent::Polyline { .. } => NodeKind::Polyline,
+    };
+    frame.nodes.push(NodeInfo {
+        key: elem.key,
+        path: key_path.clone(),
+        rect: screen_rect,
+        clip: clip_rect,
+        kind: node_kind,
+        opacity: tf.opacity,
+        flags: NodeFlags {
+            scrollable: elem.scrollable,
+            focusable: elem.focusable,
+            hoverable: elem.hoverable,
+            input_opaque: elem.input_opaque,
+            blur: elem.visual.blur,
+            captures_input: elem.captures_input,
+            has_shadow: elem.visual.shadow.is_some(),
+        },
+    });
+
     // Record hit entry BEFORE painting children so children sit later in the
     // vector (higher z-order when reverse-iterating).
     if elem.handlers.on_click.is_some()
@@ -1537,14 +2153,20 @@ fn paint_node<M>(
         || elem.handlers.on_key.is_some()
         || elem.scrollable
         || elem.focusable
+        || elem.hoverable
+        || elem.input_opaque
     {
         frame.hits.push(HitEntry {
             key: elem.key,
             rect: screen_rect,
             clip: clip_rect,
             scrollable: elem.scrollable,
+            scrollbar: elem.scrollbar,
+            scroll_ancestor,
+            input_opaque: elem.input_opaque,
             content_height,
             focusable: elem.focusable,
+            hoverable: elem.hoverable,
             on_click: elem.handlers.on_click,
             on_drag: elem.handlers.on_drag,
             on_key: elem.handlers.on_key,
@@ -1553,6 +2175,11 @@ fn paint_node<M>(
 
     // 7. Recurse into children
     let child_origin = (local_rect.x, local_rect.y - scroll_y);
+    let child_scroll_ancestor = if elem.scrollable {
+        elem.key
+    } else {
+        scroll_ancestor
+    };
     for (cid, child_elem) in child_ids.into_iter().zip(elem.children) {
         paint_node(
             tree,
@@ -1562,26 +2189,36 @@ fn paint_node<M>(
             tf,
             child_clip,
             child_edge_fade,
+            child_scroll_ancestor,
+            child_blur_ancestor,
+            child_input_ancestor,
             scale,
             interaction,
             text,
             images,
             draw_list,
             scratch_glyphs,
+            key_path,
             frame,
         );
     }
+    if elem.key.is_some() {
+        key_path.pop();
+    }
 
-    // 8. Overlay subtle scrollbar thumb when scrollable content overflows viewport
-    if elem.scrollable && content_height > local_rect.h + 1.0 {
-        let track_inset = 6.0;
-        let track_h = (local_rect.h - track_inset * 2.0).max(8.0);
-        let thumb_h = ((local_rect.h / content_height) * track_h).clamp(24.0, track_h);
-        let max_scroll = (content_height - local_rect.h).max(1.0);
+    // 8. Overlay scrollbar thumb when scrollable content overflows the viewport.
+    if elem.scrollable
+        && content_height > local_rect.h + 1.0
+        && elem.scrollbar.width > 0.0
+        && elem.scrollbar.color.a > 0.0
+    {
+        let sb = elem.scrollbar;
+        let (track_h, thumb_h, max_scroll) =
+            compute_scrollbar_geometry(local_rect.h, content_height, sb);
         let progress = (scroll_y / max_scroll).clamp(0.0, 1.0);
-        let thumb_y = screen_rect.y + (track_inset + progress * (track_h - thumb_h)) * tf.scale;
-        let thumb_w = 3.5;
-        let thumb_x = screen_rect.x + screen_rect.w - (thumb_w + 2.0) * tf.scale;
+        let thumb_y = screen_rect.y + (sb.track_inset + progress * (track_h - thumb_h)) * tf.scale;
+        let thumb_w = sb.width;
+        let thumb_x = screen_rect.x + screen_rect.w - (thumb_w + sb.margin) * tf.scale;
         let scroll_scissor = child_clip.map(|c| rect_to_scissor(c, scale));
         draw_list.push_quad_faded(
             scroll_scissor,
@@ -1594,11 +2231,46 @@ fn paint_node<M>(
                     thumb_h * eff_scale,
                 ],
                 radii: [thumb_w * 0.5 * eff_scale; 4],
-                fill: [1.0, 1.0, 1.0, 0.24],
+                fill: sb.color.to_array(),
                 border: [0.0; 4],
                 misc: [KIND_FILL, 0.0, 0.0, tf.opacity],
             },
         );
+    }
+}
+
+fn rect_contains(outer: Rect, inner: Rect) -> bool {
+    const EPS: f32 = 0.5;
+    inner.x >= outer.x - EPS
+        && inner.y >= outer.y - EPS
+        && inner.x + inner.w <= outer.x + outer.w + EPS
+        && inner.y + inner.h <= outer.y + outer.h + EPS
+}
+
+fn intersect_edge_fade(outer: EdgeFade, inner: EdgeFade) -> EdgeFade {
+    let ox0 = outer.rect[0];
+    let oy0 = outer.rect[1];
+    let ox1 = ox0 + outer.rect[2];
+    let oy1 = oy0 + outer.rect[3];
+    let ix0 = inner.rect[0];
+    let iy0 = inner.rect[1];
+    let ix1 = ix0 + inner.rect[2];
+    let iy1 = iy0 + inner.rect[3];
+
+    let x0 = ox0.max(ix0);
+    let y0 = oy0.max(iy0);
+    let x1 = ox1.min(ix1);
+    let y1 = oy1.min(iy1);
+
+    let edge_w = |w: f32, inset: f32| if w > 0.0 { (w - inset).max(0.0) } else { 0.0 };
+    let left = edge_w(outer.widths[0], x0 - ox0).max(edge_w(inner.widths[0], x0 - ix0));
+    let right = edge_w(outer.widths[1], ox1 - x1).max(edge_w(inner.widths[1], ix1 - x1));
+    let top = edge_w(outer.widths[2], y0 - oy0).max(edge_w(inner.widths[2], y0 - iy0));
+    let bottom = edge_w(outer.widths[3], oy1 - y1).max(edge_w(inner.widths[3], iy1 - y1));
+
+    EdgeFade {
+        rect: [x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0)],
+        widths: [left, right, top, bottom],
     }
 }
 

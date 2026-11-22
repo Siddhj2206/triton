@@ -1,0 +1,40 @@
+// dev/nested/niri.kdl — nested-niri config copied into the scratch
+// $XDG_CONFIG_HOME/niri by dev/nested/session.sh. Runs niri as a winit window
+// inside the host session; never applied to the real session.
+
+output "winit" {
+    scale 1.75
+}
+
+prefer-no-csd
+
+hotkey-overlay {
+    skip-at-startup
+}
+
+layout {
+    gaps 0
+    focus-ring {
+        off
+    }
+    border {
+        off
+    }
+}
+
+binds {
+    Mod+Shift+E { quit; }
+    Mod+Q { quit; }
+}
+
+// Use non-xray compositor blur for Triton surfaces while letting Triton's
+// `ext-background-effect-v1` protocol supply the exact rounded blur regions.
+// NEVER set `blur true` here: a layer-rule `blur true` forces niri to blur the
+// entire rectangular layer surface — including transparent shadow gutters and
+// fading overlays — overriding the client's shaped `ext-background-effect` region.
+layer-rule {
+    match namespace="^triton"
+    background-effect {
+        xray false
+    }
+}

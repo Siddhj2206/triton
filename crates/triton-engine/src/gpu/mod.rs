@@ -14,12 +14,13 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 
 use glow::HasContext;
-use layer_cache::LayerCache;
+use layer_cache::{LayerCache, attach_and_check_fbo, create_rgba8_texture};
 
 use crate::damage::DamageRect;
 use crate::error::EngineError;
 use crate::image::{ImageData, ImageId, ImageStore};
-use crate::text::AtlasUpload;
+use crate::style::Rgba;
+use crate::text::{AtlasUpload, TextEngine};
 
 const QUAD_VS: &str = r"#version 300 es
 precision highp float;
@@ -116,12 +117,15 @@ float sd_smooth(vec2 p, vec2 b, vec4 r) {
     float s_eff = clamp(min(b.x, b.y) / rr - 1.0, 0.0, 0.6);
     vec2 c = b - abs(p);
     const float LUT_EXTENT = 1.6;
-    if (c.x < LUT_EXTENT * rr && c.y < LUT_EXTENT * rr) {
-        vec2 uv = clamp(c / (LUT_EXTENT * rr), 0.0, 1.0);
-        float d_lut = (texture(u_corner_lut, uv).r - 0.5) * 2.0 * rr;
-        return mix(sd_round(p, b, r), d_lut, s_eff / 0.6);
+    if (c.x >= 0.0 && c.y >= 0.0) {
+        if (c.x < LUT_EXTENT * rr && c.y < LUT_EXTENT * rr) {
+            vec2 uv = c / (LUT_EXTENT * rr);
+            float d_lut = (texture(u_corner_lut, uv).r - 0.5) * 2.0 * rr;
+            return mix(sd_round(p, b, r), d_lut, s_eff / 0.6);
+        }
+        return -min(c.x, c.y);
     }
-    return -min(c.x, c.y);
+    return sd_round(p, b, r);
 }
 
 float sd_box(vec2 p, vec2 b, vec4 r, float smoothing) {
@@ -133,12 +137,20 @@ float sd_box(vec2 p, vec2 b, vec4 r, float smoothing) {
     return mix(d_circ, d_sm, clamp(smoothing, 0.0, 1.0));
 }
 
-// Error-function approximation for soft Gaussian-like drop shadows.
+// Accurate Gaussian falloff: 0.5 * erfc(d / (sigma * sqrt(2))) via Abramowitz & Stegun 7.1.26.
+// Decays below 1e-5 well before d = 2 * blur so drop shadows never leave a
+// rectangular grey floor box on bright light-mode surfaces.
 float shadow_falloff(float d, float sigma) {
-    float t = clamp(d / max(sigma, 0.5), -3.0, 3.0);
-    // Smooth S-curve matching 0.5 * erfc(d / (sigma * sqrt(2)))
-    float s = 1.0 / (1.0 + exp(1.7 * t));
-    return s;
+    float x = d / (max(sigma, 0.5) * 1.41421356);
+    float ax = abs(x);
+    float t = 1.0 / (1.0 + 0.3275911 * ax);
+    float poly = t * (0.254829592
+        + t * (-0.284496736
+        + t * (1.421413741
+        + t * (-1.453152027
+        + t * 1.061405429))));
+    float erfc_ax = poly * exp(-ax * ax);
+    return (x >= 0.0) ? (0.5 * erfc_ax) : (1.0 - 0.5 * erfc_ax);
 }
 
 void main() {
@@ -148,6 +160,25 @@ void main() {
     float param = v_misc.z;
     float opacity = v_misc.w;
     float fade = edge_fade_alpha(v_px, u_fade_rect, u_fade_widths);
+
+    // Kind 4: Analytic round-capped line segment (capsule) SDF.
+    // `i_dst` is the segment's bounding quad padded by radius + AA margin;
+    // `i_radii` = (ax, ay, bx, by) in local quad coordinates (buffer px);
+    // `v_misc.z` = stroke half-width (radius, buffer px).
+    if (kind > 3.5) {
+        vec2 a = v_radii.xy;
+        vec2 b = v_radii.zw;
+        vec2 pa = v_local - a;
+        vec2 ba = b - a;
+        float denom = dot(ba, ba);
+        float h = (denom > 1e-6) ? clamp(dot(pa, ba) / denom, 0.0, 1.0) : 0.0;
+        float d = length(pa - ba * h) - param;
+        float aa = max(fwidth(d), 0.7);
+        float cover = 1.0 - smoothstep(-aa, aa, d);
+        float a_out = v_fill.a * cover * opacity * fade;
+        frag = vec4(v_fill.rgb * a_out, a_out);
+        return;
+    }
 
     // Kind 3: Analytic 9-lobe Wave SDF (`i_radii` = phase, lobe_amp, lobes, 0).
     if (kind > 2.5) {
@@ -183,12 +214,10 @@ void main() {
         float blur = max(param, 1.0);
         float pad = blur * 2.0;
         vec2 caster_half = max(v_half - vec2(pad), vec2(0.5));
-        float d = sd_box(p, caster_half, v_radii, smoothing);
-        float a = shadow_falloff(d, blur * 0.55) * v_fill.a * opacity;
-        // Fade cleanly to zero near the quad boundary to prevent hard clip lines.
-        vec2 edge = v_half - abs(p);
-        float edge_fade = smoothstep(0.0, max(blur * 0.35, 1.0), min(edge.x, edge.y));
-        a *= edge_fade;
+        float d = sd_round(p, caster_half, v_radii);
+        float a = shadow_falloff(d, blur * 0.45) * v_fill.a * opacity;
+        // Radial SDF taper to exact zero before the quad boundary (never a square box).
+        a *= 1.0 - smoothstep(pad * 0.80, pad, d);
         // Cut out the unshifted caster interior when requested so translucent Glass
         // panels never get darkened/muddied by their own drop shadow bleeding through.
         if (v_border.w > 0.5) {
@@ -433,12 +462,15 @@ float sd_smooth(vec2 p, vec2 b, vec4 r) {
     float s_eff = clamp(min(b.x, b.y) / rr - 1.0, 0.0, 0.6);
     vec2 c = b - abs(p);
     const float LUT_EXTENT = 1.6;
-    if (c.x < LUT_EXTENT * rr && c.y < LUT_EXTENT * rr) {
-        vec2 uv = clamp(c / (LUT_EXTENT * rr), 0.0, 1.0);
-        float d_lut = (texture(u_corner_lut, uv).r - 0.5) * 2.0 * rr;
-        return mix(sd_round(p, b, r), d_lut, s_eff / 0.6);
+    if (c.x >= 0.0 && c.y >= 0.0) {
+        if (c.x < LUT_EXTENT * rr && c.y < LUT_EXTENT * rr) {
+            vec2 uv = c / (LUT_EXTENT * rr);
+            float d_lut = (texture(u_corner_lut, uv).r - 0.5) * 2.0 * rr;
+            return mix(sd_round(p, b, r), d_lut, s_eff / 0.6);
+        }
+        return -min(c.x, c.y);
     }
-    return -min(c.x, c.y);
+    return sd_round(p, b, r);
 }
 
 float sd_box(vec2 p, vec2 b, vec4 r, float smoothing) {
@@ -546,6 +578,7 @@ pub const KIND_FILL: f32 = 0.0;
 pub const KIND_TOP_HIGHLIGHT: f32 = 1.0;
 pub const KIND_SHADOW: f32 = 2.0;
 pub const KIND_WAVE: f32 = 3.0;
+pub const KIND_CAPSULE: f32 = 4.0;
 
 /// Highest per-instance vertex attribute location used by any pass (`IMAGE`
 /// uses locations `1..=7`; `QUAD` `1..=5`; `GLYPH` `1..=4`).
@@ -1661,6 +1694,142 @@ impl Gpu {
             gl.disable(glow::SCISSOR_TEST);
             self.layer_cache.evict_stale(gl);
         }
+    }
+
+    /// Render `draw_list` into an offscreen `RGBA8` FBO of physical size
+    /// `(width, height)`, cleared to transparent, and read back straight
+    /// (un-premultiplied) `RGBA8` pixels in top-to-bottom row order.
+    ///
+    /// Requires a current GLES3 context on the calling thread (for example via
+    /// [`crate::platform::egl::Egl::headless`]).
+    pub fn render_to_rgba(
+        &mut self,
+        width: u32,
+        height: u32,
+        draw_list: &DrawList,
+        text: &mut TextEngine,
+        images: &mut ImageStore,
+    ) -> Result<Vec<u8>, EngineError> {
+        self.render_to_rgba_with_backdrop(width, height, Rgba::TRANSPARENT, draw_list, text, images)
+    }
+
+    /// Render `draw_list` into an offscreen `RGBA8` FBO cleared to `backdrop`
+    /// and read back straight (un-premultiplied) `RGBA8` pixels in top-to-bottom
+    /// row order.
+    pub fn render_to_rgba_with_backdrop(
+        &mut self,
+        width: u32,
+        height: u32,
+        backdrop: Rgba,
+        draw_list: &DrawList,
+        text: &mut TextEngine,
+        images: &mut ImageStore,
+    ) -> Result<Vec<u8>, EngineError> {
+        if width == 0 || height == 0 {
+            return Err(EngineError::Gpu(
+                "offscreen render target must have non-zero width and height".into(),
+            ));
+        }
+        let wi = i32::try_from(width)
+            .map_err(|_| EngineError::Gpu(format!("offscreen width overflows i32: {width}")))?;
+        let hi = i32::try_from(height)
+            .map_err(|_| EngineError::Gpu(format!("offscreen height overflows i32: {height}")))?;
+
+        self.sync_images(images);
+        self.layer_cache.begin_frame();
+
+        // SAFETY: Caller guarantees a current GLES3 context on this thread.
+        let (fbo, tex) = unsafe {
+            let tex = create_rgba8_texture(&self.gl, width, height)?;
+            let fbo = match self.gl.create_framebuffer() {
+                Ok(fbo) => fbo,
+                Err(e) => {
+                    self.gl.delete_texture(tex);
+                    return Err(EngineError::Gpu(format!("create_framebuffer: {e}")));
+                }
+            };
+            if let Err(err) = attach_and_check_fbo(&self.gl, fbo, tex) {
+                self.gl.delete_framebuffer(fbo);
+                self.gl.delete_texture(tex);
+                return Err(err);
+            }
+            (fbo, tex)
+        };
+
+        let mut atlas = text.atlas_upload();
+
+        // SAFETY: `fbo` is complete and bound in the active GLES3 context.
+        unsafe {
+            let gl = &self.gl;
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+            gl.viewport(0, 0, wi, hi);
+            gl.disable(glow::DEPTH_TEST);
+            gl.disable(glow::SCISSOR_TEST);
+            gl.enable(glow::BLEND);
+            gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+            gl.clear_color(
+                backdrop.r * backdrop.a,
+                backdrop.g * backdrop.a,
+                backdrop.b * backdrop.a,
+                backdrop.a,
+            );
+            gl.clear(glow::COLOR_BUFFER_BIT);
+            atlas.upload(gl);
+        }
+
+        self.render_batches(Some(fbo), width, height, None, draw_list, &mut atlas);
+
+        let row_bytes = (width as usize).saturating_mul(4);
+        let byte_len = row_bytes.saturating_mul(height as usize);
+        let mut raw = vec![0u8; byte_len];
+
+        // SAFETY: `fbo` is a valid RGBA8 framebuffer of size `(wi, hi)` and `raw`
+        // holds exactly `width * height * 4` bytes with `PACK_ALIGNMENT = 1`.
+        unsafe {
+            let gl = &self.gl;
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+            gl.disable(glow::SCISSOR_TEST);
+            gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
+            gl.read_pixels(
+                0,
+                0,
+                wi,
+                hi,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut raw)),
+            );
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.delete_framebuffer(fbo);
+            gl.delete_texture(tex);
+            self.layer_cache.evict_stale(gl);
+        }
+
+        // Flip rows vertically (GL bottom-left → top-left) and un-premultiply RGB.
+        let mut out = vec![0u8; byte_len];
+        for y in 0..height as usize {
+            let src_row = (height as usize - 1 - y) * row_bytes;
+            let dst_row = y * row_bytes;
+            for x in 0..width as usize {
+                let s = src_row + x * 4;
+                let d = dst_row + x * 4;
+                let a = raw[s + 3];
+                if a == 0 {
+                    out[d..d + 4].copy_from_slice(&[0, 0, 0, 0]);
+                } else if a == 255 {
+                    out[d..d + 4].copy_from_slice(&raw[s..s + 4]);
+                } else {
+                    let au = u32::from(a);
+                    let unpremul =
+                        |c: u8| -> u8 { ((u32::from(c) * 255 + au / 2) / au).min(255) as u8 };
+                    out[d] = unpremul(raw[s]);
+                    out[d + 1] = unpremul(raw[s + 1]);
+                    out[d + 2] = unpremul(raw[s + 2]);
+                    out[d + 3] = a;
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Execute `draw_list`'s batches into `target_fbo` (`None` = the default

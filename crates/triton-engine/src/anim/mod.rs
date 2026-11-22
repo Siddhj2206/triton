@@ -113,7 +113,9 @@ impl ShakeState {
 #[derive(Debug)]
 pub struct Animator {
     now: Instant,
+    epoch: Option<Instant>,
     reduce_motion: bool,
+    continuous_active: bool,
     generation: u64,
     scalars: HashMap<NodeKey, Entry<ScalarState>>,
     colors: HashMap<NodeKey, Entry<ColorState>>,
@@ -134,7 +136,9 @@ impl Animator {
     pub fn new() -> Self {
         Self {
             now: Instant::now(),
+            epoch: None,
             reduce_motion: false,
+            continuous_active: false,
             generation: 0,
             scalars: HashMap::new(),
             colors: HashMap::new(),
@@ -148,7 +152,9 @@ impl Animator {
     /// Start a frame at `now` with the active `reduce_motion` preference.
     pub fn begin_frame(&mut self, now: Instant, reduce_motion: bool) {
         self.now = now;
+        self.epoch.get_or_insert(now);
         self.reduce_motion = reduce_motion;
+        self.continuous_active = false;
         self.generation = self.generation.wrapping_add(1);
     }
 
@@ -172,6 +178,26 @@ impl Animator {
     /// Current reduced-motion flag set by [`Self::begin_frame`].
     pub fn reduce_motion(&self) -> bool {
         self.reduce_motion
+    }
+
+    /// Seconds elapsed since this animator's first [`Self::begin_frame`] call.
+    ///
+    /// Anchored to the caller-provided timestamp (never wall-clock `Instant::now`),
+    /// so clock-driven indicators advance deterministically in headless tests.
+    pub fn elapsed_secs(&self) -> f32 {
+        self.epoch
+            .map_or(0.0, |e| self.now.saturating_duration_since(e).as_secs_f32())
+    }
+
+    /// Register continuous clock-driven motion for this frame (e.g. indeterminate
+    /// wavy progress or a live audio level meter).
+    ///
+    /// Causes [`Self::is_animating`] to return `true` for this frame unless
+    /// `reduce_motion` is enabled; automatically resets on the next [`Self::begin_frame`].
+    pub fn request_continuous_frame(&mut self) {
+        if !self.reduce_motion {
+            self.continuous_active = true;
+        }
     }
 
     /// Animate a scalar value with default epsilon (`0.01`).
@@ -459,6 +485,7 @@ impl Animator {
                 .presences
                 .values()
                 .any(|e| !e.value.anim.is_settled(now))
+            || (!self.reduce_motion && self.continuous_active)
             || (!self.reduce_motion && self.shakes.values().any(|e| e.value.is_active(now)))
     }
 }
@@ -793,5 +820,29 @@ mod tests {
             !anim.is_animating(),
             "key should be pruned after >2 untouched frames"
         );
+    }
+
+    #[test]
+    fn continuous_frame_and_elapsed_secs_are_deterministic() {
+        let t0 = Instant::now();
+        let mut anim = Animator::new();
+
+        step(&mut anim, t0, false);
+        assert!(anim.elapsed_secs().abs() < 1e-6);
+        assert!(!anim.is_animating());
+
+        anim.request_continuous_frame();
+        assert!(anim.is_animating());
+
+        // Next frame without request clears continuous_active; elapsed advances cleanly.
+        let t1 = t0 + Duration::from_millis(250);
+        step(&mut anim, t1, false);
+        assert!((anim.elapsed_secs() - 0.25).abs() < 1e-4);
+        assert!(!anim.is_animating());
+
+        // Under reduce_motion, request_continuous_frame does not keep rendering.
+        step(&mut anim, t1 + Duration::from_millis(16), true);
+        anim.request_continuous_frame();
+        assert!(!anim.is_animating());
     }
 }

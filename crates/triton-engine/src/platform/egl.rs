@@ -16,6 +16,9 @@ use crate::platform::wl_egl::EglWindow;
 /// `EGL_PLATFORM_WAYLAND_KHR` (0x31D8).
 const PLATFORM_WAYLAND: egl::Enum = 0x31D8;
 
+/// `EGL_PLATFORM_SURFACELESS_MESA` (0x31DD).
+const PLATFORM_SURFACELESS_MESA: egl::Enum = 0x31DD;
+
 /// `EGL_BUFFER_AGE_KHR` / `EGL_BUFFER_AGE_EXT` (0x313D).
 const BUFFER_AGE_KHR: egl::Int = 0x313D;
 
@@ -28,6 +31,7 @@ pub struct Egl {
     display: egl::Display,
     context: egl::Context,
     config: egl::Config,
+    dummy_pbuffer: Option<egl::Surface>,
     swap_with_damage: Option<SwapWithDamageFn>,
     has_buffer_age: bool,
 }
@@ -91,7 +95,7 @@ impl Egl {
         instance
             .bind_api(egl::OPENGL_ES_API)
             .map_err(|e| EngineError::Egl(format!("eglBindAPI(GLES): {e}")))?;
-        let config = choose_config(&instance, display)?;
+        let config = choose_config(&instance, display, true)?;
         let ctx_attribs = [egl::CONTEXT_CLIENT_VERSION, 3, egl::NONE];
         let context = instance
             .create_context(display, config, None, &ctx_attribs)
@@ -121,8 +125,93 @@ impl Egl {
             display,
             context,
             config,
+            dummy_pbuffer: None,
             swap_with_damage,
             has_buffer_age,
+        })
+    }
+
+    /// Open a displayless EGL 1.5 context for offscreen FBO rendering (no Wayland
+    /// or X11 display server required).
+    ///
+    /// Tries `EGL_PLATFORM_SURFACELESS_MESA` first and falls back to
+    /// `EGL_DEFAULT_DISPLAY` (creating a 1×1 pbuffer if the driver lacks
+    /// `EGL_KHR_surfaceless_context`).
+    pub fn headless() -> Result<Self, EngineError> {
+        // SAFETY: Loads system `libEGL.so.1` via khronos-egl dynamic loader.
+        let instance = unsafe {
+            egl::DynamicInstance::<egl::EGL1_5>::load_required()
+                .map_err(|e| EngineError::Egl(format!("failed to load libEGL: {e}")))?
+        };
+
+        let display = {
+            // SAFETY: `EGL_DEFAULT_DISPLAY` is the standard sentinel pointer for surfaceless Mesa.
+            let surfaceless = unsafe {
+                instance.get_platform_display(
+                    PLATFORM_SURFACELESS_MESA,
+                    egl::DEFAULT_DISPLAY,
+                    &[egl::ATTRIB_NONE],
+                )
+            };
+            match surfaceless {
+                Ok(d) if instance.initialize(d).is_ok() => d,
+                _ => {
+                    // SAFETY: `EGL_DEFAULT_DISPLAY` is a valid sentinel for `eglGetDisplay`.
+                    let fallback = unsafe {
+                        instance.get_display(egl::DEFAULT_DISPLAY).ok_or_else(|| {
+                            EngineError::Egl("no headless EGL display available".into())
+                        })?
+                    };
+                    instance
+                        .initialize(fallback)
+                        .map_err(|e| EngineError::Egl(format!("eglInitialize(headless): {e}")))?;
+                    fallback
+                }
+            }
+        };
+
+        instance
+            .bind_api(egl::OPENGL_ES_API)
+            .map_err(|e| EngineError::Egl(format!("eglBindAPI(GLES): {e}")))?;
+        let config = choose_config(&instance, display, false)?;
+        let ctx_attribs = [egl::CONTEXT_CLIENT_VERSION, 3, egl::NONE];
+        let context = instance
+            .create_context(display, config, None, &ctx_attribs)
+            .map_err(|e| EngineError::Egl(format!("eglCreateContext(headless ES3): {e}")))?;
+
+        let dummy_pbuffer = if instance
+            .make_current(display, None, None, Some(context))
+            .is_ok()
+        {
+            None
+        } else {
+            let pb_attribs = [egl::WIDTH, 1, egl::HEIGHT, 1, egl::NONE];
+            let pb = instance
+                .create_pbuffer_surface(display, config, &pb_attribs)
+                .map_err(|e| {
+                    let _ = instance.destroy_context(display, context);
+                    let _ = instance.terminate(display);
+                    EngineError::Egl(format!("eglCreatePbufferSurface(1x1): {e}"))
+                })?;
+            instance
+                .make_current(display, Some(pb), Some(pb), Some(context))
+                .map_err(|e| {
+                    let _ = instance.destroy_surface(display, pb);
+                    let _ = instance.destroy_context(display, context);
+                    let _ = instance.terminate(display);
+                    EngineError::Egl(format!("eglMakeCurrent(pbuffer): {e}"))
+                })?;
+            Some(pb)
+        };
+
+        Ok(Self {
+            instance,
+            display,
+            context,
+            config,
+            dummy_pbuffer,
+            swap_with_damage: None,
+            has_buffer_age: false,
         })
     }
 
@@ -159,9 +248,9 @@ impl Egl {
         let _ = self.instance.destroy_surface(self.display, surface.raw);
     }
 
-    /// Bind `surface` (or surfaceless) as current on the calling thread.
+    /// Bind `surface` (or surfaceless / fallback pbuffer) as current on the calling thread.
     pub fn make_current(&self, surface: Option<EglSurface>) -> Result<(), EngineError> {
-        let s = surface.map(|s| s.raw);
+        let s = surface.map(|s| s.raw).or(self.dummy_pbuffer);
         self.instance
             .make_current(self.display, s, s, Some(self.context))
             .map_err(|e| EngineError::Egl(format!("eglMakeCurrent: {e}")))
@@ -226,8 +315,9 @@ impl Egl {
 fn choose_config(
     instance: &egl::DynamicInstance<egl::EGL1_5>,
     display: egl::Display,
+    require_window: bool,
 ) -> Result<egl::Config, EngineError> {
-    let attribs = [
+    let attribs_window = [
         egl::SURFACE_TYPE,
         egl::WINDOW_BIT,
         egl::RENDERABLE_TYPE,
@@ -242,10 +332,49 @@ fn choose_config(
         8,
         egl::NONE,
     ];
+    let attribs_pbuffer = [
+        egl::SURFACE_TYPE,
+        egl::PBUFFER_BIT,
+        egl::RENDERABLE_TYPE,
+        egl::OPENGL_ES3_BIT,
+        egl::RED_SIZE,
+        8,
+        egl::GREEN_SIZE,
+        8,
+        egl::BLUE_SIZE,
+        8,
+        egl::ALPHA_SIZE,
+        8,
+        egl::NONE,
+    ];
+    let attribs_any = [
+        egl::SURFACE_TYPE,
+        egl::DONT_CARE,
+        egl::RENDERABLE_TYPE,
+        egl::OPENGL_ES3_BIT,
+        egl::RED_SIZE,
+        8,
+        egl::GREEN_SIZE,
+        8,
+        egl::BLUE_SIZE,
+        8,
+        egl::ALPHA_SIZE,
+        8,
+        egl::NONE,
+    ];
     let mut configs = Vec::with_capacity(64);
-    instance
-        .choose_config(display, &attribs, &mut configs)
-        .map_err(|e| EngineError::Egl(format!("eglChooseConfig: {e}")))?;
+    if require_window {
+        instance
+            .choose_config(display, &attribs_window, &mut configs)
+            .map_err(|e| EngineError::Egl(format!("eglChooseConfig: {e}")))?;
+    } else {
+        let _ = instance.choose_config(display, &attribs_pbuffer, &mut configs);
+        if configs.is_empty() {
+            instance
+                .choose_config(display, &attribs_any, &mut configs)
+                .map_err(|e| EngineError::Egl(format!("eglChooseConfig(headless): {e}")))?;
+        }
+    }
     // Prefer an 8-8-8-8 RGBA config (avoid 10-10-10-2 or non-alpha configs).
     let chosen = configs
         .iter()
@@ -262,6 +391,9 @@ fn choose_config(
 impl Drop for Egl {
     fn drop(&mut self) {
         let _ = self.instance.make_current(self.display, None, None, None);
+        if let Some(pb) = self.dummy_pbuffer.take() {
+            let _ = self.instance.destroy_surface(self.display, pb);
+        }
         let _ = self.instance.destroy_context(self.display, self.context);
         let _ = self.instance.terminate(self.display);
     }

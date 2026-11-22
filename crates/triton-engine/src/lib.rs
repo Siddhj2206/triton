@@ -28,6 +28,7 @@ pub mod anim;
 pub mod damage;
 pub mod error;
 pub mod gpu;
+pub mod headless;
 pub mod image;
 pub mod platform;
 pub mod style;
@@ -38,6 +39,10 @@ pub mod ui;
 pub use anim::{Animator, Presence};
 pub use damage::{DamageRect, DamageTracker};
 pub use error::EngineError;
+pub use headless::{
+    HeadlessRenderer, HeadlessSession, Script, ScriptEvent, ScriptEventKind, ScriptOutcome,
+    ScriptTarget, encode_png, write_png,
+};
 pub use image::{ImageData, ImageFit, ImageId, ImageStore, ImageStyle};
 pub use platform::{
     AppCommand, ShellApp, SurfaceAnchor, SurfaceKeyboard, SurfaceLayer, SurfaceMetrics,
@@ -47,6 +52,6 @@ pub use style::{Corners, DropShadow, Edges, FontSpec, Rect, Rgba, SubtreeTransfo
 pub use timer::TimerScheduler;
 pub use triton_design::motion::Spring;
 pub use ui::{
-    BlurRect, BuiltFrame, Element, InputEvent, InteractionState, Key, NodeKey, TextAlign, box_,
-    col, icon, image, row, text,
+    BlurRect, BuiltFrame, Element, InputEvent, InteractionState, Key, NodeFlags, NodeInfo, NodeKey,
+    NodeKind, ScrollbarStyle, TextAlign, box_, col, icon, image, polyline, row, text,
 };

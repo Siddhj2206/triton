@@ -593,7 +593,10 @@ impl<A: ShellApp> Runtime<A> {
                 configured: false,
                 frame_pending: false,
                 needs_redraw: true,
-                interaction: InteractionState::default(),
+                interaction: InteractionState {
+                    caps_lock: self.modifiers.caps_lock,
+                    ..InteractionState::default()
+                },
                 animator: Animator::new(),
                 built: BuiltFrame::default(),
                 last_blur: Vec::new(),
@@ -869,8 +872,9 @@ impl<A: ShellApp> Runtime<A> {
             dirty
         };
 
-        // 6. Render with GLES3 and swap with damage.
-        let swapped = self.render_and_swap(id, bw, bh, egl_surface, current_dirty);
+        // 6. Render with GLES3 and swap with damage (arming the next vsync
+        //    frame callback atomically on the swap commit).
+        let swapped = self.render_and_swap(id, bw, bh, egl_surface, current_dirty, qh);
         if regions_changed
             && !swapped
             && let Some(host) = self.hosts.get(&id)
@@ -882,17 +886,33 @@ impl<A: ShellApp> Runtime<A> {
         if let Err(e) = self.sync_surfaces(qh) {
             tracing::error!(%e, "sync_surfaces failed");
         }
+        self.finish_present_pacing(id, now, swapped, qh);
+    }
+
+    fn finish_present_pacing(
+        &mut self,
+        id: A::SurfaceId,
+        now: Instant,
+        swapped: bool,
+        qh: &QueueHandle<Self>,
+    ) {
         let app_animating = self.app.is_animating(id, now);
-        if let Some(host) = self.hosts.get_mut(&id) {
-            host.frame_pending = false;
-            let still_animating = host.animator.is_animating() || app_animating;
-            if still_animating || host.needs_redraw {
-                queue_frame(host, qh);
-            } else {
-                // Reset frame-interval anchor when going idle so the next wake
-                // doesn't record a huge idle gap as a frame interval.
+        let Some(host) = self.hosts.get_mut(&id) else {
+            return;
+        };
+        let still_animating = host.animator.is_animating() || app_animating;
+        if swapped {
+            // `frame_pending` was armed atomically before `eglSwapBuffers`.
+            if !still_animating && !host.needs_redraw {
                 host.last_frame = None;
             }
+            return;
+        }
+        host.frame_pending = false;
+        if still_animating || host.needs_redraw {
+            queue_frame(host, qh);
+        } else {
+            host.last_frame = None;
         }
     }
 
@@ -929,6 +949,7 @@ impl<A: ShellApp> Runtime<A> {
         bh: u32,
         egl_surface: EglSurface,
         current_dirty: Option<DamageRect>,
+        qh: &QueueHandle<Self>,
     ) -> bool {
         if let Err(e) = self.egl.make_current(Some(egl_surface)) {
             tracing::error!(?id, %e, "eglMakeCurrent failed");
@@ -964,6 +985,19 @@ impl<A: ShellApp> Runtime<A> {
                 Some(dmg),
             );
         }
+        // Attach the next vsync frame callback BEFORE `eglSwapBuffers` so the
+        // buffer attach and frame callback commit atomically in ONE commit.
+        let armed_frame = if let Some(host) = self.hosts.get_mut(&id)
+            && !host.frame_pending
+        {
+            host.layer
+                .wl_surface()
+                .frame(qh, FrameCallbackData(host.layer.wl_surface().clone()));
+            host.frame_pending = true;
+            true
+        } else {
+            false
+        };
         let egl_rect = dmg.to_egl_rect(i32::try_from(bh).unwrap_or(i32::MAX));
         match self.egl.swap(egl_surface, &[egl_rect]) {
             Ok(()) => {
@@ -973,17 +1007,37 @@ impl<A: ShellApp> Runtime<A> {
                 true
             }
             Err(e) => {
+                if armed_frame && let Some(host) = self.hosts.get_mut(&id) {
+                    host.frame_pending = false;
+                }
                 tracing::error!(?id, %e, "eglSwapBuffers failed");
                 false
             }
         }
     }
 
-    fn dispatch_ui_event(&mut self, id: A::SurfaceId, event: &InputEvent, qh: &QueueHandle<Self>) {
+    fn schedule_present(&mut self, id: A::SurfaceId, qh: &QueueHandle<Self>) {
+        let can_present_now = self
+            .hosts
+            .get(&id)
+            .is_some_and(|h| h.configured && !h.frame_pending);
+        if can_present_now {
+            self.present(id, qh);
+        } else if let Some(host) = self.hosts.get_mut(&id) {
+            queue_frame(host, qh);
+        }
+    }
+
+    fn dispatch_ui_event_deferred(
+        &mut self,
+        id: A::SurfaceId,
+        event: &InputEvent,
+        qh: &QueueHandle<Self>,
+    ) -> bool {
         let now = Instant::now();
         let (msgs, dirty) = {
             let Some(host) = self.hosts.get_mut(&id) else {
-                return;
+                return false;
             };
             host.built.dispatch_event(event, &mut host.interaction)
         };
@@ -1002,7 +1056,14 @@ impl<A: ShellApp> Runtime<A> {
             && (dirty || host.animator.is_animating() || self.app.is_animating(id, now))
         {
             host.needs_redraw = true;
-            queue_frame(host, qh);
+            return true;
+        }
+        false
+    }
+
+    fn dispatch_ui_event(&mut self, id: A::SurfaceId, event: &InputEvent, qh: &QueueHandle<Self>) {
+        if self.dispatch_ui_event_deferred(id, event, qh) {
+            self.schedule_present(id, qh);
         }
     }
 
@@ -1379,14 +1440,22 @@ impl<A: ShellApp> KeyboardHandler for Runtime<A> {
     fn update_modifiers(
         &mut self,
         _: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
         modifiers: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        let caps_changed = modifiers.caps_lock != self.modifiers.caps_lock;
         self.modifiers = modifiers;
+        if caps_changed {
+            for host in self.hosts.values_mut() {
+                host.interaction.caps_lock = modifiers.caps_lock;
+                host.needs_redraw = true;
+                queue_frame(host, qh);
+            }
+        }
     }
 }
 
@@ -1402,6 +1471,7 @@ impl<A: ShellApp> Runtime<A> {
             ctrl: self.modifiers.ctrl,
             shift: self.modifiers.shift,
             alt: self.modifiers.alt,
+            caps_lock: self.modifiers.caps_lock,
         };
         self.dispatch_ui_event(id, &ev, qh);
     }
@@ -1415,28 +1485,33 @@ impl<A: ShellApp> PointerHandler for Runtime<A> {
         _pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
+        // Coalesce all pointer events (motion + high-rate scroll axes) in this
+        // Wayland frame before presenting once per dirty surface.
+        let mut dirty_surfaces: Vec<A::SurfaceId> = Vec::new();
         for event in events {
             let Some(id) = self.surface_id_for_wl(&event.surface) else {
                 continue;
             };
             let (x, y) = (event.position.0 as f32, event.position.1 as f32);
-            match event.kind {
+            let dirty = match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
-                    self.dispatch_ui_event(id, &InputEvent::PointerMove { x, y }, qh);
+                    self.dispatch_ui_event_deferred(id, &InputEvent::PointerMove { x, y }, qh)
                 }
                 PointerEventKind::Leave { .. } => {
-                    self.dispatch_ui_event(id, &InputEvent::PointerLeave, qh);
+                    self.dispatch_ui_event_deferred(id, &InputEvent::PointerLeave, qh)
                 }
-                PointerEventKind::Press { button, .. } => {
-                    self.dispatch_ui_event(id, &InputEvent::PointerDown { x, y, button }, qh);
-                }
+                PointerEventKind::Press { button, .. } => self.dispatch_ui_event_deferred(
+                    id,
+                    &InputEvent::PointerDown { x, y, button },
+                    qh,
+                ),
                 PointerEventKind::Release { button, .. } => {
-                    self.dispatch_ui_event(id, &InputEvent::PointerUp { x, y, button }, qh);
+                    self.dispatch_ui_event_deferred(id, &InputEvent::PointerUp { x, y, button }, qh)
                 }
                 PointerEventKind::Axis { vertical, .. } => {
                     let delta = scroll_delta_px(vertical);
                     if delta.abs() > 0.01 {
-                        self.dispatch_ui_event(
+                        self.dispatch_ui_event_deferred(
                             id,
                             &InputEvent::Scroll {
                                 x,
@@ -1444,10 +1519,18 @@ impl<A: ShellApp> PointerHandler for Runtime<A> {
                                 delta_y: delta,
                             },
                             qh,
-                        );
+                        )
+                    } else {
+                        false
                     }
                 }
+            };
+            if dirty && !dirty_surfaces.contains(&id) {
+                dirty_surfaces.push(id);
             }
+        }
+        for id in dirty_surfaces {
+            self.schedule_present(id, qh);
         }
     }
 }

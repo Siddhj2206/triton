@@ -234,7 +234,7 @@ impl LayerCache {
 /// # Safety
 ///
 /// `gl` must be an active GLES3 context.
-unsafe fn create_rgba8_texture(
+pub(crate) unsafe fn create_rgba8_texture(
     gl: &glow::Context,
     width: u32,
     height: u32,
@@ -290,7 +290,7 @@ unsafe fn create_rgba8_texture(
 /// # Safety
 ///
 /// `gl` must be an active GLES3 context owning `fbo` and `tex`.
-unsafe fn attach_and_check_fbo(
+pub(crate) unsafe fn attach_and_check_fbo(
     gl: &glow::Context,
     fbo: glow::Framebuffer,
     tex: glow::Texture,
