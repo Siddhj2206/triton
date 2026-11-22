@@ -1,0 +1,1299 @@
+//! Wayland + SCTK 0.21 + calloop + EGL multi-surface layer-shell host.
+//!
+//! Shell applications implement [`ShellApp`] in 100% safe Rust and pass it to
+//! [`run`]. This module manages:
+//! - Multiple independent `LayerSurface`s (`Layer::Top`, `Layer::Overlay`, `Layer::Background`)
+//! - Dynamic content-driven surface sizing (measuring the element tree before committing)
+//!   with safe shadow-margin padding so islands and floating panels never clip!
+//! - Fractional scaling (`wp_fractional_scale_v1` + `wp_viewport`)
+//! - Shaped compositor blur (`ext-background-effect-v1` + `rounded_rect_bands`)
+//! - Shaped Wayland input regions (`wl_surface.set_input_region`)
+//! - Vsync-paced `wl_surface.frame` rendering with zero idle CPU when animations settle
+//! - Optional scheduled timers for caret blinking, demo scripting, or clock ticks.
+
+pub mod egl;
+pub mod wl_egl;
+
+use std::collections::HashMap;
+use std::fmt;
+use std::hash::Hash;
+use std::time::{Duration, Instant};
+
+use smithay_client_toolkit::background_effect::{BackgroundEffectHandler, BackgroundEffectState};
+use smithay_client_toolkit::compositor::{
+    CompositorHandler, CompositorState, FrameCallbackData, Region,
+};
+use smithay_client_toolkit::dispatch2::Dispatch2;
+use smithay_client_toolkit::globals::GlobalData;
+use smithay_client_toolkit::output::{OutputHandler, OutputState};
+use smithay_client_toolkit::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay_client_toolkit::reexports::calloop::{EventLoop, LoopHandle, LoopSignal};
+use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
+use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
+use smithay_client_toolkit::reexports::client::protocol::{
+    wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface,
+};
+use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
+use smithay_client_toolkit::reexports::protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
+use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::client::{
+    wp_fractional_scale_manager_v1, wp_fractional_scale_v1,
+};
+use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::{
+    wp_viewport, wp_viewporter,
+};
+use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
+use smithay_client_toolkit::seat::keyboard::{
+    KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers,
+};
+use smithay_client_toolkit::seat::pointer::{
+    AxisScroll, PointerEvent, PointerEventKind, PointerHandler,
+};
+use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
+use smithay_client_toolkit::shell::WaylandSurface;
+use smithay_client_toolkit::shell::wlr_layer::{
+    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
+    LayerSurfaceConfigure,
+};
+use smithay_client_toolkit::{delegate_registry, registry_handlers};
+use triton_design::shape::rounded_rect_bands;
+
+use crate::error::EngineError;
+use crate::gpu::{DrawList, Gpu};
+use crate::platform::egl::{Egl, EglSurface};
+use crate::platform::wl_egl::{EglWindow, WlEgl};
+use crate::text::TextEngine;
+use crate::ui::{
+    BlurRect, BuiltFrame, Element, InputEvent, InteractionState, Key, layout_and_paint,
+    measure_tree,
+};
+
+/// Re-exported layer-shell enums for safe consumer use without importing SCTK directly.
+pub use smithay_client_toolkit::shell::wlr_layer::{
+    Anchor as SurfaceAnchor, KeyboardInteractivity as SurfaceKeyboard, Layer as SurfaceLayer,
+};
+
+/// Surface sizing policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfaceSize {
+    /// Automatically size the Wayland layer surface to match the rendered UI tree's
+    /// natural Taffy dimensions (measured before configure and on every frame).
+    FitContent {
+        /// Optional maximum logical bounds (width, height).
+        max_w: Option<u32>,
+        max_h: Option<u32>,
+    },
+    /// Fixed logical size `(width, height)`.
+    Fixed(u32, u32),
+    /// Stretch to fill the anchored edges (e.g., `TOP | BOTTOM | LEFT | RIGHT` for overlays).
+    Stretch,
+}
+
+/// Declarative specification of one layer-shell surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SurfaceSpec {
+    pub namespace: String,
+    pub layer: Layer,
+    pub anchor: Anchor,
+    /// Margins `(top, right, bottom, left)` in logical px.
+    pub margin: (i32, i32, i32, i32),
+    pub keyboard: KeyboardInteractivity,
+    pub exclusive_zone: i32,
+    pub sizing: SurfaceSize,
+    /// If true, pointer events outside painted input rects pass through to windows below.
+    pub shaped_input: bool,
+}
+
+impl SurfaceSpec {
+    /// Floating top-bar island anchored to `anchor` (e.g., `TOP | LEFT` or `TOP | RIGHT`).
+    pub fn island(
+        namespace: impl Into<String>,
+        anchor: Anchor,
+        margin: (i32, i32, i32, i32),
+    ) -> Self {
+        Self {
+            namespace: namespace.into(),
+            layer: Layer::Top,
+            anchor,
+            margin,
+            keyboard: KeyboardInteractivity::None,
+            exclusive_zone: 0,
+            sizing: SurfaceSize::FitContent {
+                max_w: Some(1400),
+                max_h: Some(120),
+            },
+            shaped_input: true,
+        }
+    }
+
+    /// Floating centered overlay panel (e.g., launcher / quick settings) that uses
+    /// `FitContent` or `Stretch` with exclusive keyboard grab.
+    pub fn overlay_panel(
+        namespace: impl Into<String>,
+        anchor: Anchor,
+        margin: (i32, i32, i32, i32),
+    ) -> Self {
+        Self {
+            namespace: namespace.into(),
+            layer: Layer::Overlay,
+            anchor,
+            margin,
+            keyboard: KeyboardInteractivity::Exclusive,
+            exclusive_zone: -1,
+            sizing: SurfaceSize::FitContent {
+                max_w: Some(1400),
+                max_h: Some(900),
+            },
+            shaped_input: true,
+        }
+    }
+}
+
+/// Per-surface frame timing summary collected by the runtime.
+#[derive(Debug, Clone)]
+pub struct SurfaceMetrics {
+    pub frames: u64,
+    pub logical_size: (u32, u32),
+    pub buffer_size: (u32, u32),
+    pub scale: f32,
+    pub interval_ms_mean: f64,
+    pub interval_ms_p50: f64,
+    pub interval_ms_p95: f64,
+    pub interval_ms_max: f64,
+}
+
+/// Context passed into [`ShellApp::view`].
+pub struct ViewContext<'a> {
+    pub now: Instant,
+    pub logical_size: (u32, u32),
+    pub scale: f32,
+    pub interaction: &'a InteractionState,
+    pub text: &'a mut TextEngine,
+}
+
+impl fmt::Debug for ViewContext<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ViewContext")
+            .field("logical_size", &self.logical_size)
+            .field("scale", &self.scale)
+            .finish()
+    }
+}
+
+/// Commands an app may return from [`ShellApp::update`] or [`ShellApp::on_timer`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AppCommand<Id> {
+    /// Request a redraw on a specific surface.
+    Redraw(Id),
+    /// Request a redraw on all live surfaces.
+    RedrawAll,
+    /// Focus a widget key on a specific surface.
+    Focus(Id, crate::ui::NodeKey),
+    /// Schedule a one-shot timer callback after `delay` with caller-defined `tag`.
+    ScheduleTimer { tag: u32, delay: Duration },
+    /// Exit the event loop cleanly.
+    Quit,
+}
+
+/// Application trait implemented by Triton shell surfaces in 100% safe Rust.
+pub trait ShellApp: 'static {
+    type SurfaceId: Copy + Eq + Hash + Send + Sync + fmt::Debug + 'static;
+    type Message: fmt::Debug + 'static;
+
+    /// Declare all surfaces that should currently exist. Adding an ID creates the
+    /// layer surface; removing an ID tears it down cleanly.
+    fn surfaces(&self) -> Vec<(Self::SurfaceId, SurfaceSpec)>;
+
+    /// Build the declarative UI tree for `id`.
+    fn view(&self, id: Self::SurfaceId, ctx: &mut ViewContext<'_>) -> Element<Self::Message>;
+
+    /// Handle a message emitted by UI interaction on `id`.
+    fn update(
+        &mut self,
+        id: Self::SurfaceId,
+        msg: Self::Message,
+        now: Instant,
+    ) -> Vec<AppCommand<Self::SurfaceId>>;
+
+    /// Return `true` while `id` has an active spring/animation requiring vsync frames.
+    /// When `false`, the engine stops requesting `wl_surface.frame` callbacks (0% idle CPU).
+    fn is_animating(&self, id: Self::SurfaceId, now: Instant) -> bool;
+
+    /// Optional initial commands executed right after the event loop starts.
+    fn on_start(&mut self, _now: Instant) -> Vec<AppCommand<Self::SurfaceId>> {
+        Vec::new()
+    }
+
+    /// Optional callback for timers scheduled via [`AppCommand::ScheduleTimer`].
+    fn on_timer(&mut self, _tag: u32, _now: Instant) -> Vec<AppCommand<Self::SurfaceId>> {
+        Vec::new()
+    }
+
+    /// Called once right before the event loop exits, with per-surface metrics.
+    fn on_exit(&mut self, _metrics: &HashMap<Self::SurfaceId, SurfaceMetrics>) {}
+}
+
+/// Run a [`ShellApp`] on the Wayland + calloop + EGL/GLES3 runtime.
+pub fn run<A: ShellApp>(app: A) -> Result<(), EngineError> {
+    let conn = Connection::connect_to_env()
+        .map_err(|e| EngineError::Wayland(format!("connect_to_env: {e}")))?;
+    let (globals, event_queue) = registry_queue_init::<Runtime<A>>(&conn)
+        .map_err(|e| EngineError::Wayland(format!("registry_queue_init: {e}")))?;
+    let qh = event_queue.handle();
+
+    let mut event_loop: EventLoop<'_, Runtime<A>> = EventLoop::try_new()
+        .map_err(|e| EngineError::EventLoop(format!("EventLoop::try_new: {e}")))?;
+    let loop_handle = event_loop.handle();
+    WaylandSource::new(conn.clone(), event_queue)
+        .insert(loop_handle.clone())
+        .map_err(|e| EngineError::EventLoop(format!("insert WaylandSource: {e}")))?;
+
+    let mut runtime = Runtime::new(
+        app,
+        &conn,
+        &globals,
+        &qh,
+        loop_handle,
+        event_loop.get_signal(),
+    )?;
+    let start_cmds = runtime.app.on_start(Instant::now());
+    runtime.apply_commands(start_cmds, &qh);
+    runtime.sync_surfaces(&qh)?;
+
+    event_loop
+        .run(None, &mut runtime, |_| {})
+        .map_err(|e| EngineError::EventLoop(format!("event_loop.run: {e}")))?;
+
+    let metrics = runtime.collect_metrics();
+    runtime.app.on_exit(&metrics);
+    runtime.destroy_all_surfaces();
+    Ok(())
+}
+
+// ── Internal multi-surface Wayland/EGL runtime ──────────────────────────────
+
+struct SurfaceHost<A: ShellApp> {
+    spec: SurfaceSpec,
+    layer: LayerSurface,
+    window: EglWindow,
+    egl_surface: EglSurface,
+    viewport: Option<wp_viewport::WpViewport>,
+    _fs: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
+    effect: Option<ExtBackgroundEffectSurfaceV1>,
+    logical: (u32, u32),
+    buffer: (u32, u32),
+    scale: f32,
+    configured: bool,
+    frame_pending: bool,
+    needs_redraw: bool,
+    interaction: InteractionState,
+    built: BuiltFrame<A::Message>,
+    last_blur: Vec<BlurRect>,
+    last_input: Vec<BlurRect>,
+    /// Intervals between consecutive animation frames (ms).
+    intervals: Vec<f64>,
+    last_frame: Option<Instant>,
+    frames: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SurfaceTag<Id>(Id);
+
+struct Runtime<A: ShellApp> {
+    app: A,
+    registry_state: RegistryState,
+    output_state: OutputState,
+    seat_state: SeatState,
+    compositor: CompositorState,
+    layer_shell: LayerShell,
+    effect_state: BackgroundEffectState,
+    fs_manager: Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
+    viewporter: Option<wp_viewporter::WpViewporter>,
+
+    egl: Egl,
+    wl_egl: WlEgl,
+    gpu: Option<Gpu>,
+    text: TextEngine,
+    draw_list: DrawList,
+
+    hosts: HashMap<A::SurfaceId, SurfaceHost<A>>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    pointer: Option<wl_pointer::WlPointer>,
+    keyboard_surface: Option<A::SurfaceId>,
+    modifiers: Modifiers,
+    loop_handle: LoopHandle<'static, Runtime<A>>,
+    signal: LoopSignal,
+}
+
+impl<A: ShellApp> Runtime<A> {
+    fn new(
+        app: A,
+        conn: &Connection,
+        globals: &wayland_client::globals::GlobalList,
+        qh: &QueueHandle<Runtime<A>>,
+        loop_handle: LoopHandle<'static, Runtime<A>>,
+        signal: LoopSignal,
+    ) -> Result<Self, EngineError> {
+        let compositor = CompositorState::bind(globals, qh)
+            .map_err(|e| EngineError::Wayland(format!("wl_compositor: {e}")))?;
+        let layer_shell = LayerShell::bind(globals, qh)
+            .map_err(|e| EngineError::Wayland(format!("zwlr_layer_shell_v1: {e}")))?;
+        let effect_state = BackgroundEffectState::new(globals, qh);
+        let fs_manager = globals
+            .bind::<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1, _, _>(
+                qh,
+                1..=1,
+                GlobalData,
+            )
+            .ok();
+        let viewporter = globals
+            .bind::<wp_viewporter::WpViewporter, _, _>(qh, 1..=1, GlobalData)
+            .ok();
+
+        tracing::info!(
+            fractional_scale = fs_manager.is_some(),
+            viewporter = viewporter.is_some(),
+            bg_effect = effect_state.ext_background_effect_manager_v1().is_ok(),
+            "bound Wayland globals"
+        );
+
+        let egl = Egl::from_connection(conn)?;
+        let wl_egl = WlEgl::load()?;
+        let text = TextEngine::new();
+
+        Ok(Self {
+            app,
+            registry_state: RegistryState::new(globals),
+            output_state: OutputState::new(globals, qh),
+            seat_state: SeatState::new(globals, qh),
+            compositor,
+            layer_shell,
+            effect_state,
+            fs_manager,
+            viewporter,
+            egl,
+            wl_egl,
+            gpu: None,
+            text,
+            draw_list: DrawList::default(),
+            hosts: HashMap::new(),
+            keyboard: None,
+            pointer: None,
+            keyboard_surface: None,
+            modifiers: Modifiers::default(),
+            loop_handle,
+            signal,
+        })
+    }
+
+    fn sync_surfaces(&mut self, qh: &QueueHandle<Self>) -> Result<(), EngineError> {
+        let desired = self.app.surfaces();
+        let desired_ids: Vec<A::SurfaceId> = desired.iter().map(|(id, _)| *id).collect();
+
+        // Tear down removed surfaces cleanly (destroy EGLSurface before EglWindow).
+        let to_remove: Vec<A::SurfaceId> = self
+            .hosts
+            .keys()
+            .copied()
+            .filter(|id| !desired_ids.contains(id))
+            .collect();
+        for id in to_remove {
+            if let Some(host) = self.hosts.remove(&id) {
+                let _ = self.egl.make_current(None);
+                self.egl.destroy_surface(host.egl_surface);
+                drop(host);
+            }
+            if self.keyboard_surface == Some(id) {
+                self.keyboard_surface = None;
+            }
+        }
+
+        // Create missing surfaces or update changed specs.
+        for (id, spec) in desired {
+            if let Some(host) = self.hosts.get_mut(&id) {
+                if host.spec != spec {
+                    host.layer.set_anchor(spec.anchor);
+                    host.layer.set_margin(
+                        spec.margin.0,
+                        spec.margin.1,
+                        spec.margin.2,
+                        spec.margin.3,
+                    );
+                    host.layer.set_keyboard_interactivity(spec.keyboard);
+                    host.layer.set_exclusive_zone(spec.exclusive_zone);
+                    host.spec = spec;
+                    host.needs_redraw = true;
+                    queue_frame(host, qh);
+                }
+            } else {
+                self.create_surface(id, spec, qh)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn create_surface(
+        &mut self,
+        id: A::SurfaceId,
+        spec: SurfaceSpec,
+        qh: &QueueHandle<Self>,
+    ) -> Result<(), EngineError> {
+        let initial_logical = self.compute_initial_size(id, &spec);
+        let wl = self.compositor.create_surface(qh);
+        let layer = self.layer_shell.create_layer_surface(
+            qh,
+            wl,
+            spec.layer,
+            Some(spec.namespace.clone()),
+            None,
+        );
+        layer.set_anchor(spec.anchor);
+        layer.set_margin(spec.margin.0, spec.margin.1, spec.margin.2, spec.margin.3);
+        layer.set_keyboard_interactivity(spec.keyboard);
+        layer.set_exclusive_zone(spec.exclusive_zone);
+
+        match spec.sizing {
+            SurfaceSize::Stretch => {
+                // Anchored edges determine size; 0 tells the compositor to fill.
+                layer.set_size(0, 0);
+            }
+            SurfaceSize::Fixed(w, h) => {
+                layer.set_size(w.max(1), h.max(1));
+            }
+            SurfaceSize::FitContent { .. } => {
+                layer.set_size(initial_logical.0.max(1), initial_logical.1.max(1));
+            }
+        }
+
+        let window =
+            self.wl_egl
+                .create_window(layer.wl_surface(), initial_logical.0, initial_logical.1)?;
+        let egl_surface = self.egl.create_surface(&window)?;
+        let tag = SurfaceTag(id);
+        let fs = self
+            .fs_manager
+            .as_ref()
+            .map(|m| m.get_fractional_scale(layer.wl_surface(), qh, tag));
+        let viewport = self
+            .viewporter
+            .as_ref()
+            .map(|v| v.get_viewport(layer.wl_surface(), qh, tag));
+        let effect = self
+            .effect_state
+            .get_background_effect(layer.wl_surface(), qh)
+            .ok();
+
+        // Initialize the shared GLES3 renderer once the first EGL surface exists.
+        if self.gpu.is_none() {
+            self.egl.make_current(Some(egl_surface))?;
+            self.egl.set_swap_interval(0);
+            self.gpu = Some(Gpu::new(self.egl.glow())?);
+        }
+
+        layer.commit();
+
+        self.hosts.insert(
+            id,
+            SurfaceHost {
+                spec,
+                layer,
+                window,
+                egl_surface,
+                viewport,
+                _fs: fs,
+                effect,
+                logical: initial_logical,
+                buffer: initial_logical,
+                scale: 1.0,
+                configured: false,
+                frame_pending: false,
+                needs_redraw: true,
+                interaction: InteractionState::default(),
+                built: BuiltFrame::default(),
+                last_blur: Vec::new(),
+                last_input: Vec::new(),
+                intervals: Vec::new(),
+                last_frame: None,
+                frames: 0,
+            },
+        );
+        Ok(())
+    }
+
+    /// Pre-measure content-sized surfaces before initial `layer.commit()` so
+    /// the compositor configures the exact final width/height on frame 1 (zero
+    /// 1-frame flash or clipping!).
+    fn compute_initial_size(&mut self, id: A::SurfaceId, spec: &SurfaceSpec) -> (u32, u32) {
+        match spec.sizing {
+            SurfaceSize::Fixed(w, h) => (w.max(1), h.max(1)),
+            SurfaceSize::Stretch => (640, 480),
+            SurfaceSize::FitContent { max_w, max_h } => {
+                let interaction = InteractionState::default();
+                let mut ctx = ViewContext {
+                    now: Instant::now(),
+                    logical_size: (max_w.unwrap_or(1200), max_h.unwrap_or(800)),
+                    scale: 1.0,
+                    interaction: &interaction,
+                    text: &mut self.text,
+                };
+                let tree = self.app.view(id, &mut ctx);
+                let (w, h) = measure_tree(
+                    &tree,
+                    (max_w.map(|v| v as f32), max_h.map(|v| v as f32)),
+                    &mut self.text,
+                );
+                (w.ceil().max(1.0) as u32, h.ceil().max(1.0) as u32)
+            }
+        }
+    }
+
+    fn apply_commands(&mut self, cmds: Vec<AppCommand<A::SurfaceId>>, qh: &QueueHandle<Self>) {
+        for cmd in cmds {
+            match cmd {
+                AppCommand::Redraw(id) => {
+                    if let Some(host) = self.hosts.get_mut(&id) {
+                        host.needs_redraw = true;
+                        queue_frame(host, qh);
+                    }
+                }
+                AppCommand::RedrawAll => {
+                    for host in self.hosts.values_mut() {
+                        host.needs_redraw = true;
+                        queue_frame(host, qh);
+                    }
+                }
+                AppCommand::Focus(id, key) => {
+                    if let Some(host) = self.hosts.get_mut(&id) {
+                        host.interaction.focused = Some(key);
+                        host.needs_redraw = true;
+                        queue_frame(host, qh);
+                    }
+                }
+                AppCommand::ScheduleTimer { tag, delay } => {
+                    let qh_clone = qh.clone();
+                    let _ = self.loop_handle.insert_source(
+                        Timer::from_duration(delay),
+                        move |_, (), rt: &mut Runtime<A>| {
+                            let now = Instant::now();
+                            let cmds = rt.app.on_timer(tag, now);
+                            rt.apply_commands(cmds, &qh_clone);
+                            let _ = rt.sync_surfaces(&qh_clone);
+                            TimeoutAction::Drop
+                        },
+                    );
+                }
+                AppCommand::Quit => {
+                    self.signal.stop();
+                }
+            }
+        }
+    }
+
+    fn resize_host(&mut self, id: A::SurfaceId, lw: u32, lh: u32) {
+        if let Some(host) = self.hosts.get_mut(&id) {
+            host.logical = (lw.max(1), lh.max(1));
+            host.configured = true;
+            host.needs_redraw = true;
+            rebuffer_host(host);
+        }
+    }
+
+    fn rescale_host(&mut self, id: A::SurfaceId, scale_120: u32) {
+        let scale = (scale_120 as f32 / 120.0).max(0.5);
+        if let Some(host) = self.hosts.get_mut(&id)
+            && (host.scale - scale).abs() >= 0.001
+        {
+            host.scale = scale;
+            rebuffer_host(host);
+            host.needs_redraw = true;
+        }
+    }
+
+    fn present(&mut self, id: A::SurfaceId, qh: &QueueHandle<Self>) {
+        let now = Instant::now();
+        self.text.begin_frame();
+
+        let (logical, scale, sizing) = {
+            let Some(host) = self.hosts.get_mut(&id) else {
+                return;
+            };
+            host.needs_redraw = false;
+            (host.logical, host.scale, host.spec.sizing)
+        };
+
+        // 1. Build the declarative element tree safely.
+        let element = {
+            let Some(host) = self.hosts.get(&id) else {
+                return;
+            };
+            let mut ctx = ViewContext {
+                now,
+                logical_size: logical,
+                scale,
+                interaction: &host.interaction,
+                text: &mut self.text,
+            };
+            self.app.view(id, &mut ctx)
+        };
+
+        // 2. Determine available layout constraints.
+        let avail = match sizing {
+            SurfaceSize::FitContent { max_w, max_h } => {
+                (max_w.map(|v| v as f32), max_h.map(|v| v as f32))
+            }
+            SurfaceSize::Fixed(..) | SurfaceSize::Stretch => {
+                (Some(logical.0 as f32), Some(logical.1 as f32))
+            }
+        };
+
+        // 3. Layout & paint into DrawList.
+        let built = {
+            let Some(host) = self.hosts.get(&id) else {
+                return;
+            };
+            layout_and_paint(
+                element,
+                avail,
+                scale,
+                &host.interaction,
+                &mut self.text,
+                &mut self.draw_list,
+            )
+        };
+
+        // 4. Dynamic FitContent resize: if content grew or shrank (e.g. a spring-
+        //    morphing workspace island), update layer size + EGL buffer + viewport
+        //    *before* swapping so there is NEVER clipping!
+        if let SurfaceSize::FitContent { .. } = sizing {
+            let want_w = built.content_size.0.ceil().max(1.0) as u32;
+            let want_h = built.content_size.1.ceil().max(1.0) as u32;
+            if (want_w != logical.0 || want_h != logical.1)
+                && let Some(host) = self.hosts.get_mut(&id)
+            {
+                host.logical = (want_w, want_h);
+                host.layer.set_size(want_w, want_h);
+                rebuffer_host(host);
+            }
+        }
+
+        // 5. Update shaped compositor blur and input regions when changed.
+        let (bw, bh, egl_surface) = {
+            let Some(host) = self.hosts.get_mut(&id) else {
+                return;
+            };
+            if host.last_blur != built.blur_rects {
+                update_blur_region(&self.compositor, host.effect.as_ref(), &built.blur_rects);
+                host.last_blur.clone_from(&built.blur_rects);
+            }
+            if host.spec.shaped_input && host.last_input != built.input_rects {
+                update_input_region(
+                    &self.compositor,
+                    host.layer.wl_surface(),
+                    &built.input_rects,
+                );
+                host.last_input.clone_from(&built.input_rects);
+            }
+            host.built = built;
+            host.frames += 1;
+            (host.buffer.0, host.buffer.1, host.egl_surface)
+        };
+
+        // 6. Render with GLES3 and swap with damage.
+        if let Err(e) = self.egl.make_current(Some(egl_surface)) {
+            tracing::error!(?id, %e, "eglMakeCurrent failed");
+            return;
+        }
+        self.egl.set_swap_interval(0);
+        if let Some(gpu) = &self.gpu {
+            let mut atlas = self.text.atlas_upload();
+            gpu.render(bw, bh, &self.draw_list, &mut atlas);
+        }
+        let damage = [[
+            0,
+            0,
+            i32::try_from(bw).unwrap_or(1),
+            i32::try_from(bh).unwrap_or(1),
+        ]];
+        if let Err(e) = self.egl.swap(egl_surface, &damage) {
+            tracing::error!(?id, %e, "eglSwapBuffers failed");
+        }
+
+        // 7. Sync surface lifecycle (e.g. closing panel finished its spring) and re-arm pacing.
+        if let Err(e) = self.sync_surfaces(qh) {
+            tracing::error!(%e, "sync_surfaces failed");
+        }
+        let still_animating = self.app.is_animating(id, now);
+        if let Some(host) = self.hosts.get_mut(&id) {
+            host.frame_pending = false;
+            if still_animating || host.needs_redraw {
+                queue_frame(host, qh);
+            } else {
+                // Reset frame-interval anchor when going idle so the next wake
+                // doesn't record a huge idle gap as a frame interval.
+                host.last_frame = None;
+            }
+        }
+    }
+
+    fn dispatch_ui_event(&mut self, id: A::SurfaceId, event: &InputEvent, qh: &QueueHandle<Self>) {
+        let now = Instant::now();
+        let (msgs, dirty) = {
+            let Some(host) = self.hosts.get_mut(&id) else {
+                return;
+            };
+            host.built.dispatch_event(event, &mut host.interaction)
+        };
+
+        let mut all_cmds = Vec::new();
+        for msg in msgs {
+            all_cmds.extend(self.app.update(id, msg, now));
+        }
+        if let Err(e) = self.sync_surfaces(qh) {
+            tracing::error!(%e, "sync_surfaces after input failed");
+        }
+        self.apply_commands(all_cmds, qh);
+
+        if (dirty || self.app.is_animating(id, now))
+            && let Some(host) = self.hosts.get_mut(&id)
+        {
+            host.needs_redraw = true;
+            queue_frame(host, qh);
+        }
+    }
+
+    fn surface_id_for_wl(&self, surface: &wl_surface::WlSurface) -> Option<A::SurfaceId> {
+        self.hosts
+            .iter()
+            .find(|(_, h)| h.layer.wl_surface() == surface)
+            .map(|(id, _)| *id)
+    }
+
+    fn collect_metrics(&self) -> HashMap<A::SurfaceId, SurfaceMetrics> {
+        self.hosts
+            .iter()
+            .map(|(&id, h)| {
+                let mut iv = h.intervals.clone();
+                iv.sort_by(f64::total_cmp);
+                let pct = |q: f64| {
+                    if iv.is_empty() {
+                        0.0
+                    } else {
+                        let idx = ((iv.len() - 1) as f64 * q).round() as usize;
+                        iv[idx]
+                    }
+                };
+                let mean = if iv.is_empty() {
+                    0.0
+                } else {
+                    iv.iter().sum::<f64>() / iv.len() as f64
+                };
+                (
+                    id,
+                    SurfaceMetrics {
+                        frames: h.frames,
+                        logical_size: h.logical,
+                        buffer_size: h.buffer,
+                        scale: h.scale,
+                        interval_ms_mean: mean,
+                        interval_ms_p50: pct(0.50),
+                        interval_ms_p95: pct(0.95),
+                        interval_ms_max: pct(1.0),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn destroy_all_surfaces(&mut self) {
+        let _ = self.egl.make_current(None);
+        for (_, host) in self.hosts.drain() {
+            self.egl.destroy_surface(host.egl_surface);
+        }
+    }
+}
+
+fn rebuffer_host<A: ShellApp>(host: &mut SurfaceHost<A>) {
+    let (lw, lh) = host.logical;
+    let bw = (lw as f32 * host.scale).round().max(1.0) as u32;
+    let bh = (lh as f32 * host.scale).round().max(1.0) as u32;
+    host.buffer = (bw, bh);
+    host.window.resize(bw, bh);
+    if let Some(vp) = &host.viewport {
+        vp.set_destination(
+            i32::try_from(lw).unwrap_or(1),
+            i32::try_from(lh).unwrap_or(1),
+        );
+    }
+}
+
+fn queue_frame<A: ShellApp>(host: &mut SurfaceHost<A>, qh: &QueueHandle<Runtime<A>>) {
+    if host.frame_pending || !host.configured {
+        return;
+    }
+    host.layer
+        .wl_surface()
+        .frame(qh, FrameCallbackData(host.layer.wl_surface().clone()));
+    host.frame_pending = true;
+    host.layer.wl_surface().commit();
+}
+
+fn update_blur_region(
+    compositor: &CompositorState,
+    effect: Option<&ExtBackgroundEffectSurfaceV1>,
+    rects: &[BlurRect],
+) {
+    let Some(effect) = effect else {
+        return;
+    };
+    if rects.is_empty() {
+        effect.set_blur_region(None);
+        return;
+    }
+    if let Ok(region) = Region::new(compositor) {
+        for br in rects {
+            let ox = br.rect.x.round() as i32;
+            let oy = br.rect.y.round() as i32;
+            let w = br.rect.w.round().max(1.0) as u32;
+            let h = br.rect.h.round().max(1.0) as u32;
+            for (bx, by, bw, bh) in rounded_rect_bands(w, h, br.radius) {
+                region.add(ox + bx, oy + by, bw, bh);
+            }
+        }
+        effect.set_blur_region(Some(region.wl_region()));
+    }
+}
+
+fn update_input_region(
+    compositor: &CompositorState,
+    surface: &wl_surface::WlSurface,
+    rects: &[BlurRect],
+) {
+    if rects.is_empty() {
+        surface.set_input_region(None);
+        return;
+    }
+    if let Ok(region) = Region::new(compositor) {
+        for br in rects {
+            let ox = br.rect.x.floor() as i32;
+            let oy = br.rect.y.floor() as i32;
+            let w = br.rect.w.ceil().max(1.0) as u32;
+            let h = br.rect.h.ceil().max(1.0) as u32;
+            for (bx, by, bw, bh) in rounded_rect_bands(w, h, br.radius) {
+                region.add(ox + bx, oy + by, bw, bh);
+            }
+        }
+        surface.set_input_region(Some(region.wl_region()));
+    }
+}
+
+fn map_keysym(keysym: Keysym, utf8: Option<&str>) -> Key {
+    match keysym {
+        Keysym::Escape => Key::Escape,
+        Keysym::Return | Keysym::KP_Enter => Key::Enter,
+        Keysym::Tab | Keysym::ISO_Left_Tab => Key::Tab,
+        Keysym::BackSpace => Key::BackSpace,
+        Keysym::Delete | Keysym::KP_Delete => Key::Delete,
+        Keysym::Left | Keysym::KP_Left => Key::Left,
+        Keysym::Right | Keysym::KP_Right => Key::Right,
+        Keysym::Up | Keysym::KP_Up => Key::Up,
+        Keysym::Down | Keysym::KP_Down => Key::Down,
+        Keysym::Home | Keysym::KP_Home => Key::Home,
+        Keysym::End | Keysym::KP_End => Key::End,
+        Keysym::space => Key::Space,
+        _ => utf8
+            .and_then(|s| s.chars().next())
+            .filter(|c| !c.is_control())
+            .map_or(Key::Other, Key::Char),
+    }
+}
+
+// ── SCTK Handler Implementations ─────────────────────────────────────────────
+
+impl<A: ShellApp> CompositorHandler for Runtime<A> {
+    fn scale_factor_changed(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        new_factor: i32,
+    ) {
+        // Fallback when wp_fractional_scale_v1 is absent.
+        if self.fs_manager.is_none()
+            && let Some(id) = self.surface_id_for_wl(surface)
+        {
+            self.rescale_host(id, u32::try_from(new_factor.max(1)).unwrap_or(1) * 120);
+            if let Some(host) = self.hosts.get_mut(&id) {
+                queue_frame(host, qh);
+            }
+        }
+    }
+
+    fn transform_changed(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _new_transform: wl_output::Transform,
+    ) {
+    }
+
+    fn frame(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        surface: &wl_surface::WlSurface,
+        _time: u32,
+    ) {
+        let Some(id) = self.surface_id_for_wl(surface) else {
+            return;
+        };
+        let now = Instant::now();
+        let should_present = {
+            let Some(host) = self.hosts.get_mut(&id) else {
+                return;
+            };
+            host.frame_pending = false;
+            if let Some(last) = host.last_frame {
+                host.intervals
+                    .push(now.saturating_duration_since(last).as_secs_f64() * 1000.0);
+            }
+            host.last_frame = Some(now);
+            host.needs_redraw || self.app.is_animating(id, now)
+        };
+        if should_present {
+            self.present(id, qh);
+        }
+    }
+
+    fn surface_enter(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+
+    fn surface_leave(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _surface: &wl_surface::WlSurface,
+        _output: &wl_output::WlOutput,
+    ) {
+    }
+}
+
+impl<A: ShellApp> OutputHandler for Runtime<A> {
+    fn output_state(&mut self) -> &mut OutputState {
+        &mut self.output_state
+    }
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+}
+
+impl<A: ShellApp> LayerShellHandler for Runtime<A> {
+    fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
+        if let Some(id) = self.surface_id_for_wl(layer.wl_surface())
+            && let Some(host) = self.hosts.remove(&id)
+        {
+            let _ = self.egl.make_current(None);
+            self.egl.destroy_surface(host.egl_surface);
+        }
+    }
+
+    fn configure(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        layer: &LayerSurface,
+        configure: LayerSurfaceConfigure,
+        _serial: u32,
+    ) {
+        let Some(id) = self.surface_id_for_wl(layer.wl_surface()) else {
+            return;
+        };
+        let (cw, ch) = configure.new_size;
+        let cur = self.hosts.get(&id).map_or((1, 1), |h| h.logical);
+        let w = if cw == 0 { cur.0 } else { cw };
+        let h = if ch == 0 { cur.1 } else { ch };
+        self.resize_host(id, w, h);
+        self.present(id, qh);
+    }
+}
+
+impl<A: ShellApp> SeatHandler for Runtime<A> {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        match capability {
+            Capability::Keyboard if self.keyboard.is_none() => {
+                if let Ok(kb) = self.seat_state.get_keyboard(qh, &seat, None) {
+                    self.keyboard = Some(kb);
+                }
+            }
+            Capability::Pointer if self.pointer.is_none() => {
+                if let Ok(ptr) = self.seat_state.get_pointer(qh, &seat) {
+                    self.pointer = Some(ptr);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        _seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        match capability {
+            Capability::Keyboard => drop(self.keyboard.take()),
+            Capability::Pointer => drop(self.pointer.take()),
+            _ => {}
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl<A: ShellApp> KeyboardHandler for Runtime<A> {
+    fn enter(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        surface: &wl_surface::WlSurface,
+        _: u32,
+        _: &[u32],
+        _: &[Keysym],
+    ) {
+        self.keyboard_surface = self.surface_id_for_wl(surface);
+    }
+
+    fn leave(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        surface: &wl_surface::WlSurface,
+        _: u32,
+    ) {
+        if self.keyboard_surface == self.surface_id_for_wl(surface) {
+            self.keyboard_surface = None;
+        }
+    }
+
+    fn press_key(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.handle_key_event(event, qh);
+    }
+
+    fn repeat_key(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        event: KeyEvent,
+    ) {
+        self.handle_key_event(event, qh);
+    }
+
+    fn release_key(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        _: KeyEvent,
+    ) {
+    }
+
+    fn update_modifiers(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: &wl_keyboard::WlKeyboard,
+        _: u32,
+        modifiers: Modifiers,
+        _: RawModifiers,
+        _: u32,
+    ) {
+        self.modifiers = modifiers;
+    }
+}
+
+impl<A: ShellApp> Runtime<A> {
+    fn handle_key_event(&mut self, event: KeyEvent, qh: &QueueHandle<Self>) {
+        let Some(id) = self.keyboard_surface else {
+            return;
+        };
+        let key = map_keysym(event.keysym, event.utf8.as_deref());
+        let ev = InputEvent::KeyDown {
+            key,
+            utf8: event.utf8,
+            ctrl: self.modifiers.ctrl,
+            shift: self.modifiers.shift,
+            alt: self.modifiers.alt,
+        };
+        self.dispatch_ui_event(id, &ev, qh);
+    }
+}
+
+impl<A: ShellApp> PointerHandler for Runtime<A> {
+    fn pointer_frame(
+        &mut self,
+        _conn: &Connection,
+        qh: &QueueHandle<Self>,
+        _pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        for event in events {
+            let Some(id) = self.surface_id_for_wl(&event.surface) else {
+                continue;
+            };
+            let (x, y) = (event.position.0 as f32, event.position.1 as f32);
+            match event.kind {
+                PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                    self.dispatch_ui_event(id, &InputEvent::PointerMove { x, y }, qh);
+                }
+                PointerEventKind::Leave { .. } => {
+                    self.dispatch_ui_event(id, &InputEvent::PointerLeave, qh);
+                }
+                PointerEventKind::Press { button, .. } => {
+                    self.dispatch_ui_event(id, &InputEvent::PointerDown { x, y, button }, qh);
+                }
+                PointerEventKind::Release { button, .. } => {
+                    self.dispatch_ui_event(id, &InputEvent::PointerUp { x, y, button }, qh);
+                }
+                PointerEventKind::Axis { vertical, .. } => {
+                    let delta = scroll_delta_px(vertical);
+                    if delta.abs() > 0.01 {
+                        self.dispatch_ui_event(
+                            id,
+                            &InputEvent::Scroll {
+                                x,
+                                y,
+                                delta_y: delta,
+                            },
+                            qh,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn scroll_delta_px(axis: AxisScroll) -> f32 {
+    if axis.absolute.abs() > 0.001 {
+        axis.absolute as f32
+    } else if axis.discrete != 0 {
+        axis.discrete as f32 * 36.0
+    } else {
+        0.0
+    }
+}
+
+impl<A: ShellApp> BackgroundEffectHandler for Runtime<A> {
+    fn background_effect_state(&mut self) -> &mut BackgroundEffectState {
+        &mut self.effect_state
+    }
+
+    fn update_capabilities(&mut self) {
+        tracing::debug!(
+            caps = ?self.effect_state.capabilities(),
+            "updated ext-background-effect-v1 capabilities"
+        );
+    }
+}
+
+// ── Dispatch2 impls for Wayland globals/objects outside SCTK's built-in traits
+
+impl<A: ShellApp> Dispatch2<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1, Runtime<A>>
+    for GlobalData
+{
+    fn event(
+        &self,
+        _: &mut Runtime<A>,
+        _: &wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+        _: wp_fractional_scale_manager_v1::Event,
+        _: &Connection,
+        _: &QueueHandle<Runtime<A>>,
+    ) {
+    }
+}
+
+impl<A: ShellApp> Dispatch2<wp_viewporter::WpViewporter, Runtime<A>> for GlobalData {
+    fn event(
+        &self,
+        _: &mut Runtime<A>,
+        _: &wp_viewporter::WpViewporter,
+        _: wp_viewporter::Event,
+        _: &Connection,
+        _: &QueueHandle<Runtime<A>>,
+    ) {
+    }
+}
+
+impl<A: ShellApp> Dispatch2<wp_fractional_scale_v1::WpFractionalScaleV1, Runtime<A>>
+    for SurfaceTag<A::SurfaceId>
+{
+    fn event(
+        &self,
+        rt: &mut Runtime<A>,
+        _: &wp_fractional_scale_v1::WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        _: &Connection,
+        qh: &QueueHandle<Runtime<A>>,
+    ) {
+        if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+            rt.rescale_host(self.0, scale);
+            if let Some(host) = rt.hosts.get_mut(&self.0)
+                && host.configured
+            {
+                queue_frame(host, qh);
+            }
+        }
+    }
+}
+
+impl<A: ShellApp> Dispatch2<wp_viewport::WpViewport, Runtime<A>> for SurfaceTag<A::SurfaceId> {
+    fn event(
+        &self,
+        _: &mut Runtime<A>,
+        _: &wp_viewport::WpViewport,
+        _: wp_viewport::Event,
+        _: &Connection,
+        _: &QueueHandle<Runtime<A>>,
+    ) {
+    }
+}
+
+impl<A: ShellApp> ProvidesRegistryState for Runtime<A> {
+    fn registry(&mut self) -> &mut RegistryState {
+        &mut self.registry_state
+    }
+    registry_handlers![OutputState, SeatState];
+}
+
+delegate_registry!(@<A: ShellApp> Runtime<A>);
+smithay_client_toolkit::delegate_dispatch2!(@<A: ShellApp> Runtime<A>);

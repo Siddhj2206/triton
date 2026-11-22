@@ -1,0 +1,29 @@
+[package]
+name = "triton-engine"
+version = "0.1.0"
+description = "Triton's owned Wayland + GLES3 UI engine (SCTK 0.21 + calloop + EGL/SDF + cosmic-text + taffy)."
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cosmic-text = { workspace = true, features = ["std", "swash"] }
+glow.workspace = true
+iced_core.workspace = true
+khronos-egl = { workspace = true, features = ["dynamic", "1_5"] }
+libloading.workspace = true
+smithay-client-toolkit = { workspace = true, features = ["calloop", "xkbcommon"] }
+taffy = { workspace = true, features = ["std", "taffy_tree", "flexbox", "block_layout", "grid"] }
+thiserror.workspace = true
+tracing.workspace = true
+triton-design.workspace = true
+# `system` exposes real `wl_proxy` pointers for EGL; `dlopen` loads
+# `libwayland-client.so.0` at runtime so zero `-devel` packages are required.
+wayland-client = { workspace = true, features = ["system", "dlopen"] }
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
