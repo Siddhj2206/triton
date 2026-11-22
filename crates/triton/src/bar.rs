@@ -66,7 +66,7 @@ const BAR_TITLE_EDGE_FADE: f32 = 24.0;
 const REVEAL_EPSILON: f32 = 0.001;
 
 /// Base tag for per-output autohide reveal/hide timers (keeps tags disjoint from
-/// fixed tags like `TIMER_OSD_HIDE = 1` and `TIMER_BAR_CLOCK = 2`).
+/// fixed tags `TIMER_OSD_HIDE = 1`, `TIMER_BAR_CLOCK = 2`, `TIMER_OSD_REAP = 3`).
 const TIMER_BAR_OUTPUT_BASE: u32 = 0x1000;
 
 /// Deterministic timer tag for scheduling Autohide reveal on `output`.

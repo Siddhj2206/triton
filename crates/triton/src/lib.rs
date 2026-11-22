@@ -13,6 +13,7 @@ pub mod cli;
 pub mod ipc;
 pub mod niri_config;
 pub mod niri_ipc;
+pub mod osd;
 pub mod shell;
 pub mod state;
 
@@ -33,8 +34,11 @@ pub use niri_config::{
     write_owned_files,
 };
 pub use niri_ipc::{NIRI_SOCKET_ENV, NiriAction, NiriActionSender, NiriIpc, NiriIpcError};
-pub use shell::{ShellMessage, SurfaceId, TIMER_OSD_HIDE, TritonShell};
+pub use osd::{
+    OSD_HOLD_DURATION, OSD_REAP_INTERVAL, OsdPayload, OsdState, TIMER_OSD_HIDE, TIMER_OSD_REAP,
+};
+pub use shell::{ShellMessage, SurfaceId, TritonShell};
 pub use state::{
-    BackendMode, BarMode, FocusedWindow, OsdPayload, OsdState, OutputKey, ShellEvent, ShellState,
-    ShellStatusSnapshot, StatusSummary, SurfaceRole, SurfaceSummary, WallpaperState, WorkspaceInfo,
+    BackendMode, BarMode, FocusedWindow, OutputKey, ShellEvent, ShellState, ShellStatusSnapshot,
+    StatusSummary, SurfaceRole, SurfaceSummary, WallpaperState, WorkspaceInfo,
 };

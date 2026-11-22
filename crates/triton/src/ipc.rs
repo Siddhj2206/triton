@@ -14,7 +14,8 @@ use thiserror::Error;
 use tracing::{debug, warn};
 use triton_engine::EventSender;
 
-use crate::state::{OsdPayload, ShellEvent};
+use crate::osd::OsdPayload;
+use crate::state::ShellEvent;
 
 /// Environment variable overriding the default `$XDG_RUNTIME_DIR/triton.sock` path.
 pub const SOCKET_ENV_VAR: &str = "TRITON_SOCKET";
