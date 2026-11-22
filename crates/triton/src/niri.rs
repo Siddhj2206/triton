@@ -17,7 +17,10 @@ use iced_futures::futures::Stream;
 use iced_futures::futures::channel::mpsc;
 use niri_ipc::socket::Socket;
 use niri_ipc::state::{EventStreamState, EventStreamStatePart};
-use niri_ipc::{Action, Event, Reply, Request, Response, Window, Workspace, WorkspaceReferenceArg};
+use niri_ipc::{
+    Action, Event, KeyboardLayouts, Reply, Request, Response, Window, Workspace,
+    WorkspaceReferenceArg,
+};
 
 /// What the shell knows about niri at one moment.
 #[derive(Debug, Default)]
@@ -27,6 +30,9 @@ pub struct Snapshot {
     /// Workspaces in output, then index order.
     pub workspaces: Vec<Workspace>,
     pub windows: HashMap<u64, Window>,
+    /// Configured keyboard layouts + active idx (`KeyboardLayoutsChanged` /
+    /// `KeyboardLayoutSwitched` events — the layout OSD reads this).
+    pub layout: Option<KeyboardLayouts>,
 }
 
 impl Snapshot {
@@ -76,6 +82,7 @@ fn snapshot(state: &EventStreamState, outputs: Vec<String>) -> Arc<Snapshot> {
         outputs,
         workspaces,
         windows: state.windows.windows.clone(),
+        layout: state.keyboard_layouts.keyboard_layouts.clone(),
     })
 }
 
@@ -116,6 +123,8 @@ fn follow(tx: &mpsc::UnboundedSender<Arc<Snapshot>>) {
                 | Event::WindowOpenedOrChanged { .. }
                 | Event::WindowClosed { .. }
                 | Event::WindowFocusChanged { .. }
+                | Event::KeyboardLayoutsChanged { .. }
+                | Event::KeyboardLayoutSwitched { .. }
         );
         if matches!(event, Event::WorkspacesChanged { .. }) {
             outs = outputs(&mut query);

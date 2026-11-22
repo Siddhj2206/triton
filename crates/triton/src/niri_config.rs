@@ -105,6 +105,7 @@ fn binds() -> String {
     Mod+Alt+Q {{ spawn \"triton\" \"msg\" \"quicksettings toggle\"; }}
     Mod+B {{ spawn \"triton\" \"msg\" \"bar toggle\"; }}
     Mod+Alt+L {{ spawn \"triton\" \"msg\" \"lock\"; }}
+    Mod+Slash {{ spawn \"triton\" \"msg\" \"hotkeys\"; }}
     XF86PowerOff {{ spawn \"triton\" \"msg\" \"power toggle\"; }}
     XF86AudioRaiseVolume {{ spawn \"triton\" \"msg\" \"volume up\"; }}
     XF86AudioLowerVolume {{ spawn \"triton\" \"msg\" \"volume down\"; }}

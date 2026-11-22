@@ -35,6 +35,12 @@ the native architecture was auditable).
 - Toast hover-pause (`mouse_area` enter/exit → `Store::pause_toast`/`resume`)
 - Serialized last-wins wallpaper pipeline (`pipeline_busy`/`wallpaper_pending`)
 - `triton msg status` JSON dump + request/reply over the msg socket
+- **Consume niri where it already serves** (verified live + against
+  `niri-ipc` 26.4): real keyboard-layout events
+  (`KeyboardLayoutSwitched`/`KeyboardLayoutsChanged` → layout OSD),
+  DPMS via `PowerOffMonitors`/`PowerOnMonitors` (`triton msg dpms off|on`),
+  `ShowHotkeyOverlay` bound to `Mod+Slash` — no need for our own
+  wlr-output-power client or a config-parsing cheatsheet.
 - **Removed** `inhibit.rs` after verification: niri owns
   `org.freedesktop.ScreenSaver` itself (Inhibit/UnInhibit only) and gates
   `ext-idle-notify` internally via `is_fdo_idle_inhibited` — inhibitors hold

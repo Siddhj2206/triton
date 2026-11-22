@@ -453,8 +453,24 @@ impl Shell {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Niri(snapshot) => {
+                // A layout switch is state AND a transient event: the new
+                // idx lands in the snapshot, the pill fires on the diff.
+                let switched = snapshot.layout.clone().filter(|l| {
+                    self.niri
+                        .layout
+                        .as_ref()
+                        .is_some_and(|old| old.current_idx != l.current_idx)
+                });
                 self.niri = snapshot;
-                self.reconcile()
+                let osd = switched.and_then(|l| {
+                    l.names.get(l.current_idx as usize).map(|name| {
+                        self.show_osd(crate::panels::Osd::Layout {
+                            code: name.get(..2).unwrap_or(name).to_uppercase(),
+                            name: name.clone(),
+                        })
+                    })
+                });
+                Task::batch([self.reconcile(), osd.unwrap_or_else(Task::none)])
             }
             Message::Measured(id, dim, extent) => {
                 let Some(key) = self.surfaces.key(id).cloned() else {
@@ -1349,6 +1365,18 @@ impl Shell {
             }
             ["dnd", "toggle"] => self.update(Message::Dnd),
             ["nightlight", "toggle"] => self.update(Message::QsToggleNight),
+            ["dpms", "off"] => {
+                niri::act(niri_ipc::Action::PowerOffMonitors {});
+                Task::none()
+            }
+            ["dpms", "on"] => {
+                niri::act(niri_ipc::Action::PowerOnMonitors {});
+                Task::none()
+            }
+            ["hotkeys"] => {
+                niri::act(niri_ipc::Action::ShowHotkeyOverlay {});
+                Task::none()
+            }
             ["wallpaper", rest @ ..] => {
                 let path = rest.join(" ");
                 if path.is_empty() {

@@ -153,7 +153,7 @@ Bar (all modes, workspaces, title, clock, status, bell), wallpaper renderer and 
 - *`OnlyShowIn` ignored* on desktop entries — triton isn't a registered DE name and honoring it would hide apps (documented in `launch/index.rs`).
 - *Notification `image-data` hint* (raw pixmap bytes) is ignored; `app_icon`/`image-path` icons only.
 - *Wi-Fi join covers known and open networks:* `nmcli dev wifi connect` fails a secured network with no saved profile — the password prompt is the settings app's (Phase 3).
-- *`layout` OSD is demo-fed:* `msg osd layout` shows a canned value — niri emits no keyboard-layout events. (Workspace and battery OSDs are real: the `Mod+1..9` binds route through `triton msg workspace`, and UPower's `low` transition fires the battery pill.)
+- *`layout` OSD is event-fed:* niri's `KeyboardLayoutSwitched` lands in the snapshot and the diff fires the pill with the real XKB name; `msg osd layout` remains a canned demo feed. (Workspace and battery OSDs are real too: the `Mod+1..9` binds route through `triton msg workspace`, and UPower's `low` transition fires the battery pill.)
 - *Lock-board extras:* next event and media wait for the calendar/media backends (Phases 2–3); the notifications line landed.
 - *Ranking deviation:* subsequence beats scattered-subsequence per the launch agent's review (strictly stronger match) — kept; flag if the spec's order was literal.
 - *Lock screen veil* uses the `Glass` material rather than the board's tuned scrim alpha — visual only, easy to revisit.
