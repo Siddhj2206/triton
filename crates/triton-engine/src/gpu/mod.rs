@@ -7,11 +7,16 @@
 #![allow(unsafe_code)] // GLES3 calls via `glow::HasContext`
 
 pub mod corner_lut;
+pub mod layer_cache;
 
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::Hasher;
 
 use glow::HasContext;
+use layer_cache::LayerCache;
 
+use crate::damage::DamageRect;
 use crate::error::EngineError;
 use crate::image::{ImageData, ImageId, ImageStore};
 use crate::text::AtlasUpload;
@@ -322,7 +327,7 @@ layout(location = 3) in vec4 i_uv0;      // u0, v0, uw, vh into u_tex0
 layout(location = 4) in vec4 i_uv1;      // u0, v0, uw, vh into u_tex1 (crossfade target)
 layout(location = 5) in vec4 i_border;   // straight RGBA border color
 layout(location = 6) in vec4 i_misc;     // clip (0 rounded, 1 wave), smoothing, border_w, opacity
-layout(location = 7) in vec4 i_fx;       // crossfade_t, blur, desaturate, unused
+layout(location = 7) in vec4 i_fx;       // crossfade_t, blur, desaturate, premultiplied
 
 uniform vec2 u_view;
 
@@ -447,9 +452,13 @@ float sd_box(vec2 p, vec2 b, vec4 r, float smoothing) {
 
 // 13-tap disc kernel: all taps are clamped inside the cropped UV rect so blur
 // never bleeds neighbouring texels or the cropped-away region of the source.
+// `uvrect.zw` may be negative (e.g. Y-flipped FBO layer UVs), so the clamp
+// bounds are computed component-wise instead of assuming positive extents.
 vec4 blur_sample(sampler2D tex, vec2 uv, vec4 uvrect, float blur) {
-    vec2 lo = uvrect.xy;
-    vec2 hi = uvrect.xy + uvrect.zw;
+    vec2 a = uvrect.xy;
+    vec2 b = uvrect.xy + uvrect.zw;
+    vec2 lo = min(a, b);
+    vec2 hi = max(a, b);
     if (blur <= 0.001) {
         return texture(tex, clamp(uv, lo, hi));
     }
@@ -480,6 +489,7 @@ void main() {
     float crossfade_t = clamp(v_fx.x, 0.0, 1.0);
     float blur = clamp(v_fx.y, 0.0, 1.0);
     float desaturate = clamp(v_fx.z, 0.0, 1.0);
+    float premul = v_fx.w;
     float fade = edge_fade_alpha(v_px, u_fade_rect, u_fade_widths);
 
     vec4 col = blur_sample(u_tex0, v_uv0, v_uvrect0, blur);
@@ -518,8 +528,16 @@ void main() {
         col = vec4(out_rgb, out_a);
     }
 
-    float a = col.a * cover * opacity * fade;
-    frag = vec4(col.rgb * a, a);
+    // FBO layer textures already hold premultiplied RGBA from the ONE,
+    // ONE_MINUS_SRC_ALPHA blend into the offscreen pass, while CPU-uploaded
+    // images carry straight alpha that still needs premultiplying here.
+    if (premul > 0.5) {
+        float scale_a = cover * opacity * fade;
+        frag = col * scale_a;
+    } else {
+        float a = col.a * cover * opacity * fade;
+        frag = vec4(col.rgb * a, a);
+    }
 }
 ";
 
@@ -581,7 +599,10 @@ pub struct ImageInstance {
     pub border: [f32; 4],
     /// `[clip mode, smoothing, border_w (buffer px), opacity]`.
     pub misc: [f32; 4],
-    /// `[crossfade_t, blur, desaturate, unused]` in normalized `0.0..=1.0`.
+    /// `[crossfade_t, blur, desaturate, premultiplied]`: the first three are
+    /// normalized `0.0..=1.0`; `premultiplied` is `1.0` when `u_tex0` already
+    /// holds premultiplied RGBA (FBO layer textures) and `0.0` for straight
+    /// alpha CPU uploads.
     pub fx: [f32; 4],
 }
 
@@ -622,10 +643,30 @@ pub enum DrawBatch {
         edge_fade: Option<EdgeFade>,
         instances: Vec<ImageInstance>,
     },
+    /// A subtree rasterized into an offscreen [`LayerCache`] FBO and composited
+    /// as a single premultiplied textured quad at `dst`.
+    CachedLayer {
+        /// [`crate::ui::NodeKey`] identity; stable across frames for cache hits.
+        key: u64,
+        /// Offscreen texture width in physical (buffer) pixels.
+        width: u32,
+        /// Offscreen texture height in physical (buffer) pixels.
+        height: u32,
+        /// Deterministic hash of `content`; a hit composites without re-rasterizing.
+        content_hash: u64,
+        /// Composite destination rect `[x, y, w, h]` in physical buffer px.
+        dst: [f32; 4],
+        /// Opacity applied when compositing the cached texture.
+        opacity: f32,
+        scissor: Option<ScissorRect>,
+        edge_fade: Option<EdgeFade>,
+        /// The subtree's own draw list (rendered into the FBO on a cache miss).
+        content: Box<DrawList>,
+    },
 }
 
 /// Ordered command buffer of scissor-aware batches for a single surface frame.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct DrawList {
     pub batches: Vec<DrawBatch>,
 }
@@ -740,7 +781,9 @@ impl DrawList {
             .iter()
             .map(|b| match b {
                 DrawBatch::Quads { instances, .. } => instances.len(),
-                DrawBatch::Glyphs { .. } | DrawBatch::Images { .. } => 0,
+                DrawBatch::Glyphs { .. }
+                | DrawBatch::Images { .. }
+                | DrawBatch::CachedLayer { .. } => 0,
             })
             .sum()
     }
@@ -750,7 +793,9 @@ impl DrawList {
             .iter()
             .map(|b| match b {
                 DrawBatch::Glyphs { instances, .. } => instances.len(),
-                DrawBatch::Quads { .. } | DrawBatch::Images { .. } => 0,
+                DrawBatch::Quads { .. }
+                | DrawBatch::Images { .. }
+                | DrawBatch::CachedLayer { .. } => 0,
             })
             .sum()
     }
@@ -760,9 +805,544 @@ impl DrawList {
             .iter()
             .map(|b| match b {
                 DrawBatch::Images { instances, .. } => instances.len(),
-                DrawBatch::Quads { .. } | DrawBatch::Glyphs { .. } => 0,
+                DrawBatch::Quads { .. }
+                | DrawBatch::Glyphs { .. }
+                | DrawBatch::CachedLayer { .. } => 0,
             })
             .sum()
+    }
+
+    /// Append a cached-layer composite batch for an `Element::layer(key)` subtree.
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_cached_layer(
+        &mut self,
+        key: u64,
+        width: u32,
+        height: u32,
+        content_hash: u64,
+        dst: [f32; 4],
+        opacity: f32,
+        scissor: Option<ScissorRect>,
+        edge_fade: Option<EdgeFade>,
+        content: DrawList,
+    ) {
+        self.batches.push(DrawBatch::CachedLayer {
+            key,
+            width,
+            height,
+            content_hash,
+            dst,
+            opacity,
+            scissor,
+            edge_fade,
+            content: Box::new(content),
+        });
+    }
+
+    /// Number of [`DrawBatch::CachedLayer`] composite batches in this frame.
+    pub fn layer_count(&self) -> usize {
+        self.batches
+            .iter()
+            .filter(|b| matches!(b, DrawBatch::CachedLayer { .. }))
+            .count()
+    }
+
+    /// Deterministic hash over every batch in this draw list.
+    ///
+    /// All floats are hashed by bit pattern (`f32::to_bits`), and nested
+    /// `CachedLayer` contents fold in recursively, so two frames produce the
+    /// same hash iff their visible content is bit-identical. Layer subtree
+    /// `SubtreeTransform`s intentionally live *outside* the hashed `content`,
+    /// so translate/scale/opacity morphs reuse the cached FBO.
+    pub fn content_hash(&self) -> u64 {
+        let mut h = DefaultHasher::new();
+        for batch in &self.batches {
+            hash_batch(&mut h, batch);
+        }
+        h.finish()
+    }
+
+    /// Damage bounding rect (top-left physical buffer px, padded 2px for SDF
+    /// `fwidth` anti-aliasing fringe) covering everything that changed between
+    /// `prev` and `self`, or `None` when the frames are identical.
+    ///
+    /// Matching batch kinds (equal `scissor`/`edge_fade`/image ids) are diffed
+    /// instance-by-instance; any structural difference unions the bounding
+    /// rects of the differing batches from both frames.
+    pub fn diff_bounds(&self, prev: &DrawList) -> Option<DamageRect> {
+        if self.batches.len() == prev.batches.len()
+            && self
+                .batches
+                .iter()
+                .zip(&prev.batches)
+                .all(|(a, b)| batch_bit_eq(a, b))
+        {
+            return None;
+        }
+        let mut acc: Option<DamageRect> = None;
+        let n = self.batches.len().max(prev.batches.len());
+        for i in 0..n {
+            let d = match (self.batches.get(i), prev.batches.get(i)) {
+                (Some(a), Some(b)) if batches_compatible(a, b) => diff_within(a, b),
+                (a, b) => union_opt(batch_bounds(a), batch_bounds(b)),
+            };
+            acc = union_opt(acc, d);
+        }
+        acc
+    }
+}
+
+/// AA fringe padding (buffer px) applied around every changed primitive.
+const DIFF_PAD: f32 = 2.0;
+
+fn union_opt(a: Option<DamageRect>, b: Option<DamageRect>) -> Option<DamageRect> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.union(b)),
+        (Some(_), None) => a,
+        (None, Some(_)) => b,
+        (None, None) => None,
+    }
+}
+
+/// Bit-exact `[f32; 4]` comparison (`-0.0 != 0.0`, `NaN == NaN` by pattern).
+fn f4_eq(a: &[f32; 4], b: &[f32; 4]) -> bool {
+    a.iter()
+        .zip(b.iter())
+        .all(|(x, y)| x.to_bits() == y.to_bits())
+}
+
+fn edge_fade_eq(a: Option<EdgeFade>, b: Option<EdgeFade>) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => f4_eq(&x.rect, &y.rect) && f4_eq(&x.widths, &y.widths),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn quad_eq(a: &QuadInstance, b: &QuadInstance) -> bool {
+    f4_eq(&a.dst, &b.dst)
+        && f4_eq(&a.radii, &b.radii)
+        && f4_eq(&a.fill, &b.fill)
+        && f4_eq(&a.border, &b.border)
+        && f4_eq(&a.misc, &b.misc)
+}
+
+fn glyph_eq(a: &GlyphInstance, b: &GlyphInstance) -> bool {
+    f4_eq(&a.dst, &b.dst)
+        && f4_eq(&a.uv, &b.uv)
+        && f4_eq(&a.color, &b.color)
+        && f4_eq(&a.misc, &b.misc)
+}
+
+fn image_eq(a: &ImageInstance, b: &ImageInstance) -> bool {
+    f4_eq(&a.dst, &b.dst)
+        && f4_eq(&a.radii, &b.radii)
+        && f4_eq(&a.uv0, &b.uv0)
+        && f4_eq(&a.uv1, &b.uv1)
+        && f4_eq(&a.border, &b.border)
+        && f4_eq(&a.misc, &b.misc)
+        && f4_eq(&a.fx, &b.fx)
+}
+
+fn slice_eq<T>(a: &[T], b: &[T], eq: impl Fn(&T, &T) -> bool) -> bool {
+    a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| eq(x, y))
+}
+
+/// Exact float-bit equality between two batches (all fields, all instances).
+fn batch_bit_eq(a: &DrawBatch, b: &DrawBatch) -> bool {
+    match (a, b) {
+        (
+            DrawBatch::Quads {
+                scissor: sa,
+                edge_fade: ea,
+                instances: ia,
+            },
+            DrawBatch::Quads {
+                scissor: sb,
+                edge_fade: eb,
+                instances: ib,
+            },
+        ) => sa == sb && edge_fade_eq(*ea, *eb) && slice_eq(ia, ib, quad_eq),
+        (
+            DrawBatch::Glyphs {
+                scissor: sa,
+                edge_fade: ea,
+                instances: ia,
+            },
+            DrawBatch::Glyphs {
+                scissor: sb,
+                edge_fade: eb,
+                instances: ib,
+            },
+        ) => sa == sb && edge_fade_eq(*ea, *eb) && slice_eq(ia, ib, glyph_eq),
+        (
+            DrawBatch::Images {
+                image_id: ida,
+                crossfade_to: ca,
+                scissor: sa,
+                edge_fade: ea,
+                instances: ia,
+            },
+            DrawBatch::Images {
+                image_id: idb,
+                crossfade_to: cb,
+                scissor: sb,
+                edge_fade: eb,
+                instances: ib,
+            },
+        ) => {
+            ida == idb
+                && ca == cb
+                && sa == sb
+                && edge_fade_eq(*ea, *eb)
+                && slice_eq(ia, ib, image_eq)
+        }
+        (
+            DrawBatch::CachedLayer {
+                key: ka,
+                width: wa,
+                height: ha,
+                content_hash: cha,
+                dst: da,
+                opacity: oa,
+                scissor: sa,
+                edge_fade: ea,
+                ..
+            },
+            DrawBatch::CachedLayer {
+                key: kb,
+                width: wb,
+                height: hb,
+                content_hash: chb,
+                dst: db,
+                opacity: ob,
+                scissor: sb,
+                edge_fade: eb,
+                ..
+            },
+        ) => {
+            ka == kb
+                && wa == wb
+                && ha == hb
+                && cha == chb
+                && f4_eq(da, db)
+                && oa.to_bits() == ob.to_bits()
+                && sa == sb
+                && edge_fade_eq(*ea, *eb)
+        }
+        _ => false,
+    }
+}
+
+/// `true` when two batches can be diffed element-by-element: same kind with
+/// equal `scissor`/`edge_fade`/identity fields.
+fn batches_compatible(a: &DrawBatch, b: &DrawBatch) -> bool {
+    match (a, b) {
+        (
+            DrawBatch::Quads {
+                scissor: sa,
+                edge_fade: ea,
+                ..
+            },
+            DrawBatch::Quads {
+                scissor: sb,
+                edge_fade: eb,
+                ..
+            },
+        )
+        | (
+            DrawBatch::Glyphs {
+                scissor: sa,
+                edge_fade: ea,
+                ..
+            },
+            DrawBatch::Glyphs {
+                scissor: sb,
+                edge_fade: eb,
+                ..
+            },
+        ) => sa == sb && edge_fade_eq(*ea, *eb),
+        (
+            DrawBatch::Images {
+                image_id: ida,
+                crossfade_to: ca,
+                scissor: sa,
+                edge_fade: ea,
+                ..
+            },
+            DrawBatch::Images {
+                image_id: idb,
+                crossfade_to: cb,
+                scissor: sb,
+                edge_fade: eb,
+                ..
+            },
+        ) => ida == idb && ca == cb && sa == sb && edge_fade_eq(*ea, *eb),
+        (
+            DrawBatch::CachedLayer {
+                key: ka,
+                width: wa,
+                height: ha,
+                scissor: sa,
+                edge_fade: ea,
+                ..
+            },
+            DrawBatch::CachedLayer {
+                key: kb,
+                width: wb,
+                height: hb,
+                scissor: sb,
+                edge_fade: eb,
+                ..
+            },
+        ) => ka == kb && wa == wb && ha == hb && sa == sb && edge_fade_eq(*ea, *eb),
+        _ => false,
+    }
+}
+
+/// Damage rect covering one primitive `dst` clipped to `scissor`, padded 2px
+/// for SDF anti-aliasing fringe.
+fn prim_damage(dst: [f32; 4], scissor: Option<ScissorRect>) -> DamageRect {
+    let x = (dst[0] - DIFF_PAD).floor() as i32;
+    let y = (dst[1] - DIFF_PAD).floor() as i32;
+    let x1 = (dst[0] + dst[2] + DIFF_PAD).ceil() as i32;
+    let y1 = (dst[1] + dst[3] + DIFF_PAD).ceil() as i32;
+    let r = DamageRect {
+        x,
+        y,
+        w: (x1 - x).max(0),
+        h: (y1 - y).max(0),
+    };
+    match scissor {
+        Some(sc) => r.intersect(DamageRect {
+            x: sc.x,
+            y: sc.y,
+            w: sc.w,
+            h: sc.h,
+        }),
+        None => r,
+    }
+}
+
+/// Union of every primitive's padded damage rect inside one batch.
+fn batch_bounds(batch: Option<&DrawBatch>) -> Option<DamageRect> {
+    let batch = batch?;
+    let mut acc: Option<DamageRect> = None;
+    let mut add = |dst: [f32; 4], scissor: Option<ScissorRect>| {
+        acc = union_opt(acc, Some(prim_damage(dst, scissor)));
+    };
+    match batch {
+        DrawBatch::Quads {
+            scissor, instances, ..
+        } => {
+            for q in instances {
+                add(q.dst, *scissor);
+            }
+        }
+        DrawBatch::Glyphs {
+            scissor, instances, ..
+        } => {
+            for g in instances {
+                add(g.dst, *scissor);
+            }
+        }
+        DrawBatch::Images {
+            scissor, instances, ..
+        } => {
+            for i in instances {
+                add(i.dst, *scissor);
+            }
+        }
+        DrawBatch::CachedLayer { dst, scissor, .. } => add(*dst, *scissor),
+    }
+    acc
+}
+
+/// Instance-level diff inside two compatible batches (union of each side's
+/// padded rects for changed/added/removed instances).
+fn diff_instances<T>(
+    scissor: Option<ScissorRect>,
+    a: &[T],
+    b: &[T],
+    dst: impl Fn(&T) -> [f32; 4],
+    eq: impl Fn(&T, &T) -> bool,
+) -> Option<DamageRect> {
+    let mut acc: Option<DamageRect> = None;
+    for j in 0..a.len().max(b.len()) {
+        match (a.get(j), b.get(j)) {
+            (Some(x), Some(y)) if eq(x, y) => {}
+            (x, y) => {
+                if let Some(i) = x {
+                    acc = union_opt(acc, Some(prim_damage(dst(i), scissor)));
+                }
+                if let Some(i) = y {
+                    acc = union_opt(acc, Some(prim_damage(dst(i), scissor)));
+                }
+            }
+        }
+    }
+    acc
+}
+
+fn diff_within(a: &DrawBatch, b: &DrawBatch) -> Option<DamageRect> {
+    match (a, b) {
+        (
+            DrawBatch::Quads {
+                scissor,
+                instances: ia,
+                ..
+            },
+            DrawBatch::Quads { instances: ib, .. },
+        ) => diff_instances(*scissor, ia, ib, |q| q.dst, quad_eq),
+        (
+            DrawBatch::Glyphs {
+                scissor,
+                instances: ia,
+                ..
+            },
+            DrawBatch::Glyphs { instances: ib, .. },
+        ) => diff_instances(*scissor, ia, ib, |g| g.dst, glyph_eq),
+        (
+            DrawBatch::Images {
+                scissor,
+                instances: ia,
+                ..
+            },
+            DrawBatch::Images { instances: ib, .. },
+        ) => diff_instances(*scissor, ia, ib, |i| i.dst, image_eq),
+        (
+            DrawBatch::CachedLayer {
+                content_hash: ha,
+                dst: da,
+                opacity: oa,
+                scissor: sa,
+                ..
+            },
+            DrawBatch::CachedLayer {
+                content_hash: hb,
+                dst: db,
+                opacity: ob,
+                scissor: sb,
+                ..
+            },
+        ) => {
+            if ha == hb && f4_eq(da, db) && oa.to_bits() == ob.to_bits() {
+                None
+            } else {
+                union_opt(Some(prim_damage(*da, *sa)), Some(prim_damage(*db, *sb)))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn hash_f4<H: Hasher>(h: &mut H, v: &[f32; 4]) {
+    for x in v {
+        h.write_u32(x.to_bits());
+    }
+}
+
+fn hash_scissor<H: Hasher>(h: &mut H, scissor: Option<ScissorRect>) {
+    match scissor {
+        Some(sc) => {
+            h.write_u8(1);
+            h.write_i32(sc.x);
+            h.write_i32(sc.y);
+            h.write_i32(sc.w);
+            h.write_i32(sc.h);
+        }
+        None => h.write_u8(0),
+    }
+}
+
+fn hash_edge_fade<H: Hasher>(h: &mut H, edge_fade: Option<EdgeFade>) {
+    match edge_fade {
+        Some(ef) => {
+            h.write_u8(1);
+            hash_f4(h, &ef.rect);
+            hash_f4(h, &ef.widths);
+        }
+        None => h.write_u8(0),
+    }
+}
+
+fn hash_batch<H: Hasher>(h: &mut H, batch: &DrawBatch) {
+    match batch {
+        DrawBatch::Quads {
+            scissor,
+            edge_fade,
+            instances,
+        } => {
+            h.write_u8(0);
+            hash_scissor(h, *scissor);
+            hash_edge_fade(h, *edge_fade);
+            for q in instances {
+                hash_f4(h, &q.dst);
+                hash_f4(h, &q.radii);
+                hash_f4(h, &q.fill);
+                hash_f4(h, &q.border);
+                hash_f4(h, &q.misc);
+            }
+        }
+        DrawBatch::Glyphs {
+            scissor,
+            edge_fade,
+            instances,
+        } => {
+            h.write_u8(1);
+            hash_scissor(h, *scissor);
+            hash_edge_fade(h, *edge_fade);
+            for g in instances {
+                hash_f4(h, &g.dst);
+                hash_f4(h, &g.uv);
+                hash_f4(h, &g.color);
+                hash_f4(h, &g.misc);
+            }
+        }
+        DrawBatch::Images {
+            image_id,
+            crossfade_to,
+            scissor,
+            edge_fade,
+            instances,
+        } => {
+            h.write_u8(2);
+            h.write_u64(image_id.0);
+            h.write_u64(crossfade_to.map_or(0, |id| id.0));
+            hash_scissor(h, *scissor);
+            hash_edge_fade(h, *edge_fade);
+            for i in instances {
+                hash_f4(h, &i.dst);
+                hash_f4(h, &i.radii);
+                hash_f4(h, &i.uv0);
+                hash_f4(h, &i.uv1);
+                hash_f4(h, &i.border);
+                hash_f4(h, &i.misc);
+                hash_f4(h, &i.fx);
+            }
+        }
+        DrawBatch::CachedLayer {
+            key,
+            width,
+            height,
+            content_hash,
+            dst,
+            opacity,
+            scissor,
+            edge_fade,
+            content,
+        } => {
+            h.write_u8(3);
+            h.write_u64(*key);
+            h.write_u32(*width);
+            h.write_u32(*height);
+            h.write_u64(*content_hash);
+            hash_f4(h, dst);
+            h.write_u32(opacity.to_bits());
+            hash_scissor(h, *scissor);
+            hash_edge_fade(h, *edge_fade);
+            h.write_u64(content.content_hash());
+        }
     }
 }
 
@@ -788,6 +1368,7 @@ pub struct Gpu {
     image_bo: glow::Buffer,
     corner_lut_tex: glow::Texture,
     image_textures: HashMap<ImageId, ImageTexture>,
+    layer_cache: LayerCache,
     view_loc_quad: Option<glow::UniformLocation>,
     corner_lut_loc: Option<glow::UniformLocation>,
     fade_rect_loc_quad: Option<glow::UniformLocation>,
@@ -909,6 +1490,7 @@ impl Gpu {
                 image_bo,
                 corner_lut_tex,
                 image_textures: HashMap::new(),
+                layer_cache: LayerCache::new(),
             })
         }
     }
@@ -1013,6 +1595,11 @@ impl Gpu {
 
     /// Execute a full frame's [`DrawList`] into the currently bound EGL surface,
     /// first draining pending [`ImageStore`] uploads/deletions to the GPU.
+    ///
+    /// `damage` is the buffer-age effective dirty rect in top-left physical px:
+    /// `None` performs a full repaint, `Some` non-empty rect scissored-clips
+    /// both `glClear` and every batch so undamaged backbuffer pixels survive,
+    /// and `Some` empty rect skips clearing and drawing entirely.
     pub fn render(
         &mut self,
         w: u32,
@@ -1020,10 +1607,28 @@ impl Gpu {
         draw_list: &DrawList,
         atlas: &mut AtlasUpload<'_>,
         images: &mut ImageStore,
+        damage: Option<DamageRect>,
     ) {
         self.sync_images(images);
+        self.layer_cache.begin_frame();
         let wi = i32::try_from(w.max(1)).unwrap_or(1);
         let hi = i32::try_from(h.max(1)).unwrap_or(1);
+        let dmg = damage.map(|d| d.clamp_to_surface(wi, hi));
+        if dmg.is_some_and(DamageRect::is_empty) {
+            // Nothing to repaint: the backbuffer already holds this frame.
+            // SAFETY: GLES3 context is current for this surface.
+            unsafe { self.layer_cache.evict_stale(&self.gl) };
+            return;
+        }
+        // Damage covering the whole surface degrades to a full repaint.
+        let clip_damage = dmg
+            .filter(|d| !(d.x <= 0 && d.y <= 0 && d.x + d.w >= wi && d.y + d.h >= hi))
+            .map(|d| ScissorRect {
+                x: d.x,
+                y: d.y,
+                w: d.w,
+                h: d.h,
+            });
         // SAFETY: Valid GLES3 context is current for this surface.
         unsafe {
             let gl = &self.gl;
@@ -1033,11 +1638,51 @@ impl Gpu {
             gl.enable(glow::BLEND);
             gl.blend_func(glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
             gl.clear_color(0.0, 0.0, 0.0, 0.0);
-            gl.clear(glow::COLOR_BUFFER_BIT);
+            if clip_damage.is_some() {
+                // With buffer-age partial damage the backbuffer still holds
+                // pixels from `age` frames ago; only clear the damaged region
+                // so undamaged content survives the swap.
+                self.apply_scissor(hi, clip_damage);
+                gl.clear(glow::COLOR_BUFFER_BIT);
+                gl.disable(glow::SCISSOR_TEST);
+            } else {
+                gl.clear(glow::COLOR_BUFFER_BIT);
+            }
 
             // Upload any pending glyph updates once before executing batches.
             atlas.upload(gl);
+        }
 
+        self.render_batches(None, w, h, clip_damage, draw_list, atlas);
+
+        // SAFETY: Valid GLES3 context is current for this surface.
+        unsafe {
+            let gl = &self.gl;
+            gl.disable(glow::SCISSOR_TEST);
+            self.layer_cache.evict_stale(gl);
+        }
+    }
+
+    /// Execute `draw_list`'s batches into `target_fbo` (`None` = the default
+    /// framebuffer of the current EGL surface) with viewport `(w, h)`.
+    ///
+    /// `clip_damage` intersects every batch's scissor for partial-damage
+    /// repaints; offscreen FBO sub-renders always pass `None` (they repaint the
+    /// full cached layer texture on a cache miss).
+    #[allow(clippy::too_many_lines)]
+    fn render_batches(
+        &mut self,
+        target_fbo: Option<glow::Framebuffer>,
+        w: u32,
+        h: u32,
+        clip_damage: Option<ScissorRect>,
+        draw_list: &DrawList,
+        atlas: &mut AtlasUpload<'_>,
+    ) {
+        let wi = i32::try_from(w.max(1)).unwrap_or(1);
+        let hi = i32::try_from(h.max(1)).unwrap_or(1);
+        // SAFETY: Valid GLES3 context is current and `target_fbo` is bound.
+        unsafe {
             for batch in &draw_list.batches {
                 match batch {
                     DrawBatch::Quads {
@@ -1045,7 +1690,7 @@ impl Gpu {
                         edge_fade,
                         instances,
                     } if !instances.is_empty() => {
-                        self.apply_scissor(hi, *scissor);
+                        self.apply_scissor(hi, intersect_scissor(*scissor, clip_damage));
                         self.draw_quads_inner(w, h, *edge_fade, instances);
                     }
                     DrawBatch::Glyphs {
@@ -1053,7 +1698,7 @@ impl Gpu {
                         edge_fade,
                         instances,
                     } if !instances.is_empty() => {
-                        self.apply_scissor(hi, *scissor);
+                        self.apply_scissor(hi, intersect_scissor(*scissor, clip_damage));
                         self.draw_glyphs_inner(w, h, *edge_fade, atlas, instances);
                     }
                     DrawBatch::Images {
@@ -1074,16 +1719,93 @@ impl Gpu {
                                 Some(e) => (e.tex, true),
                                 None => (tex0, false),
                             };
-                            self.apply_scissor(hi, *scissor);
+                            self.apply_scissor(hi, intersect_scissor(*scissor, clip_damage));
                             self.draw_images_inner(
                                 w, h, *edge_fade, tex0, tex1, has_tex1, instances,
+                            );
+                        }
+                    }
+                    DrawBatch::CachedLayer {
+                        key,
+                        width,
+                        height,
+                        content_hash,
+                        dst,
+                        opacity,
+                        scissor,
+                        edge_fade,
+                        content,
+                    } => {
+                        if !self
+                            .layer_cache
+                            .is_valid(*key, *width, *height, *content_hash)
+                        {
+                            // SAFETY: `self.gl` is the active GLES3 context.
+                            match self.layer_cache.acquire(
+                                &self.gl,
+                                *key,
+                                *width,
+                                *height,
+                                *content_hash,
+                            ) {
+                                Ok(entry) => {
+                                    // Grab the FBO handle before recursing so
+                                    // the `&LayerEntry` borrow ends here.
+                                    let fbo = entry.fbo;
+                                    let fw = *width;
+                                    let fh = *height;
+                                    {
+                                        let gl = &self.gl;
+                                        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+                                        gl.viewport(
+                                            0,
+                                            0,
+                                            i32::try_from(fw.max(1)).unwrap_or(1),
+                                            i32::try_from(fh.max(1)).unwrap_or(1),
+                                        );
+                                        gl.disable(glow::SCISSOR_TEST);
+                                        gl.clear(glow::COLOR_BUFFER_BIT);
+                                    }
+                                    self.render_batches(Some(fbo), fw, fh, None, content, atlas);
+                                    // Restore the outer target + viewport.
+                                    let gl = &self.gl;
+                                    gl.bind_framebuffer(glow::FRAMEBUFFER, target_fbo);
+                                    gl.viewport(0, 0, wi, hi);
+                                }
+                                Err(e) => {
+                                    tracing::error!(key, %e, "layer acquire failed");
+                                }
+                            }
+                        }
+                        if let Some(entry) = self.layer_cache.get(*key) {
+                            let tex = entry.tex;
+                            self.apply_scissor(hi, intersect_scissor(*scissor, clip_damage));
+                            // Composite the premultiplied FBO texture. uv0's
+                            // negative vh flips Y: OpenGL FBO row 0 (v=0) is
+                            // the logical bottom of our top-left-origin frame.
+                            let inst = ImageInstance {
+                                dst: *dst,
+                                radii: [0.0; 4],
+                                uv0: [0.0, 1.0, 1.0, -1.0],
+                                uv1: [0.0, 0.0, 1.0, 1.0],
+                                border: [0.0; 4],
+                                misc: [IMAGE_CLIP_ROUNDED, 0.0, 0.0, *opacity],
+                                fx: [0.0, 0.0, 0.0, 1.0],
+                            };
+                            self.draw_images_inner(
+                                w,
+                                h,
+                                *edge_fade,
+                                tex,
+                                tex,
+                                false,
+                                std::slice::from_ref(&inst),
                             );
                         }
                     }
                     _ => {}
                 }
             }
-            gl.disable(glow::SCISSOR_TEST);
         }
     }
 
@@ -1307,10 +2029,32 @@ impl Gpu {
     }
 }
 
+/// Intersect two optional scissor rects (top-left origin physical px).
+fn intersect_scissor(a: Option<ScissorRect>, b: Option<ScissorRect>) -> Option<ScissorRect> {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            let x0 = a.x.max(b.x);
+            let y0 = a.y.max(b.y);
+            let x1 = a.x.saturating_add(a.w).min(b.x.saturating_add(b.w));
+            let y1 = a.y.saturating_add(a.h).min(b.y.saturating_add(b.h));
+            Some(ScissorRect {
+                x: x0,
+                y: y0,
+                w: (x1 - x0).max(0),
+                h: (y1 - y0).max(0),
+            })
+        }
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
 impl Drop for Gpu {
     fn drop(&mut self) {
         // SAFETY: Best-effort cleanup of GL objects when the engine shuts down.
         unsafe {
+            self.layer_cache.clear(&self.gl);
             for (_, entry) in self.image_textures.drain() {
                 self.gl.delete_texture(entry.tex);
             }

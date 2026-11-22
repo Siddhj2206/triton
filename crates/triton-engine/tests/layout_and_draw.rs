@@ -5,6 +5,7 @@
 //! Runs without Wayland, EGL, or a GLES3 context.
 
 use triton_design::material::Material;
+use triton_engine::damage::DamageRect;
 use triton_engine::gpu::{
     DrawBatch, DrawList, EdgeFade, IMAGE_CLIP_ROUNDED, IMAGE_CLIP_WAVE, ImageInstance, KIND_FILL,
     KIND_SHADOW, KIND_TOP_HIGHLIGHT, KIND_WAVE, QuadInstance, ScissorRect,
@@ -796,7 +797,7 @@ fn edge_fade_propagates_to_child_quads_and_glyphs() {
                 instances,
                 ..
             } => glyph_batches.push((*edge_fade, instances.len())),
-            DrawBatch::Images { .. } => {}
+            DrawBatch::Images { .. } | DrawBatch::CachedLayer { .. } => {}
         }
     }
 
@@ -1183,11 +1184,535 @@ fn image_batches_preserve_z_order_with_quads_and_glyphs() {
             DrawBatch::Quads { .. } => "quads",
             DrawBatch::Images { .. } => "images",
             DrawBatch::Glyphs { .. } => "glyphs",
+            DrawBatch::CachedLayer { .. } => "cached_layer",
         })
         .collect();
     assert_eq!(
         kinds,
         vec!["quads", "images", "glyphs", "quads"],
         "quad -> image -> glyph -> quad z-order preserved"
+    );
+}
+
+// ── 11. `Element::layer(key)` -> `DrawBatch::CachedLayer` offscreen FBO ──────
+
+fn cached_layer(draw_list: &DrawList, idx: usize) -> &DrawBatch {
+    draw_list
+        .batches
+        .iter()
+        .filter(|b| matches!(b, DrawBatch::CachedLayer { .. }))
+        .nth(idx)
+        .expect("cached layer batch")
+}
+
+#[test]
+fn layer_element_emits_cached_layer_with_inner_fbo_content() {
+    let mut text = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+    let scale = 2.0_f32;
+
+    let root: Element<()> = col().w(200.0).h(200.0).p(20.0).child(
+        box_()
+            .w(80.0)
+            .h(40.0)
+            .bg(Rgba::WHITE)
+            .layer("cached")
+            .child(box_().w(30.0).h(40.0).bg(Rgba::BLACK)),
+    );
+
+    layout_and_paint(
+        root,
+        (Some(200.0), Some(200.0)),
+        scale,
+        &interaction,
+        &mut text,
+        &ImageStore::new(),
+        &mut draw_list,
+    );
+
+    assert_eq!(draw_list.layer_count(), 1);
+    assert_eq!(
+        draw_list.quad_count(),
+        0,
+        "layered subtree emits no top-level quads"
+    );
+    let DrawBatch::CachedLayer {
+        key,
+        width,
+        height,
+        dst,
+        opacity,
+        scissor,
+        content,
+        ..
+    } = cached_layer(&draw_list, 0)
+    else {
+        panic!("expected CachedLayer");
+    };
+    assert_eq!(*key, NodeKey::named("cached").0);
+    assert_eq!(*width, 160);
+    assert_eq!(*height, 80);
+    assert_rect_approx(*dst, [40.0, 40.0, 160.0, 80.0], "cached layer dst");
+    assert_approx(*opacity, 1.0, "cached layer opacity");
+    assert_eq!(*scissor, None);
+
+    // Inner draw list is painted in FBO-local space: the element sits at the
+    // (0,0) shadow gutter origin, its child right after.
+    let inner = collect_quads(content);
+    assert_eq!(inner.len(), 2);
+    assert_rect_approx(inner[0].1.dst, [0.0, 0.0, 160.0, 80.0], "inner root quad");
+    assert_rect_approx(inner[1].1.dst, [0.0, 0.0, 60.0, 80.0], "inner child quad");
+}
+
+#[test]
+fn layer_content_hash_ignores_transform_but_tracks_inner_content() {
+    let mut text = TextEngine::new();
+    let interaction = InteractionState::default();
+    let scale = 1.0_f32;
+
+    let mut paint = |tf: SubtreeTransform, fill: Rgba| -> DrawList {
+        let root: Element<()> = col().w(200.0).h(200.0).child(
+            box_()
+                .w(80.0)
+                .h(40.0)
+                .bg(fill)
+                .transform(tf)
+                .layer("cached"),
+        );
+        let mut dl = DrawList::default();
+        layout_and_paint(
+            root,
+            (Some(200.0), Some(200.0)),
+            scale,
+            &interaction,
+            &mut text,
+            &ImageStore::new(),
+            &mut dl,
+        );
+        dl
+    };
+
+    let base = paint(SubtreeTransform::IDENTITY, Rgba::WHITE);
+    let moved = paint(
+        SubtreeTransform {
+            translate_x: 12.0,
+            translate_y: 8.0,
+            scale: 0.5,
+            opacity: 0.6,
+        },
+        Rgba::WHITE,
+    );
+    let recolored = paint(SubtreeTransform::IDENTITY, Rgba::BLACK);
+
+    let DrawBatch::CachedLayer {
+        content_hash: h_base,
+        dst: d_base,
+        opacity: o_base,
+        ..
+    } = cached_layer(&base, 0)
+    else {
+        panic!("expected CachedLayer");
+    };
+    let DrawBatch::CachedLayer {
+        content_hash: h_moved,
+        dst: d_moved,
+        opacity: o_moved,
+        ..
+    } = cached_layer(&moved, 0)
+    else {
+        panic!("expected CachedLayer");
+    };
+    let DrawBatch::CachedLayer {
+        content_hash: h_recolored,
+        ..
+    } = cached_layer(&recolored, 0)
+    else {
+        panic!("expected CachedLayer");
+    };
+
+    // Translate/scale/opacity morphs keep the identical content hash (the FBO
+    // is reused) while updating `dst` and `opacity`.
+    assert_eq!(h_base, h_moved, "transform must not affect content_hash");
+    assert_ne!(d_base, d_moved);
+    assert_approx(*o_base, 1.0, "base opacity");
+    assert_approx(*o_moved, 0.6, "moved opacity");
+    // Element at (0,0,80,40), center (40,20): tx = 40*0.5 + 12 = 32,
+    // ty = 20*0.5 + 8 = 18 -> dst (32, 18, 40, 20).
+    assert_rect_approx(*d_moved, [32.0, 18.0, 40.0, 20.0], "moved dst");
+
+    // Changing inner content changes the hash (forces re-rasterization).
+    assert_ne!(h_base, h_recolored, "inner fill change must rehash");
+}
+
+#[test]
+fn layer_shadow_gutter_expands_fbo_and_offsets_dst() {
+    let mut text = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+
+    let shadow = DropShadow {
+        offset_x: 0.0,
+        offset_y: 4.0,
+        blur: 10.0,
+        spread: 0.0,
+        color: Rgba::new(0.0, 0.0, 0.0, 0.4),
+    };
+    // gutter: pad = 20 -> top = 16, right = 20, bottom = 24, left = 20.
+    let root: Element<()> = col().w(200.0).h(200.0).p(20.0).child(
+        box_()
+            .w(80.0)
+            .h(40.0)
+            .bg(Rgba::WHITE)
+            .shadow(shadow)
+            .layer("shadowed"),
+    );
+
+    layout_and_paint(
+        root,
+        (Some(200.0), Some(200.0)),
+        1.0,
+        &interaction,
+        &mut text,
+        &ImageStore::new(),
+        &mut draw_list,
+    );
+
+    let DrawBatch::CachedLayer {
+        width,
+        height,
+        dst,
+        content,
+        ..
+    } = cached_layer(&draw_list, 0)
+    else {
+        panic!("expected CachedLayer");
+    };
+    // FBO logical size = (80 + 20 + 20) x (40 + 16 + 24) = 120 x 80.
+    assert_eq!(*width, 120);
+    assert_eq!(*height, 80);
+    // dst top-left shifts by (-left, -top) gutter: (20 - 20, 20 - 16) = (0, 4).
+    assert_rect_approx(*dst, [0.0, 4.0, 120.0, 80.0], "shadow-gutter dst");
+
+    // The inner shadow quad spans the whole FBO at (0,0); the fill sits at the
+    // (left, top) gutter origin (20, 16).
+    let inner = collect_quads(content);
+    assert_eq!(inner.len(), 2, "shadow + fill inside FBO");
+    assert_approx(inner[0].1.misc[0], KIND_SHADOW, "inner shadow kind");
+    assert_rect_approx(inner[0].1.dst, [0.0, 0.0, 120.0, 80.0], "inner shadow dst");
+    assert_rect_approx(inner[1].1.dst, [20.0, 16.0, 80.0, 40.0], "inner fill dst");
+}
+
+#[test]
+fn layer_subtree_hits_and_regions_remap_through_transform() {
+    let mut text = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let mut interaction = InteractionState::default();
+
+    let tf = SubtreeTransform {
+        translate_x: 30.0,
+        translate_y: 20.0,
+        scale: 0.5,
+        opacity: 1.0,
+    };
+    // Layer root (0,0,200,100), center (100,50): tx = 100*0.5 + 30 = 80,
+    // ty = 50*0.5 + 20 = 45. Button at local (10,10,50,30) ->
+    // screen (80+5, 45+5, 25, 15) = (85, 50, 25, 15).
+    let build = |layered: bool| -> Element<Msg> {
+        let inner = col().w(200.0).h(100.0).transform(tf).child(
+            box_()
+                .id("btn")
+                .w(50.0)
+                .h(30.0)
+                .absolute()
+                .inset_xy(10.0, 10.0)
+                .bg(Rgba::WHITE)
+                .on_click(|| Msg::Click("btn")),
+        );
+        if layered { inner.layer("L") } else { inner }
+    };
+
+    let frame = layout_and_paint(
+        build(true),
+        (Some(200.0), Some(100.0)),
+        1.0,
+        &interaction,
+        &mut text,
+        &ImageStore::new(),
+        &mut draw_list,
+    );
+    assert_eq!(draw_list.layer_count(), 1);
+
+    let btn_hit = frame
+        .hits
+        .iter()
+        .find(|h| h.key == Some(NodeKey::named("btn")))
+        .expect("btn hit entry");
+    assert_rect_approx(
+        [
+            btn_hit.rect.x,
+            btn_hit.rect.y,
+            btn_hit.rect.w,
+            btn_hit.rect.h,
+        ],
+        [85.0, 50.0, 25.0, 15.0],
+        "btn hit rect remapped through layer tf",
+    );
+
+    // Wayland input regions land at the same screen coordinates.
+    let btn_input = frame
+        .input_rects
+        .iter()
+        .find(|br| (br.rect.w - 25.0).abs() < EPS)
+        .expect("btn input rect");
+    assert_rect_approx(
+        [
+            btn_input.rect.x,
+            btn_input.rect.y,
+            btn_input.rect.w,
+            btn_input.rect.h,
+        ],
+        [85.0, 50.0, 25.0, 15.0],
+        "btn input rect remapped",
+    );
+
+    // Click lands on the cached-layer button exactly like the inline version.
+    let _ = frame.dispatch_event(
+        &InputEvent::PointerDown {
+            x: 90.0,
+            y: 55.0,
+            button: 272,
+        },
+        &mut interaction,
+    );
+    let (msgs, _) = frame.dispatch_event(
+        &InputEvent::PointerUp {
+            x: 90.0,
+            y: 55.0,
+            button: 272,
+        },
+        &mut interaction,
+    );
+    assert_eq!(msgs, vec![Msg::Click("btn")]);
+    let layered_rect = btn_hit.rect;
+
+    // The identical tree without .layer() produces the same hit rect.
+    let plain = layout_and_paint(
+        build(false),
+        (Some(200.0), Some(100.0)),
+        1.0,
+        &InteractionState::default(),
+        &mut text,
+        &ImageStore::new(),
+        &mut draw_list,
+    );
+    assert_eq!(draw_list.layer_count(), 0);
+    let plain_hit = plain
+        .hits
+        .iter()
+        .find(|h| h.key == Some(NodeKey::named("btn")))
+        .expect("plain btn hit");
+    assert_eq!(plain_hit.rect, layered_rect, "layered hit == inline hit");
+}
+
+#[test]
+fn layer_inherits_outer_clip_as_scissor_and_hit_clip() {
+    let mut text = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+
+    let root: Element<Msg> = col().w(200.0).h(100.0).clip().child(
+        col().w(200.0).h(100.0).layer("L").child(
+            box_()
+                .id("btn")
+                .w(50.0)
+                .h(30.0)
+                .bg(Rgba::WHITE)
+                .on_click(|| Msg::Click("btn")),
+        ),
+    );
+
+    let frame = layout_and_paint(
+        root,
+        (Some(200.0), Some(100.0)),
+        1.0,
+        &interaction,
+        &mut text,
+        &ImageStore::new(),
+        &mut draw_list,
+    );
+
+    let DrawBatch::CachedLayer { scissor, .. } = cached_layer(&draw_list, 0) else {
+        panic!("expected CachedLayer");
+    };
+    assert_eq!(
+        *scissor,
+        Some(ScissorRect {
+            x: 0,
+            y: 0,
+            w: 200,
+            h: 100,
+        }),
+        "outer clip becomes the cached layer scissor"
+    );
+    let btn_hit = frame
+        .hits
+        .iter()
+        .find(|h| h.key == Some(NodeKey::named("btn")))
+        .expect("btn hit");
+    assert_eq!(btn_hit.clip, Some(Rect::new(0.0, 0.0, 200.0, 100.0)));
+}
+
+// ── 12. `DrawList::diff_bounds` for buffer-age partial damage ────────────────
+
+fn quad_at(x: f32, y: f32, w: f32, h: f32) -> QuadInstance {
+    QuadInstance {
+        dst: [x, y, w, h],
+        ..QuadInstance::default()
+    }
+}
+
+#[test]
+fn diff_bounds_identical_frames_return_none() {
+    let mut a = DrawList::default();
+    a.push_quad(None, quad_at(10.0, 10.0, 20.0, 20.0));
+    a.push_cached_layer(
+        7,
+        100,
+        50,
+        42,
+        [0.0, 0.0, 100.0, 50.0],
+        1.0,
+        None,
+        None,
+        DrawList::default(),
+    );
+    let b = a.clone();
+    assert_eq!(a.diff_bounds(&b), None);
+    assert_eq!(DrawList::default().diff_bounds(&DrawList::default()), None);
+}
+
+#[test]
+fn diff_bounds_changed_quad_returns_padded_rect() {
+    let mut a = DrawList::default();
+    a.push_quad(None, quad_at(10.0, 10.0, 20.0, 20.0));
+    a.push_quad(None, quad_at(60.0, 60.0, 10.0, 10.0));
+
+    let mut b = a.clone();
+    // Change only the second instance's fill color.
+    let DrawBatch::Quads { instances, .. } = &mut b.batches[0] else {
+        panic!("quads");
+    };
+    instances[1].fill = [1.0, 0.0, 0.0, 1.0];
+
+    // Second quad at (60,60,10,10) padded 2px -> (58,58,14,14).
+    assert_eq!(
+        b.diff_bounds(&a),
+        Some(DamageRect {
+            x: 58,
+            y: 58,
+            w: 14,
+            h: 14,
+        })
+    );
+}
+
+#[test]
+fn diff_bounds_moved_or_removed_quad_unions_old_and_new() {
+    let mut a = DrawList::default();
+    a.push_quad(None, quad_at(10.0, 10.0, 20.0, 20.0));
+    let mut b = DrawList::default();
+    b.push_quad(None, quad_at(40.0, 10.0, 20.0, 20.0));
+
+    // Moved: union of (8,8,24,24) and (38,8,24,24) -> (8,8,54,24).
+    assert_eq!(
+        b.diff_bounds(&a),
+        Some(DamageRect {
+            x: 8,
+            y: 8,
+            w: 54,
+            h: 24,
+        })
+    );
+
+    // Removed instance: only the old rect is dirty.
+    let c = {
+        let mut c = DrawList::default();
+        c.push_quad(None, quad_at(10.0, 10.0, 20.0, 20.0));
+        c
+    };
+    let mut two = DrawList::default();
+    two.push_quad(None, quad_at(10.0, 10.0, 20.0, 20.0));
+    two.push_quad(None, quad_at(40.0, 10.0, 20.0, 20.0));
+    assert_eq!(
+        c.diff_bounds(&two),
+        Some(DamageRect {
+            x: 38,
+            y: 8,
+            w: 24,
+            h: 24,
+        })
+    );
+}
+
+#[test]
+fn diff_bounds_cached_layer_dst_change_unions_old_and_new() {
+    let mut a = DrawList::default();
+    a.push_cached_layer(
+        7,
+        100,
+        50,
+        42,
+        [0.0, 0.0, 100.0, 50.0],
+        1.0,
+        None,
+        None,
+        DrawList::default(),
+    );
+    let mut b = DrawList::default();
+    b.push_cached_layer(
+        7,
+        100,
+        50,
+        42,
+        [10.0, 0.0, 100.0, 50.0],
+        1.0,
+        None,
+        None,
+        DrawList::default(),
+    );
+
+    // union ((-2,-2,104,54), (8,-2,104,54)) -> (-2,-2,114,54).
+    assert_eq!(
+        b.diff_bounds(&a),
+        Some(DamageRect {
+            x: -2,
+            y: -2,
+            w: 114,
+            h: 54,
+        })
+    );
+
+    // Content-hash-only change still dirties the whole dst.
+    let mut c = DrawList::default();
+    c.push_cached_layer(
+        7,
+        100,
+        50,
+        99,
+        [0.0, 0.0, 100.0, 50.0],
+        1.0,
+        None,
+        None,
+        DrawList::default(),
+    );
+    assert_eq!(
+        c.diff_bounds(&a),
+        Some(DamageRect {
+            x: -2,
+            y: -2,
+            w: 104,
+            h: 54,
+        })
     );
 }

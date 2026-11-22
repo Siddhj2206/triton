@@ -159,6 +159,12 @@ impl ImageStore {
         self.dimensions.get(&id).copied()
     }
 
+    /// Returns `true` if any texture uploads or deletions are waiting for GPU sync.
+    #[must_use]
+    pub fn has_pending_changes(&self) -> bool {
+        !self.pending_uploads.is_empty() || !self.pending_deletions.is_empty()
+    }
+
     /// Drain all queued GPU texture uploads/re-uploads.
     pub fn drain_uploads(&mut self) -> Vec<(ImageId, ImageData)> {
         std::mem::take(&mut self.pending_uploads)

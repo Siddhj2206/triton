@@ -55,6 +55,27 @@ impl DamageRect {
         }
     }
 
+    /// Returns the intersection of `self` and `other` (empty when disjoint).
+    #[must_use]
+    pub fn intersect(self, other: Self) -> Self {
+        let x0 = self.x.max(other.x);
+        let y0 = self.y.max(other.y);
+        let x1 = self
+            .x
+            .saturating_add(self.w)
+            .min(other.x.saturating_add(other.w));
+        let y1 = self
+            .y
+            .saturating_add(self.h)
+            .min(other.y.saturating_add(other.h));
+        Self {
+            x: x0,
+            y: y0,
+            w: (x1 - x0).max(0),
+            h: (y1 - y0).max(0),
+        }
+    }
+
     /// Clamp this rectangle to `(0, 0, surface_w, surface_h)`.
     #[must_use]
     pub fn clamp_to_surface(self, surface_w: i32, surface_h: i32) -> Self {

@@ -5,7 +5,8 @@
 //!   (`unsafe` quarantined strictly inside `platform/wl_egl.rs` and `platform/egl.rs`).
 //! - [`gpu`]: GLES3 (`glow`) SDF uber-quad renderer (smooth corners, per-corner radii,
 //!   inner borders, Glass 1px top highlight, soft drop shadows, scissor clipping, premultiplied alpha)
-//!   plus instanced glyph rendering (`unsafe` quarantined in `gpu/mod.rs`).
+//!   plus instanced glyph rendering, an offscreen FBO [`gpu::layer_cache::LayerCache`], and
+//!   `EGL_BUFFER_AGE_KHR` partial damage (`unsafe` quarantined in `gpu/mod.rs`).
 //! - [`text`]: `cosmic-text` + `swash` shaping and resettable/LRU shelf glyph atlas
 //!   (`unsafe` quarantined in `text/mod.rs` for texture upload).
 //! - [`ui`]: 100% safe declarative element builder API (`col`, `row`, `box_`, `text`, `icon`)

@@ -103,66 +103,69 @@ impl LayerCache {
         let w = width.max(1);
         let h = height.max(1);
 
-        if let Some(entry) = self.entries.get_mut(&key) {
-            if entry.width == w && entry.height == h {
-                entry.content_hash = content_hash;
-                entry.last_used_frame = self.frame_gen;
-                return Ok(entry);
-            }
+        let entry_slot = match self.entries.entry(key) {
+            std::collections::hash_map::Entry::Occupied(slot) => slot,
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                // SAFETY: caller guarantees `gl` is the active GLES3 context.
+                let tex = unsafe { create_rgba8_texture(gl, w, h) }?;
+                // SAFETY: caller guarantees `gl` is the active GLES3 context.
+                let fbo = match unsafe { gl.create_framebuffer() } {
+                    Ok(fbo) => fbo,
+                    Err(e) => {
+                        // SAFETY: `tex` was just created in `gl` and is not stored.
+                        unsafe { gl.delete_texture(tex) };
+                        return Err(EngineError::Gpu(format!("create_framebuffer: {e}")));
+                    }
+                };
 
-            // Dimensions changed: allocate a new texture and re-attach to the
-            // existing FBO, then delete the old texture.
-            // SAFETY: caller guarantees `gl` is the active GLES3 context.
-            let new_tex = unsafe { create_rgba8_texture(gl, w, h) }?;
-            // SAFETY: `entry.fbo` and `new_tex` belong to the active `gl` context.
-            if let Err(err) = unsafe { attach_and_check_fbo(gl, entry.fbo, new_tex) } {
-                // SAFETY: `new_tex` was just created in `gl` and is not stored.
-                unsafe { gl.delete_texture(new_tex) };
-                return Err(err);
-            }
-            let old_tex = entry.tex;
-            // SAFETY: `old_tex` is no longer attached to `entry.fbo`.
-            unsafe { gl.delete_texture(old_tex) };
+                // SAFETY: `fbo` and `tex` were just created in `gl`.
+                if let Err(err) = unsafe { attach_and_check_fbo(gl, fbo, tex) } {
+                    // SAFETY: clean up newly created GL objects on failure.
+                    unsafe {
+                        gl.delete_framebuffer(fbo);
+                        gl.delete_texture(tex);
+                    }
+                    return Err(err);
+                }
 
-            entry.tex = new_tex;
-            entry.width = w;
-            entry.height = h;
+                return Ok(slot.insert(LayerEntry {
+                    fbo,
+                    tex,
+                    width: w,
+                    height: h,
+                    content_hash,
+                    last_used_frame: self.frame_gen,
+                }));
+            }
+        };
+
+        let entry = entry_slot.into_mut();
+        if entry.width == w && entry.height == h {
             entry.content_hash = content_hash;
             entry.last_used_frame = self.frame_gen;
             return Ok(entry);
         }
 
+        // Dimensions changed: allocate a new texture and re-attach to the
+        // existing FBO, then delete the old texture.
         // SAFETY: caller guarantees `gl` is the active GLES3 context.
-        let tex = unsafe { create_rgba8_texture(gl, w, h) }?;
-        // SAFETY: caller guarantees `gl` is the active GLES3 context.
-        let fbo = match unsafe { gl.create_framebuffer() } {
-            Ok(fbo) => fbo,
-            Err(e) => {
-                // SAFETY: `tex` was just created in `gl` and is not stored.
-                unsafe { gl.delete_texture(tex) };
-                return Err(EngineError::Gpu(format!("create_framebuffer: {e}")));
-            }
-        };
-
-        // SAFETY: `fbo` and `tex` were just created in the active `gl` context.
-        if let Err(err) = unsafe { attach_and_check_fbo(gl, fbo, tex) } {
-            // SAFETY: clean up newly created GL objects on failure.
-            unsafe {
-                gl.delete_framebuffer(fbo);
-                gl.delete_texture(tex);
-            }
+        let new_tex = unsafe { create_rgba8_texture(gl, w, h) }?;
+        // SAFETY: `entry.fbo` and `new_tex` belong to the active `gl` context.
+        if let Err(err) = unsafe { attach_and_check_fbo(gl, entry.fbo, new_tex) } {
+            // SAFETY: `new_tex` was just created in `gl` and is not stored.
+            unsafe { gl.delete_texture(new_tex) };
             return Err(err);
         }
+        let old_tex = entry.tex;
+        // SAFETY: `old_tex` is no longer attached to `entry.fbo`.
+        unsafe { gl.delete_texture(old_tex) };
 
-        let entry = LayerEntry {
-            fbo,
-            tex,
-            width: w,
-            height: h,
-            content_hash,
-            last_used_frame: self.frame_gen,
-        };
-        Ok(self.entries.entry(key).or_insert(entry))
+        entry.tex = new_tex;
+        entry.width = w;
+        entry.height = h;
+        entry.content_hash = content_hash;
+        entry.last_used_frame = self.frame_gen;
+        Ok(entry)
     }
 
     /// Evicts any cached layer that has not been used for more than
@@ -248,27 +251,27 @@ unsafe fn create_rgba8_texture(
         gl.tex_parameter_i32(
             glow::TEXTURE_2D,
             glow::TEXTURE_MIN_FILTER,
-            glow::LINEAR as i32,
+            glow::LINEAR.cast_signed(),
         );
         gl.tex_parameter_i32(
             glow::TEXTURE_2D,
             glow::TEXTURE_MAG_FILTER,
-            glow::LINEAR as i32,
+            glow::LINEAR.cast_signed(),
         );
         gl.tex_parameter_i32(
             glow::TEXTURE_2D,
             glow::TEXTURE_WRAP_S,
-            glow::CLAMP_TO_EDGE as i32,
+            glow::CLAMP_TO_EDGE.cast_signed(),
         );
         gl.tex_parameter_i32(
             glow::TEXTURE_2D,
             glow::TEXTURE_WRAP_T,
-            glow::CLAMP_TO_EDGE as i32,
+            glow::CLAMP_TO_EDGE.cast_signed(),
         );
         gl.tex_image_2d(
             glow::TEXTURE_2D,
             0,
-            glow::RGBA8 as i32,
+            glow::RGBA8.cast_signed(),
             gl_w,
             gl_h,
             0,

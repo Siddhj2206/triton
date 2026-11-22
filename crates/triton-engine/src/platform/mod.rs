@@ -27,7 +27,9 @@ use smithay_client_toolkit::dispatch2::Dispatch2;
 use smithay_client_toolkit::globals::GlobalData;
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
 use smithay_client_toolkit::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay_client_toolkit::reexports::calloop::{EventLoop, LoopHandle, LoopSignal};
+use smithay_client_toolkit::reexports::calloop::{
+    EventLoop, LoopHandle, LoopSignal, RegistrationToken,
+};
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::reexports::client::globals::registry_queue_init;
 use smithay_client_toolkit::reexports::client::protocol::{
@@ -58,12 +60,14 @@ use smithay_client_toolkit::{delegate_registry, registry_handlers};
 use triton_design::shape::rounded_rect_bands;
 
 use crate::anim::Animator;
+use crate::damage::{DamageRect, DamageTracker};
 use crate::error::EngineError;
 use crate::gpu::{DrawList, Gpu};
 use crate::image::ImageStore;
 use crate::platform::egl::{Egl, EglSurface};
 use crate::platform::wl_egl::{EglWindow, WlEgl};
 use crate::text::TextEngine;
+use crate::timer::TimerScheduler;
 use crate::ui::{
     BlurRect, BuiltFrame, Element, InputEvent, InteractionState, Key, layout_and_paint,
     measure_tree,
@@ -88,6 +92,16 @@ pub enum SurfaceSize {
     Fixed(u32, u32),
     /// Stretch to fill the anchored edges (e.g., `TOP | BOTTOM | LEFT | RIGHT` for overlays).
     Stretch,
+    /// Fixed maximum extent allocated once for spring-morphing surfaces:
+    /// `layer.set_size` and the `wl_egl_window` are created at `(width, height)`
+    /// and never resized during shape morphs, keeping `EGL_BUFFER_AGE_KHR` warm.
+    /// Pair with `shaped_input` so input regions track the actual painted shape.
+    StableExtent {
+        /// Maximum logical width in px.
+        width: u32,
+        /// Maximum logical height in px.
+        height: u32,
+    },
 }
 
 /// Declarative specification of one layer-shell surface.
@@ -122,6 +136,31 @@ impl SurfaceSpec {
             sizing: SurfaceSize::FitContent {
                 max_w: Some(1400),
                 max_h: Some(120),
+            },
+            shaped_input: true,
+        }
+    }
+
+    /// Floating top-bar island that spring-morphs its shape inside a stable
+    /// max extent (`max_w` x `max_h` logical px): the layer surface and EGL
+    /// buffer are allocated once so partial damage stays warm through morphs.
+    pub fn morphing_island(
+        namespace: impl Into<String>,
+        anchor: Anchor,
+        margin: (i32, i32, i32, i32),
+        max_w: u32,
+        max_h: u32,
+    ) -> Self {
+        Self {
+            namespace: namespace.into(),
+            layer: Layer::Top,
+            anchor,
+            margin,
+            keyboard: KeyboardInteractivity::None,
+            exclusive_zone: 0,
+            sizing: SurfaceSize::StableExtent {
+                width: max_w,
+                height: max_h,
             },
             shaped_input: true,
         }
@@ -196,7 +235,14 @@ pub enum AppCommand<Id> {
     /// Focus a widget key on a specific surface.
     Focus(Id, crate::ui::NodeKey),
     /// Schedule a one-shot timer callback after `delay` with caller-defined `tag`.
+    /// Re-scheduling an already-active `tag` refreshes its deadline.
     ScheduleTimer { tag: u32, delay: Duration },
+    /// Cancel the timer scheduled for `tag` (no-op if absent).
+    CancelTimer(u32),
+    /// Pause the timer for `tag`, freezing its remaining duration (e.g. hover).
+    PauseTimer(u32),
+    /// Resume a paused timer for `tag` at `now + remaining`.
+    ResumeTimer(u32),
     /// Exit the event loop cleanly.
     Quit,
 }
@@ -273,7 +319,7 @@ pub fn run<A: ShellApp>(app: A) -> Result<(), EngineError> {
     )?;
     let start_cmds = runtime.app.on_start(Instant::now());
     runtime.apply_commands(start_cmds, &qh);
-    runtime.app.sync_images(&mut runtime.images);
+    runtime.sync_app_images();
     runtime.sync_surfaces(&qh)?;
 
     event_loop
@@ -311,6 +357,10 @@ struct SurfaceHost<A: ShellApp> {
     intervals: Vec<f64>,
     last_frame: Option<Instant>,
     frames: u64,
+    /// Buffer-age damage history for partial-damage swaps.
+    damage: DamageTracker,
+    /// Previous frame's draw list for `DrawList::diff_bounds` content diffs.
+    prev_draw_list: DrawList,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -341,6 +391,10 @@ struct Runtime<A: ShellApp> {
     modifiers: Modifiers,
     loop_handle: LoopHandle<'static, Runtime<A>>,
     signal: LoopSignal,
+    /// Central deadline scheduler for `AppCommand::ScheduleTimer` tags.
+    timers: TimerScheduler<u32>,
+    /// The single armed calloop timer (earliest deadline), if any.
+    timer_token: Option<RegistrationToken>,
 }
 
 impl<A: ShellApp> Runtime<A> {
@@ -402,6 +456,8 @@ impl<A: ShellApp> Runtime<A> {
             modifiers: Modifiers::default(),
             loop_handle,
             signal,
+            timers: TimerScheduler::new(),
+            timer_token: None,
         })
     }
 
@@ -441,6 +497,7 @@ impl<A: ShellApp> Runtime<A> {
                     host.layer.set_keyboard_interactivity(spec.keyboard);
                     host.layer.set_exclusive_zone(spec.exclusive_zone);
                     host.spec = spec;
+                    host.damage.mark_full();
                     host.needs_redraw = true;
                     queue_frame(host, qh);
                 }
@@ -481,6 +538,10 @@ impl<A: ShellApp> Runtime<A> {
             }
             SurfaceSize::FitContent { .. } => {
                 layer.set_size(initial_logical.0.max(1), initial_logical.1.max(1));
+            }
+            SurfaceSize::StableExtent { width, height } => {
+                // Allocated once: morph animations never resize the EGL buffer.
+                layer.set_size(width.max(1), height.max(1));
             }
         }
 
@@ -535,6 +596,12 @@ impl<A: ShellApp> Runtime<A> {
                 intervals: Vec::new(),
                 last_frame: None,
                 frames: 0,
+                damage: {
+                    let mut d = DamageTracker::new();
+                    d.mark_full();
+                    d
+                },
+                prev_draw_list: DrawList::default(),
             },
         );
         Ok(())
@@ -545,7 +612,11 @@ impl<A: ShellApp> Runtime<A> {
     /// 1-frame flash or clipping!).
     fn compute_initial_size(&mut self, id: A::SurfaceId, spec: &SurfaceSpec) -> (u32, u32) {
         match spec.sizing {
-            SurfaceSize::Fixed(w, h) => (w.max(1), h.max(1)),
+            SurfaceSize::Fixed(w, h)
+            | SurfaceSize::StableExtent {
+                width: w,
+                height: h,
+            } => (w.max(1), h.max(1)),
             SurfaceSize::Stretch => (640, 480),
             SurfaceSize::FitContent { max_w, max_h } => {
                 let now = Instant::now();
@@ -596,18 +667,20 @@ impl<A: ShellApp> Runtime<A> {
                     }
                 }
                 AppCommand::ScheduleTimer { tag, delay } => {
-                    let qh_clone = qh.clone();
-                    let _ = self.loop_handle.insert_source(
-                        Timer::from_duration(delay),
-                        move |_, (), rt: &mut Runtime<A>| {
-                            let now = Instant::now();
-                            let cmds = rt.app.on_timer(tag, now);
-                            rt.apply_commands(cmds, &qh_clone);
-                            rt.app.sync_images(&mut rt.images);
-                            let _ = rt.sync_surfaces(&qh_clone);
-                            TimeoutAction::Drop
-                        },
-                    );
+                    self.timers.schedule(tag, delay, Instant::now());
+                    self.rearm_timer(qh);
+                }
+                AppCommand::CancelTimer(tag) => {
+                    self.timers.cancel(tag);
+                    self.rearm_timer(qh);
+                }
+                AppCommand::PauseTimer(tag) => {
+                    self.timers.pause(tag, Instant::now());
+                    self.rearm_timer(qh);
+                }
+                AppCommand::ResumeTimer(tag) => {
+                    self.timers.resume(tag, Instant::now());
+                    self.rearm_timer(qh);
                 }
                 AppCommand::Quit => {
                     self.signal.stop();
@@ -616,11 +689,60 @@ impl<A: ShellApp> Runtime<A> {
         }
     }
 
+    /// Stage any app image inserts/updates/removals and invalidate surface
+    /// damage when GPU texture data changed (so same-`ImageId` updates like
+    /// live screencopy frames are never skipped by `DrawList::diff_bounds`).
+    fn sync_app_images(&mut self) {
+        self.app.sync_images(&mut self.images);
+        if self.images.has_pending_changes() {
+            for host in self.hosts.values_mut() {
+                host.damage.mark_full();
+            }
+        }
+    }
+
+    /// Re-arm the single calloop timer for the scheduler's earliest deadline.
+    /// Called after every timer mutation and after each dispatch so refreshed,
+    /// cancelled, paused, and newly-expired timers always re-align the OS timer.
+    fn rearm_timer(&mut self, qh: &QueueHandle<Self>) {
+        if let Some(tok) = self.timer_token.take() {
+            self.loop_handle.remove(tok);
+        }
+        let Some(deadline) = self.timers.next_deadline() else {
+            return;
+        };
+        let delay = deadline.saturating_duration_since(Instant::now());
+        let qh_clone = qh.clone();
+        let source = Timer::from_duration(delay);
+        match self
+            .loop_handle
+            .insert_source(source, move |_, (), rt: &mut Runtime<A>| {
+                rt.timer_token = None;
+                let now = Instant::now();
+                let expired = rt.timers.poll_expired(now);
+                let mut cmds = Vec::new();
+                for tag in expired {
+                    cmds.extend(rt.app.on_timer(tag, now));
+                }
+                rt.apply_commands(cmds, &qh_clone);
+                rt.sync_app_images();
+                let _ = rt.sync_surfaces(&qh_clone);
+                if rt.timer_token.is_none() {
+                    rt.rearm_timer(&qh_clone);
+                }
+                TimeoutAction::Drop
+            }) {
+            Ok(tok) => self.timer_token = Some(tok),
+            Err(e) => tracing::error!(?e, "insert timer source failed"),
+        }
+    }
+
     fn resize_host(&mut self, id: A::SurfaceId, lw: u32, lh: u32) {
         if let Some(host) = self.hosts.get_mut(&id) {
             host.logical = (lw.max(1), lh.max(1));
             host.configured = true;
             host.needs_redraw = true;
+            host.damage.mark_full();
             rebuffer_host(host);
         }
     }
@@ -632,6 +754,7 @@ impl<A: ShellApp> Runtime<A> {
         {
             host.scale = scale;
             rebuffer_host(host);
+            host.damage.mark_full();
             host.needs_redraw = true;
         }
     }
@@ -640,7 +763,7 @@ impl<A: ShellApp> Runtime<A> {
         let now = Instant::now();
         self.text.begin_frame();
         // Let the app stage image inserts/updates/removals before view + paint.
-        self.app.sync_images(&mut self.images);
+        self.sync_app_images();
 
         let (logical, scale, sizing) = {
             let Some(host) = self.hosts.get_mut(&id) else {
@@ -678,6 +801,9 @@ impl<A: ShellApp> Runtime<A> {
             SurfaceSize::Fixed(..) | SurfaceSize::Stretch => {
                 (Some(logical.0 as f32), Some(logical.1 as f32))
             }
+            SurfaceSize::StableExtent { width, height } => {
+                (Some(width as f32), Some(height as f32))
+            }
         };
 
         // 3. Layout & paint into DrawList.
@@ -707,17 +833,36 @@ impl<A: ShellApp> Runtime<A> {
             {
                 host.logical = (want_w, want_h);
                 host.layer.set_size(want_w, want_h);
+                host.damage.mark_full();
                 rebuffer_host(host);
             }
         }
 
         // 5. Update shaped compositor blur and input regions when changed.
-        let Some((bw, bh, egl_surface)) = self.sync_surface_regions(id, built) else {
+        let Some((bw, bh, egl_surface, regions_changed)) = self.sync_surface_regions(id, built)
+        else {
             return;
         };
 
+        // 5b. Compute this frame's content-diff dirty rect for buffer-age
+        //     partial damage, then save it as the next frame's baseline.
+        let current_dirty = {
+            let Some(host) = self.hosts.get_mut(&id) else {
+                return;
+            };
+            let dirty = self.draw_list.diff_bounds(&host.prev_draw_list);
+            host.prev_draw_list.clone_from(&self.draw_list);
+            dirty
+        };
+
         // 6. Render with GLES3 and swap with damage.
-        self.render_and_swap(id, bw, bh, egl_surface);
+        let swapped = self.render_and_swap(id, bw, bh, egl_surface, current_dirty);
+        if regions_changed
+            && !swapped
+            && let Some(host) = self.hosts.get(&id)
+        {
+            host.layer.wl_surface().commit();
+        }
 
         // 7. Sync surface lifecycle (e.g. closing panel finished its spring) and re-arm pacing.
         if let Err(e) = self.sync_surfaces(qh) {
@@ -741,11 +886,13 @@ impl<A: ShellApp> Runtime<A> {
         &mut self,
         id: A::SurfaceId,
         built: BuiltFrame<A::Message>,
-    ) -> Option<(u32, u32, EglSurface)> {
+    ) -> Option<(u32, u32, EglSurface, bool)> {
         let host = self.hosts.get_mut(&id)?;
+        let mut changed = false;
         if host.last_blur != built.blur_rects {
             update_blur_region(&self.compositor, host.effect.as_ref(), &built.blur_rects);
             host.last_blur.clone_from(&built.blur_rects);
+            changed = true;
         }
         if host.spec.shaped_input && host.last_input != built.input_rects {
             update_input_region(
@@ -754,30 +901,67 @@ impl<A: ShellApp> Runtime<A> {
                 &built.input_rects,
             );
             host.last_input.clone_from(&built.input_rects);
+            changed = true;
         }
         host.built = built;
         host.frames += 1;
-        Some((host.buffer.0, host.buffer.1, host.egl_surface))
+        Some((host.buffer.0, host.buffer.1, host.egl_surface, changed))
     }
 
-    fn render_and_swap(&mut self, id: A::SurfaceId, bw: u32, bh: u32, egl_surface: EglSurface) {
+    fn render_and_swap(
+        &mut self,
+        id: A::SurfaceId,
+        bw: u32,
+        bh: u32,
+        egl_surface: EglSurface,
+        current_dirty: Option<DamageRect>,
+    ) -> bool {
         if let Err(e) = self.egl.make_current(Some(egl_surface)) {
             tracing::error!(?id, %e, "eglMakeCurrent failed");
-            return;
+            return false;
         }
         self.egl.set_swap_interval(0);
+        let age = self.egl.buffer_age(egl_surface);
+        let surface_size = (
+            i32::try_from(bw).unwrap_or(i32::MAX),
+            i32::try_from(bh).unwrap_or(i32::MAX),
+        );
+        let Some(host) = self.hosts.get(&id) else {
+            return false;
+        };
+        let effective = host.damage.compute_damage(age, current_dirty, surface_size);
+        // Nothing to repaint (or an empty rect): skip the redraw AND the swap.
+        // `record_frame` only tracks actually-presented swaps, matching what
+        // `EGL_BUFFER_AGE_KHR` counts, so skipped frames leave history intact.
+        let Some(dmg) = effective else {
+            return false;
+        };
+        if dmg.is_empty() {
+            return false;
+        }
         if let Some(gpu) = &mut self.gpu {
             let mut atlas = self.text.atlas_upload();
-            gpu.render(bw, bh, &self.draw_list, &mut atlas, &mut self.images);
+            gpu.render(
+                bw,
+                bh,
+                &self.draw_list,
+                &mut atlas,
+                &mut self.images,
+                Some(dmg),
+            );
         }
-        let damage = [[
-            0,
-            0,
-            i32::try_from(bw).unwrap_or(1),
-            i32::try_from(bh).unwrap_or(1),
-        ]];
-        if let Err(e) = self.egl.swap(egl_surface, &damage) {
-            tracing::error!(?id, %e, "eglSwapBuffers failed");
+        let egl_rect = dmg.to_egl_rect(i32::try_from(bh).unwrap_or(i32::MAX));
+        match self.egl.swap(egl_surface, &[egl_rect]) {
+            Ok(()) => {
+                if let Some(host) = self.hosts.get_mut(&id) {
+                    host.damage.record_frame(current_dirty);
+                }
+                true
+            }
+            Err(e) => {
+                tracing::error!(?id, %e, "eglSwapBuffers failed");
+                false
+            }
         }
     }
 
@@ -794,7 +978,7 @@ impl<A: ShellApp> Runtime<A> {
         for msg in msgs {
             all_cmds.extend(self.app.update(id, msg, now));
         }
-        self.app.sync_images(&mut self.images);
+        self.sync_app_images();
         if let Err(e) = self.sync_surfaces(qh) {
             tracing::error!(%e, "sync_surfaces after input failed");
         }
@@ -916,7 +1100,11 @@ fn update_input_region(
     rects: &[BlurRect],
 ) {
     if rects.is_empty() {
-        surface.set_input_region(None);
+        // `set_input_region(None)` means an *infinite* input region, not empty!
+        // Only an explicit empty region makes a shaped surface click-through.
+        if let Ok(region) = Region::new(compositor) {
+            surface.set_input_region(Some(region.wl_region()));
+        }
         return;
     }
     if let Ok(region) = Region::new(compositor) {

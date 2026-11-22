@@ -264,6 +264,9 @@ pub struct Element<M> {
     pub wave: Option<(f32, f32)>,
     /// Optional edge-fade widths (logical px) applied to this element's children.
     pub edge_fade: Option<Edges>,
+    /// Optional [`LayerCache`] key: rasterize this subtree into an offscreen FBO
+    /// once and composite it as a textured quad while its `content_hash` holds.
+    pub layer_key: Option<NodeKey>,
 }
 
 impl<M> Element<M> {
@@ -284,6 +287,7 @@ impl<M> Element<M> {
             captures_input: false,
             wave: None,
             edge_fade: None,
+            layer_key: None,
         }
     }
 
@@ -582,6 +586,15 @@ impl<M> Element<M> {
         self
     }
 
+    /// Cache this subtree in an offscreen `LayerCache` FBO keyed by `key`:
+    /// while its inner `content_hash` stays identical the subtree is composited
+    /// as a single textured quad instead of re-rasterizing every primitive.
+    /// `key` must be stable across frames and unique per surface.
+    pub fn layer(mut self, key: impl Into<NodeKey>) -> Self {
+        self.layer_key = Some(key.into());
+        self
+    }
+
     pub fn opacity(mut self, opacity: f32) -> Self {
         self.visual.transform.opacity = opacity;
         self
@@ -679,6 +692,7 @@ pub fn text<M>(
         captures_input: false,
         wave: None,
         edge_fade: None,
+        layer_key: None,
     }
 }
 
@@ -717,6 +731,7 @@ pub fn image<M>(id: ImageId, style: ImageStyle) -> Element<M> {
         captures_input: false,
         wave: None,
         edge_fade: None,
+        layer_key: None,
     }
 }
 
@@ -1068,7 +1083,7 @@ fn measure_leaf(
 fn paint_node<M>(
     tree: &TaffyTree<TextMeasureContext>,
     node_id: NodeId,
-    elem: Element<M>,
+    mut elem: Element<M>,
     origin: (f32, f32),
     parent_tf: SubtreeTransform,
     clip_rect: Option<Rect>,
@@ -1103,6 +1118,112 @@ fn paint_node<M>(
     let screen_rect = tf.map_rect(local_rect);
     let scissor = clip_rect.map(|c| rect_to_scissor(c, scale));
     let eff_scale = scale * tf.scale;
+
+    // 0. Offscreen FBO layer: paint the whole subtree into a fresh DrawList in
+    //    FBO-local space, then emit a single `CachedLayer` composite batch. The
+    //    element's own transform is peeled off so translate/scale/opacity morphs
+    //    only change `dst`/`opacity` and keep `content_hash` stable.
+    if let Some(layer_key) = elem.layer_key {
+        let local_pad = elem.visual.shadow.map_or(Edges::ZERO, DropShadow::gutter);
+        let fbo_lw = local_rect.w + local_pad.left + local_pad.right;
+        let fbo_lh = local_rect.h + local_pad.top + local_pad.bottom;
+        if fbo_lw <= 0.0 || fbo_lh <= 0.0 {
+            return;
+        }
+        let fbo_w = (fbo_lw * scale).ceil().max(1.0) as u32;
+        let fbo_h = (fbo_lh * scale).ceil().max(1.0) as u32;
+
+        elem.layer_key = None;
+        elem.visual.transform = SubtreeTransform::IDENTITY;
+        let mut layer_draw_list = DrawList::default();
+        let mut local_frame = BuiltFrame::default();
+        // Shift the subtree so `local_rect` sits at `(pad.left, pad.top)` inside
+        // the FBO; the shadow gutter then has room inside the texture.
+        paint_node(
+            tree,
+            node_id,
+            elem,
+            (
+                local_pad.left - layout.location.x,
+                local_pad.top - layout.location.y,
+            ),
+            SubtreeTransform::IDENTITY,
+            None,
+            None,
+            scale,
+            interaction,
+            text,
+            images,
+            &mut layer_draw_list,
+            scratch_glyphs,
+            &mut local_frame,
+        );
+
+        // Map an FBO-local rect back into real screen (logical surface) coords:
+        // shift from FBO space into layout space, then apply the outer tf.
+        let to_screen = |r: Rect| {
+            tf.map_rect(Rect::new(
+                local_rect.x - local_pad.left + r.x,
+                local_rect.y - local_pad.top + r.y,
+                r.w,
+                r.h,
+            ))
+        };
+        frame
+            .blur_rects
+            .extend(local_frame.blur_rects.iter().map(|br| BlurRect {
+                rect: to_screen(br.rect),
+                radius: br.radius * tf.scale,
+            }));
+        frame
+            .input_rects
+            .extend(local_frame.input_rects.iter().map(|br| BlurRect {
+                rect: to_screen(br.rect),
+                radius: br.radius * tf.scale,
+            }));
+        for mut hit in local_frame.hits {
+            hit.rect = to_screen(hit.rect);
+            hit.clip = match hit.clip {
+                Some(inner) => Some(match clip_rect {
+                    Some(outer) => to_screen(inner).intersect(outer),
+                    None => to_screen(inner),
+                }),
+                None => clip_rect,
+            };
+            // `content_height` shares units with `rect.h` for scroll clamping.
+            hit.content_height *= tf.scale;
+            frame.hits.push(hit);
+        }
+
+        let content_hash = layer_draw_list.content_hash();
+        // Snap composite logical extent to the allocated physical FBO dimensions
+        // so tf.scale == 1.0 maps texels 1:1 even at fractional display scales.
+        let snapped_lw = fbo_w as f32 / scale;
+        let snapped_lh = fbo_h as f32 / scale;
+        let dst_r = tf.map_rect(Rect::new(
+            local_rect.x - local_pad.left,
+            local_rect.y - local_pad.top,
+            snapped_lw,
+            snapped_lh,
+        ));
+        draw_list.push_cached_layer(
+            layer_key.0,
+            fbo_w,
+            fbo_h,
+            content_hash,
+            [
+                dst_r.x * scale,
+                dst_r.y * scale,
+                dst_r.w * scale,
+                dst_r.h * scale,
+            ],
+            tf.opacity,
+            scissor,
+            edge_fade,
+            layer_draw_list,
+        );
+        return;
+    }
 
     // 1. Optional SDF drop shadow (painted behind the element itself).
     //    For translucent fills (Glass/Thick/alpha < 0.99), request an interior
