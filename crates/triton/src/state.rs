@@ -369,6 +369,8 @@ pub enum ShellEvent {
     WorkspacesUpdated(Vec<WorkspaceInfo>),
     /// Focused window updated (from niri IPC #15).
     FocusedWindowChanged(Option<FocusedWindow>),
+    /// Aggregate system status summary updated (network, audio, battery, unread notifications).
+    StatusUpdated(StatusSummary),
     /// Shut down the daemon cleanly.
     Quit,
 }

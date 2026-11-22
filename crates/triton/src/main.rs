@@ -11,8 +11,8 @@ use tracing_subscriber::EnvFilter;
 use triton::cli::USAGE;
 use triton::niri_config;
 use triton::{
-    BackendMode, CliCommand, DaemonArgs, IpcResponse, IpcServer, MsgArgs, ShellEvent, TritonShell,
-    parse_args, resolve_socket_path, send_command,
+    BackendMode, CliCommand, DaemonArgs, IpcResponse, IpcServer, MsgArgs, NiriIpc, ShellEvent,
+    TritonShell, parse_args, resolve_socket_path, send_command,
 };
 use triton_engine::{event_channel, run_with_events};
 
@@ -98,13 +98,31 @@ fn run_daemon(args: &DaemonArgs) -> Result<()> {
     let mut app = TritonShell::new(args.backend);
     // Lets `SetWallpaper` spawn off-thread decode workers that deliver
     // `WallpaperReady`/`WallpaperFailed` back into this same event loop.
-    app.set_event_sender(event_tx);
+    app.set_event_sender(event_tx.clone());
 
     // ADR-0004: the only write the host `config.kdl` ever gets, and only under
     // `--real-services`. The fake dev backend never touches niri config.
     if args.backend == BackendMode::RealServices {
         install_niri_config(&app);
     }
+
+    // Live niri IPC only under --real-services; default fake dev mode never
+    // touches the host $NIRI_SOCKET.
+    let _niri_ipc = if args.backend == BackendMode::RealServices {
+        match NiriIpc::connect(event_tx) {
+            Ok(ipc) => {
+                info!(socket = %ipc.socket_path().display(), "connected to niri IPC");
+                app.set_niri_action_sink(ipc.action_sink());
+                Some(ipc)
+            }
+            Err(err) => {
+                warn!(error = %err, "niri IPC unavailable; running without compositor integration");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     run_with_events(app, event_rx, TritonShell::handle_event)
         .context("triton Wayland event loop exited with error")?;

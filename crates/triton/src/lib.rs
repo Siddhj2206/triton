@@ -8,12 +8,20 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bar;
 pub mod cli;
 pub mod ipc;
 pub mod niri_config;
+pub mod niri_ipc;
 pub mod shell;
 pub mod state;
 pub mod wallpaper;
+
+pub use bar::{
+    BAR_HIDE_DELAY, BAR_REVEAL_DELAY_DEFAULT, BAR_REVEAL_DELAY_FULLSCREEN, BAR_REVEAL_EDGE_HEIGHT,
+    BAR_TOP_OFFSET, BarClock, BarConfig, BarController, TIMER_BAR_CLOCK, bar_hide_timer_tag,
+    bar_reveal_timer_tag,
+};
 
 pub use cli::{CliCommand, CliError, DaemonArgs, MsgArgs, parse_args};
 pub use ipc::{
@@ -25,6 +33,7 @@ pub use niri_config::{
     render_colors, render_index, render_layer_rules, write_colors, write_layer_rules,
     write_owned_files,
 };
+pub use niri_ipc::{NIRI_SOCKET_ENV, NiriAction, NiriActionSender, NiriIpc, NiriIpcError};
 pub use shell::{ShellMessage, SurfaceId, TIMER_OSD_HIDE, TIMER_WALLPAPER_SETTLE, TritonShell};
 pub use state::{
     BackendMode, BarMode, FocusedWindow, OsdPayload, OsdState, OutputKey, ShellEvent, ShellState,
