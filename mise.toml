@@ -103,7 +103,7 @@ podman run --rm --name triton-preview \
 description = "Nested niri window + triton on a private bus (real services act on the real system)"
 run = """
 cargo build -p triton -p triton-lock
-REPO=$PWD nix shell nixpkgs#dbus --command dbus-run-session -- sh dev/child/session.sh
+REPO=$PWD nix shell nixpkgs#dbus --command sh dev/child/session.sh
 """
 
 [tasks."child:msg"]
