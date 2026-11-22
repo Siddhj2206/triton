@@ -90,6 +90,27 @@ podman run --rm --name triton-preview \
   dbus-run-session -- /work/dev/preview/session.sh nested
 """
 
+# ── child session (host-native, no container) ────────────────────────────────
+# A nested niri window on the real desktop running triton, on a private session
+# bus — qs/DMS keep org.freedesktop.Notifications on the parent bus, so toasts
+# work in the child. Real HOME and --real-services: triton exercises your
+# actual config and system services. Volume/brightness/power actions act on
+# the REAL system — the child's power menu really suspends this machine.
+# Override TRITON_CMD for the fake backend: TRITON_CMD=".../triton" mise run child
+
+[tasks.child]
+description = "Nested niri window + triton on a private bus (real services act on the real system)"
+run = """
+cargo build -p triton -p triton-lock
+REPO=$PWD dbus-run-session -- sh dev/child/session.sh
+"""
+
+[tasks."child:msg"]
+description = "triton msg against the child session (mise run child:msg -- launcher toggle)"
+run = """
+XDG_RUNTIME_DIR=$PWD/target/child/runtime ./target/debug/triton msg
+"""
+
 [tasks."preview:msg"]
 description = "niri msg against the preview session (mise run preview:msg -- windows)"
 run = "podman exec triton-preview /work/dev/preview/msg.sh"
