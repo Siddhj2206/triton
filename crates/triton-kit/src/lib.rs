@@ -5,7 +5,8 @@
 //! - [`surface`]: [`panel`] & [`island`] (materials, top highlight, blur reporting,
 //!   [`shadow_gutter`]), [`card`], [`scrim`], [`dialog`], [`divider`],
 //!   [`empty_state`], [`list_group`] + [`list_row`], [`scroll_area`].
-//! - [`button`]: [`button`], [`icon_button`], [`ButtonTone`].
+//! - [`button`]: [`button`], [`icon_button`], [`chip`], [`toggle_tile`],
+//!   [`segmented`], [`power_menu`], and their spec structs.
 //! - [`control`]: [`switch`], [`checkbox`], [`radio`], [`slider`] (`Animator`-driven).
 //! - [`input`]: [`TextInputState`] + [`text_input`].
 //! - [`chrome`]: [`pill`], [`status_pill`], [`overflow_pill`], [`icon_disc`],
@@ -23,7 +24,11 @@ mod input;
 mod progress;
 mod surface;
 
-pub use button::{ButtonTone, button, icon_button};
+pub use button::{
+    Button, ButtonSize, ButtonTone, Chip, ChipKind, IconButton, PowerCellTone, PowerItem,
+    SegmentedItem, SegmentedStyle, ToggleTile, button, chip, icon_button, power_menu, segmented,
+    toggle_tile,
+};
 pub use chrome::{
     Badge, KeycapStyle, PillStatus, badge, badged, hint_bar, icon_disc, icon_disc_styled, keycap,
     overflow_pill, pill, status_pill, wave_avatar, wave_avatar_image,

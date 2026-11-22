@@ -27,8 +27,9 @@ use triton_engine::{
     SurfaceSize, SurfaceSpec, Theme, ViewContext, box_, col, icon, row, run, text,
 };
 use triton_kit::{
-    ButtonTone, ScrollAreaOptions, SliderOptions, TextInputAction, TextInputState, button,
-    concentric_inner, icon_button, island, panel, pill, scroll_area, slider, switch, text_input,
+    Button, ButtonTone, IconButton, ScrollAreaOptions, SliderOptions, TextInputAction,
+    TextInputState, button, concentric_inner, icon_button, island, panel, pill, scroll_area,
+    slider, switch, text_input,
 };
 
 const TIMER_OPEN_PANEL: u32 = 1;
@@ -236,14 +237,17 @@ impl ShowcaseApp {
         let t = &self.theme;
         // Shadow pad around the island ensures drop shadow never clips at the surface edge!
         let mut bar = island(t).child(icon_button(
-            "btn-launcher",
-            Icon::Apps,
-            IconStyle::Filled,
-            44.0,
-            self.launcher_open,
-            ButtonTone::Filled,
             t,
-            || Msg::ToggleLauncher,
+            ctx.interaction,
+            ctx.anim,
+            IconButton {
+                key: "btn-launcher".into(),
+                icon: Icon::Apps,
+                toggled: self.launcher_open,
+                tone: ButtonTone::Filled,
+                on_click: Some(Box::new(|| Msg::ToggleLauncher)),
+                ..Default::default()
+            },
         ));
 
         bar = bar.child(box_().w(6.0).h(1.0));
@@ -368,22 +372,21 @@ impl ShowcaseApp {
             );
 
         let bell = icon_button(
-            "btn-dnd",
-            if self.dnd {
-                Icon::NotificationsOff
-            } else {
-                Icon::Notifications
-            },
-            if self.dnd {
-                IconStyle::Filled
-            } else {
-                IconStyle::Outlined
-            },
-            44.0,
-            self.dnd,
-            ButtonTone::Veil,
             t,
-            || Msg::ToggleDnd,
+            ctx.interaction,
+            ctx.anim,
+            IconButton {
+                key: "btn-dnd".into(),
+                icon: if self.dnd {
+                    Icon::NotificationsOff
+                } else {
+                    Icon::Notifications
+                },
+                toggled: self.dnd,
+                tone: ButtonTone::Veil,
+                on_click: Some(Box::new(|| Msg::ToggleDnd)),
+                ..Default::default()
+            },
         );
 
         let bar = island(t).child(clock).child(status_pill).child(bell);
@@ -420,14 +423,16 @@ impl ShowcaseApp {
             .items_center()
             .child(box_().flex_1().child(search_field))
             .child(icon_button(
-                "btn-close-launcher",
-                Icon::Close,
-                IconStyle::Outlined,
-                44.0,
-                false,
-                ButtonTone::Veil,
                 t,
-                || Msg::CloseLauncher,
+                ctx.interaction,
+                ctx.anim,
+                IconButton {
+                    key: "btn-close-launcher".into(),
+                    icon: Icon::Close,
+                    tone: ButtonTone::Veil,
+                    on_click: Some(Box::new(|| Msg::CloseLauncher)),
+                    ..Default::default()
+                },
             ));
 
         let footer = row()
@@ -680,12 +685,17 @@ impl ShowcaseApp {
                 row().w_full().gap(8.0).child(
                     box_().flex_1().child(
                         button(
-                            "btn-settings",
-                            "All Settings",
-                            Some(Icon::Tune),
-                            ButtonTone::Tonal,
                             t,
-                            || Msg::CloseLauncher,
+                            interaction,
+                            anim,
+                            Button {
+                                key: "btn-settings".into(),
+                                label: "All Settings".into(),
+                                lead_icon: Some(Icon::Tune),
+                                tone: ButtonTone::Tonal,
+                                on_click: Some(Box::new(|| Msg::CloseLauncher)),
+                                ..Default::default()
+                            },
                         )
                         .w_full(),
                     ),
