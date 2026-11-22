@@ -6,12 +6,13 @@ use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use triton::cli::USAGE;
+use triton::niri_config;
 use triton::{
-    CliCommand, DaemonArgs, IpcResponse, IpcServer, MsgArgs, ShellEvent, TritonShell, parse_args,
-    resolve_socket_path, send_command,
+    BackendMode, CliCommand, DaemonArgs, IpcResponse, IpcServer, MsgArgs, ShellEvent, TritonShell,
+    parse_args, resolve_socket_path, send_command,
 };
 use triton_engine::{event_channel, run_with_events};
 
@@ -95,10 +96,40 @@ fn run_daemon(args: &DaemonArgs) -> Result<()> {
     );
 
     let app = TritonShell::new(args.backend);
+
+    // ADR-0004: the only write the host `config.kdl` ever gets, and only under
+    // `--real-services`. The fake dev backend never touches niri config.
+    if args.backend == BackendMode::RealServices {
+        install_niri_config(&app);
+    }
+
     run_with_events(app, event_rx, TritonShell::handle_event)
         .context("triton Wayland event loop exited with error")?;
 
     Ok(())
+}
+
+/// ADR-0004 one-time owned-config install at `--real-services` startup.
+///
+/// A failure degrades blur/xray rules and niri-side colors; it never takes the
+/// shell down — the daemon reports it and keeps running.
+fn install_niri_config(app: &TritonShell) {
+    let Some(config_dir) = niri_config::niri_config_dir() else {
+        warn!("HOME/XDG_CONFIG_HOME unset; skipping owned niri config install");
+        return;
+    };
+    let state = app.state();
+    match niri_config::install(
+        &config_dir,
+        &state.theme.scheme,
+        state.theme.variant,
+        state.bar_mode,
+    ) {
+        Ok(()) => info!(dir = %config_dir.display(), "installed owned niri config"),
+        Err(err) => {
+            error!(dir = %config_dir.display(), error = %err, "owned niri config install failed");
+        }
+    }
 }
 
 fn init_logging() {
