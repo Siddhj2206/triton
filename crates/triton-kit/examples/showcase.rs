@@ -1902,7 +1902,8 @@ impl ShowcaseApp {
         let t = &self.theme;
         vec![
             row()
-                .gap(24.0)
+                .gap(32.0)
+                .p(Edges::new(32.0, 48.0, 48.0, 48.0))
                 .child(self.menu_demo(t))
                 .child(Self::tooltip_block(t)),
             sec_label("toast_card · hover pauses auto-dismiss", t),
@@ -2013,7 +2014,10 @@ impl ShowcaseApp {
     )]
     fn toast_row(&self, ctx: &mut ViewContext<'_>) -> Element<Msg> {
         let t = &self.theme;
-        let mut cards = col().w_full().gap(18.0).p(Edges::new(4.0, 0.0, 8.0, 12.0));
+        let mut cards = col()
+            .w_full()
+            .gap(32.0)
+            .p(Edges::new(32.0, 48.0, 64.0, 48.0));
 
         if self.toast_dismissed.iter().all(|&d| d) {
             cards = cards.child(row().gap(12.0).items_center().child(button(

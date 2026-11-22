@@ -137,12 +137,20 @@ float sd_box(vec2 p, vec2 b, vec4 r, float smoothing) {
     return mix(d_circ, d_sm, clamp(smoothing, 0.0, 1.0));
 }
 
-// Error-function approximation for soft Gaussian-like drop shadows.
+// Accurate Gaussian falloff: 0.5 * erfc(d / (sigma * sqrt(2))) via Abramowitz & Stegun 7.1.26.
+// Decays below 1e-5 well before d = 2 * blur so drop shadows never leave a
+// rectangular grey floor box on bright light-mode surfaces.
 float shadow_falloff(float d, float sigma) {
-    float t = clamp(d / max(sigma, 0.5), -3.0, 3.0);
-    // Smooth S-curve matching 0.5 * erfc(d / (sigma * sqrt(2)))
-    float s = 1.0 / (1.0 + exp(1.7 * t));
-    return s;
+    float x = d / (max(sigma, 0.5) * 1.41421356);
+    float ax = abs(x);
+    float t = 1.0 / (1.0 + 0.3275911 * ax);
+    float poly = t * (0.254829592
+        + t * (-0.284496736
+        + t * (1.421413741
+        + t * (-1.453152027
+        + t * 1.061405429))));
+    float erfc_ax = poly * exp(-ax * ax);
+    return (x >= 0.0) ? (0.5 * erfc_ax) : (1.0 - 0.5 * erfc_ax);
 }
 
 void main() {
@@ -207,11 +215,9 @@ void main() {
         float pad = blur * 2.0;
         vec2 caster_half = max(v_half - vec2(pad), vec2(0.5));
         float d = sd_round(p, caster_half, v_radii);
-        float a = shadow_falloff(d, blur * 0.55) * v_fill.a * opacity;
-        // Fade cleanly to zero near the quad boundary to prevent hard clip lines.
-        vec2 edge = v_half - abs(p);
-        float edge_fade = smoothstep(0.0, max(blur * 0.35, 1.0), min(edge.x, edge.y));
-        a *= edge_fade;
+        float a = shadow_falloff(d, blur * 0.45) * v_fill.a * opacity;
+        // Radial SDF taper to exact zero before the quad boundary (never a square box).
+        a *= 1.0 - smoothstep(pad * 0.80, pad, d);
         // Cut out the unshifted caster interior when requested so translucent Glass
         // panels never get darkened/muddied by their own drop shadow bleeding through.
         if (v_border.w > 0.5) {

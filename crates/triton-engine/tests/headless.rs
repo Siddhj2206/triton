@@ -724,8 +724,10 @@ fn smooth_corner_shadow_decays_cleanly_without_clamped_square_halo() {
     let near = alpha_at(168, 55);
     let mid = alpha_at(186, 55);
     let far = alpha_at(212, 55);
+    let outer_corner = alpha_at(214, 214);
     assert!(
-        near > mid && mid > far && far < 10,
-        "smooth-corner drop shadow must decay monotonically past right edge (near={near}, mid={mid}, far={far})"
+        near > mid && mid > far && far <= 2 && outer_corner == 0,
+        "smooth-corner Gaussian drop shadow must decay smoothly to zero without a rectangular floor box \
+         (near={near}, mid={mid}, far={far}, outer_corner={outer_corner})"
     );
 }
