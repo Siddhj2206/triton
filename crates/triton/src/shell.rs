@@ -13,10 +13,9 @@ use triton_engine::{
     AppCommand, Element, NodeKey, OutputInfo, ShellApp, SurfaceAnchor, SurfaceKeyboard,
     SurfaceLayer, SurfaceSize, SurfaceSpec, Theme, ViewContext, icon, row, text,
 };
-use triton_kit::{
-    PillStatus, Progress, island, panel, pill, shadow_gutter, status_pill, wavy_progress,
-};
+use triton_kit::{Progress, panel, shadow_gutter, wavy_progress};
 
+use crate::bar::{BarClock, BarController};
 use crate::ipc::{BarCommand, IpcCommand, IpcResponse, OsdCommand, ThemeCommand};
 use crate::state::{
     BackendMode, BarMode, OsdPayload, OsdState, OutputKey, ShellEvent, ShellState,
@@ -28,13 +27,6 @@ pub const TIMER_OSD_HIDE: u32 = 1;
 
 /// Default OSD hold duration (`docs/design-spec.md`: 1.2 s).
 pub const OSD_HOLD_DURATION: Duration = Duration::from_millis(1200);
-
-/// Default logical width used when an output does not report a logical size yet.
-const DEFAULT_OUTPUT_WIDTH: u32 = 1920;
-
-/// Stable max extent height for the floating autohide bar (8 px top offset +
-/// 56 px bar height + `ShadowToken::FLOATING` top/bottom gutters).
-const BAR_AUTOHIDE_EXTENT_H: u32 = 224;
 
 /// Stable max extent dimensions for the morph-in-place Glass OSD pill.
 const OSD_EXTENT_W: u32 = 420;
@@ -58,12 +50,15 @@ pub enum ShellMessage {
     FocusWorkspace(u64),
     /// User clicked the Bar status pill.
     StatusPillClicked,
+    /// User clicked the Bar notification bell.
+    NotificationBellClicked,
 }
 
 /// Main Triton desktop shell application implementing [`ShellApp`].
 #[derive(Debug)]
 pub struct TritonShell {
     state: ShellState,
+    bar: BarController,
     name_to_key: HashMap<String, OutputKey>,
     key_to_name: HashMap<OutputKey, String>,
     next_output_key: u32,
@@ -72,16 +67,38 @@ pub struct TritonShell {
 impl TritonShell {
     /// Construct a new shell daemon in the given [`BackendMode`].
     pub fn new(backend: BackendMode) -> Self {
+        let now = Instant::now();
         let state = ShellState::for_backend(backend);
         let mut shell = Self {
             state,
+            bar: BarController::new(now),
             name_to_key: HashMap::new(),
             key_to_name: HashMap::new(),
             next_output_key: 1,
         };
         let initial_outputs = shell.state.outputs.clone();
-        shell.sync_output_registry(&initial_outputs);
+        shell.sync_output_registry(&initial_outputs, now);
         shell
+    }
+
+    /// Borrow the active [`BarController`].
+    pub fn bar(&self) -> &BarController {
+        &self.bar
+    }
+
+    /// Mutably borrow the active [`BarController`].
+    pub fn bar_mut(&mut self) -> &mut BarController {
+        &mut self.bar
+    }
+
+    /// Override the Bar clock (useful for deterministic headless testing).
+    pub fn set_bar_clock(&mut self, clock: BarClock) {
+        self.bar.set_clock(clock);
+    }
+
+    /// Configure the normal (non-fullscreen) Autohide bar reveal delay.
+    pub fn set_bar_reveal_delay(&mut self, delay: Duration) {
+        self.bar.set_reveal_delay(delay);
     }
 
     /// Borrow the current [`ShellState`].
@@ -151,11 +168,15 @@ impl TritonShell {
             }
             ShellEvent::SetBarMode(mode) => {
                 self.state.set_bar_mode(mode);
-                vec![AppCommand::RedrawAll]
+                let mut cmds = self.bar.on_mode_changed(mode, now);
+                cmds.push(AppCommand::RedrawAll);
+                cmds
             }
             ShellEvent::ToggleBarHidden => {
-                self.state.toggle_bar_hidden();
-                vec![AppCommand::RedrawAll]
+                let mode = self.state.toggle_bar_hidden();
+                let mut cmds = self.bar.on_mode_changed(mode, now);
+                cmds.push(AppCommand::RedrawAll);
+                cmds
             }
             ShellEvent::ShowOsd { payload, output } => self.show_osd(payload, output),
             ShellEvent::HideOsd => {
@@ -200,9 +221,10 @@ impl TritonShell {
             }
             ShellEvent::SetReduceMotion(enabled) => {
                 self.state.reduce_motion = enabled;
+                self.bar.set_reduce_motion(enabled, now);
                 vec![AppCommand::SetReduceMotion(enabled), AppCommand::RedrawAll]
             }
-            ShellEvent::OutputsChanged(outputs) => self.reconcile_outputs(&outputs),
+            ShellEvent::OutputsChanged(outputs) => self.reconcile_outputs(&outputs, now),
             ShellEvent::FocusedOutputChanged(output) => {
                 self.state.focused_output = output;
                 vec![AppCommand::RedrawAll]
@@ -213,6 +235,10 @@ impl TritonShell {
             }
             ShellEvent::FocusedWindowChanged(window) => {
                 self.state.focused_window = window;
+                vec![AppCommand::RedrawAll]
+            }
+            ShellEvent::StatusUpdated(status) => {
+                self.state.status = status;
                 vec![AppCommand::RedrawAll]
             }
             ShellEvent::Quit => vec![AppCommand::Quit],
@@ -351,9 +377,13 @@ impl TritonShell {
         ]
     }
 
-    fn reconcile_outputs(&mut self, outputs: &[OutputInfo]) -> Vec<AppCommand<SurfaceId>> {
+    fn reconcile_outputs(
+        &mut self,
+        outputs: &[OutputInfo],
+        now: Instant,
+    ) -> Vec<AppCommand<SurfaceId>> {
         self.state.outputs = outputs.to_vec();
-        self.sync_output_registry(outputs);
+        let mut cmds = self.sync_output_registry(outputs, now);
 
         let connected: HashSet<&str> = outputs.iter().map(|o| o.name.as_str()).collect();
 
@@ -378,10 +408,15 @@ impl TritonShell {
             }
         }
 
-        vec![AppCommand::RedrawAll]
+        cmds.push(AppCommand::RedrawAll);
+        cmds
     }
 
-    fn sync_output_registry(&mut self, outputs: &[OutputInfo]) {
+    fn sync_output_registry(
+        &mut self,
+        outputs: &[OutputInfo],
+        now: Instant,
+    ) -> Vec<AppCommand<SurfaceId>> {
         let active_names: HashSet<&str> = outputs.iter().map(|o| o.name.as_str()).collect();
         self.name_to_key
             .retain(|name, _| active_names.contains(name.as_str()));
@@ -396,6 +431,10 @@ impl TritonShell {
                 self.key_to_name.insert(key, output.name.clone());
             }
         }
+
+        let active_keys: HashSet<OutputKey> = self.key_to_name.keys().copied().collect();
+        self.bar
+            .sync_outputs(&active_keys, self.state.reduce_motion, now)
     }
 
     fn background_spec(output: &OutputInfo) -> SurfaceSpec {
@@ -416,35 +455,7 @@ impl TritonShell {
     }
 
     fn bar_spec(&self, output: &OutputInfo) -> Option<SurfaceSpec> {
-        let width = output.logical_size.map_or(DEFAULT_OUTPUT_WIDTH, |(w, _)| w);
-        match self.state.bar_mode {
-            BarMode::Hidden => None,
-            BarMode::Autohide => Some(SurfaceSpec {
-                namespace: SurfaceRole::Bar.namespace().to_owned(),
-                layer: SurfaceLayer::Top,
-                anchor: SurfaceAnchor::TOP | SurfaceAnchor::LEFT | SurfaceAnchor::RIGHT,
-                margin: (0, 0, 0, 0),
-                keyboard: SurfaceKeyboard::None,
-                exclusive_zone: 0,
-                sizing: SurfaceSize::StableExtent {
-                    width,
-                    height: BAR_AUTOHIDE_EXTENT_H,
-                },
-                shaped_input: true,
-                output: Some(output.name.clone()),
-            }),
-            BarMode::Pinned => Some(SurfaceSpec {
-                namespace: SurfaceRole::Bar.namespace().to_owned(),
-                layer: SurfaceLayer::Top,
-                anchor: SurfaceAnchor::TOP | SurfaceAnchor::LEFT | SurfaceAnchor::RIGHT,
-                margin: (0, 0, 0, 0),
-                keyboard: SurfaceKeyboard::None,
-                exclusive_zone: SIZE.bar_height as i32,
-                sizing: SurfaceSize::Fixed(width, SIZE.bar_height as u32),
-                shaped_input: false,
-                output: Some(output.name.clone()),
-            }),
-        }
+        BarController::surface_spec(self.state.bar_mode, output)
     }
 
     fn osd_spec(output_name: &str) -> SurfaceSpec {
@@ -471,69 +482,8 @@ impl TritonShell {
     }
 
     fn view_bar(&self, id: SurfaceId, ctx: &mut ViewContext<'_>) -> Element<ShellMessage> {
-        let theme = &self.state.theme;
         let output_name = self.output_name(id.output).unwrap_or("");
-        let mut ws_row = row().gap(SPACE[0]).items_center();
-        for ws in self
-            .state
-            .workspaces
-            .iter()
-            .filter(|w| w.output == output_name)
-        {
-            let label = ws.name.clone().unwrap_or_else(|| ws.idx.to_string());
-            let ws_id = ws.id;
-            let key = NodeKey::named(&format!("bar-ws-{output_name}-{ws_id}"));
-            ws_row = ws_row.child(pill(key, label, ws.is_active, theme, ctx.anim, move || {
-                ShellMessage::FocusWorkspace(ws_id)
-            }));
-        }
-
-        let status = status_pill(
-            NodeKey::named(&format!("bar-status-{output_name}")),
-            PillStatus::Neutral,
-            theme,
-            ctx.anim,
-            Some(Box::new(|| ShellMessage::StatusPillClicked)),
-            vec![
-                icon(
-                    Icon::Wifi,
-                    IconStyle::Outlined,
-                    SIZE.icon_s,
-                    theme.scheme.on_surface,
-                ),
-                text(
-                    format!("{}%", self.state.status.volume_percent),
-                    TypeStyle::LABEL_L,
-                    theme.scheme.on_surface,
-                ),
-            ],
-        );
-
-        match self.state.bar_mode {
-            BarMode::Pinned => panel(Material::Mica, RADII.tiled, theme)
-                .w_full()
-                .h(SIZE.bar_height)
-                .px(SPACE[3])
-                .justify_center()
-                .child(
-                    row()
-                        .w_full()
-                        .items_center()
-                        .justify_between()
-                        .child(ws_row)
-                        .child(status),
-                ),
-            BarMode::Autohide | BarMode::Hidden => {
-                let left = shadow_gutter(island(theme).child(ws_row));
-                let right = shadow_gutter(island(theme).child(status));
-                row()
-                    .w_full()
-                    .justify_between()
-                    .items_center()
-                    .child(left)
-                    .child(right)
-            }
-        }
+        self.bar.view(id, output_name, &self.state, ctx)
     }
 
     fn view_osd(&self, ctx: &mut ViewContext<'_>) -> Element<ShellMessage> {
@@ -707,26 +657,59 @@ impl ShellApp for TritonShell {
                 }
                 vec![AppCommand::RedrawAll]
             }
-            ShellMessage::None | ShellMessage::StatusPillClicked => Vec::new(),
+            ShellMessage::None
+            | ShellMessage::StatusPillClicked
+            | ShellMessage::NotificationBellClicked => Vec::new(),
         }
     }
 
-    fn is_animating(&self, _id: Self::SurfaceId, _now: Instant) -> bool {
-        false
+    fn is_animating(&self, id: Self::SurfaceId, now: Instant) -> bool {
+        match id.role {
+            SurfaceRole::Bar => self.bar.is_animating(id.output, now),
+            SurfaceRole::Background | SurfaceRole::Osd => false,
+        }
+    }
+
+    fn on_start(&mut self, now: Instant) -> Vec<AppCommand<Self::SurfaceId>> {
+        self.bar.on_start(now)
     }
 
     fn on_outputs_changed(
         &mut self,
         outputs: &[OutputInfo],
-        _now: Instant,
+        now: Instant,
     ) -> Vec<AppCommand<Self::SurfaceId>> {
-        self.reconcile_outputs(outputs)
+        self.reconcile_outputs(outputs, now)
     }
 
-    fn on_timer(&mut self, tag: u32, _now: Instant) -> Vec<AppCommand<Self::SurfaceId>> {
+    fn on_pointer_enter(
+        &mut self,
+        id: Self::SurfaceId,
+        _pos: (f32, f32),
+        now: Instant,
+    ) -> Vec<AppCommand<Self::SurfaceId>> {
+        let Some(output_name) = self.output_name(id.output).map(str::to_owned) else {
+            return Vec::new();
+        };
+        self.bar
+            .on_pointer_enter(id, &self.state, &output_name, now)
+    }
+
+    fn on_pointer_leave(
+        &mut self,
+        id: Self::SurfaceId,
+        now: Instant,
+    ) -> Vec<AppCommand<Self::SurfaceId>> {
+        self.bar.on_pointer_leave(id, &self.state, now)
+    }
+
+    fn on_timer(&mut self, tag: u32, now: Instant) -> Vec<AppCommand<Self::SurfaceId>> {
         if tag == TIMER_OSD_HIDE {
             self.state.osd = None;
             return vec![AppCommand::RedrawAll];
+        }
+        if let Some(cmds) = self.bar.on_timer(tag, &self.state, now) {
+            return cmds;
         }
         Vec::new()
     }
