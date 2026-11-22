@@ -6,13 +6,14 @@
 
 use triton_design::material::Material;
 use triton_engine::gpu::{
-    DrawBatch, DrawList, EdgeFade, KIND_FILL, KIND_SHADOW, KIND_TOP_HIGHLIGHT, KIND_WAVE,
-    QuadInstance, ScissorRect,
+    DrawBatch, DrawList, EdgeFade, IMAGE_CLIP_ROUNDED, IMAGE_CLIP_WAVE, ImageInstance, KIND_FILL,
+    KIND_SHADOW, KIND_TOP_HIGHLIGHT, KIND_WAVE, QuadInstance, ScissorRect,
 };
+use triton_engine::image::{ImageData, ImageFit, ImageId, ImageStore, ImageStyle};
 use triton_engine::style::{DropShadow, Edges, FontSpec, Rect, Rgba, SubtreeTransform, Theme};
 use triton_engine::text::TextEngine;
 use triton_engine::ui::{
-    Element, InputEvent, InteractionState, NodeKey, box_, col, layout_and_paint, row, text,
+    Element, InputEvent, InteractionState, NodeKey, box_, col, image, layout_and_paint, row, text,
 };
 use triton_engine::widgets::{panel, scroll_area};
 
@@ -98,6 +99,7 @@ fn row_and_col_layout_scales_from_logical_to_physical_pixels() {
             scale,
             &interaction,
             &mut text,
+            &ImageStore::new(),
             &mut draw_list,
         );
 
@@ -148,6 +150,7 @@ fn drop_shadow_emits_kind_2_quad_with_expanded_bounds_before_fill() {
         scale,
         &interaction,
         &mut text,
+        &ImageStore::new(),
         &mut draw_list,
     );
 
@@ -238,6 +241,7 @@ fn subtree_transform_propagates_translate_scale_and_opacity_to_children() {
         scale,
         &interaction,
         &mut text,
+        &ImageStore::new(),
         &mut draw_list,
     );
 
@@ -284,6 +288,7 @@ fn zero_opacity_subtree_culls_parent_and_children() {
         1.0,
         &interaction,
         &mut text,
+        &ImageStore::new(),
         &mut draw_list,
     );
 
@@ -321,6 +326,7 @@ fn scroll_area_emits_scissor_rect_and_offsets_children_by_scroll() {
         scale,
         &interaction,
         &mut text,
+        &ImageStore::new(),
         &mut draw_list,
     );
 
@@ -377,6 +383,7 @@ fn nested_clip_intersects_parent_and_child_scissors() {
         1.0,
         &interaction,
         &mut text,
+        &ImageStore::new(),
         &mut draw_list,
     );
 
@@ -398,6 +405,7 @@ fn nested_clip_intersects_parent_and_child_scissors() {
 // ── 5. Hit-testing: hover, press, click, leave, and visual state fills ───────
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn hit_testing_hover_press_state_transitions_and_state_fills() {
     let mut text = TextEngine::new();
     let mut draw_list = DrawList::default();
@@ -428,6 +436,7 @@ fn hit_testing_hover_press_state_transitions_and_state_fills() {
         1.0,
         &interaction,
         &mut text,
+        &ImageStore::new(),
         &mut draw_list,
     );
     assert_eq!(collect_quads(&draw_list)[0].1.fill, idle_col.to_array());
@@ -450,6 +459,7 @@ fn hit_testing_hover_press_state_transitions_and_state_fills() {
         1.0,
         &interaction,
         &mut text,
+        &ImageStore::new(),
         &mut draw_list,
     );
     assert_eq!(collect_quads(&draw_list)[0].1.fill, hover_col.to_array());
@@ -473,6 +483,7 @@ fn hit_testing_hover_press_state_transitions_and_state_fills() {
         1.0,
         &interaction,
         &mut text,
+        &ImageStore::new(),
         &mut draw_list,
     );
     assert_eq!(collect_quads(&draw_list)[0].1.fill, press_col.to_array());
@@ -541,6 +552,7 @@ fn glass_and_thick_panels_collect_blur_and_input_rects_while_solid_only_collects
         1.75,
         &interaction,
         &mut text,
+        &ImageStore::new(),
         &mut draw_list,
     );
 
@@ -651,6 +663,7 @@ fn drop_shadow_cutout_flag_and_gutter_margins() {
         1.0,
         &interaction,
         &mut text,
+        &ImageStore::new(),
         &mut draw_list,
     );
 
@@ -699,6 +712,7 @@ fn wave_element_emits_kind_wave_quad() {
         2.0,
         &interaction,
         &mut text_engine,
+        &ImageStore::new(),
         &mut draw_list,
     );
 
@@ -754,6 +768,7 @@ fn edge_fade_propagates_to_child_quads_and_glyphs() {
         scale,
         &interaction,
         &mut text_engine,
+        &ImageStore::new(),
         &mut draw_list,
     );
 
@@ -781,6 +796,7 @@ fn edge_fade_propagates_to_child_quads_and_glyphs() {
                 instances,
                 ..
             } => glyph_batches.push((*edge_fade, instances.len())),
+            DrawBatch::Images { .. } => {}
         }
     }
 
@@ -798,4 +814,380 @@ fn edge_fade_propagates_to_child_quads_and_glyphs() {
     assert_eq!(glyph_batches.len(), 1, "one faded glyph batch");
     assert_eq!(glyph_batches[0].0, Some(expected_fade));
     assert!(glyph_batches[0].1 > 0, "glyphs emitted for 'Hello'");
+}
+
+// ── 10. Image elements: fits, clips, crossfade, fx, and z-order ──────────────
+
+fn image_store_with(w: u32, h: u32) -> (ImageStore, ImageId) {
+    let mut store = ImageStore::new();
+    let data =
+        ImageData::from_rgba(w, h, vec![255; (w * h * 4) as usize]).expect("valid image data");
+    let id = store.insert(data);
+    (store, id)
+}
+
+type ImageDraw = (
+    Option<ScissorRect>,
+    Option<EdgeFade>,
+    ImageId,
+    Option<ImageId>,
+    ImageInstance,
+);
+
+fn collect_images(draw_list: &DrawList) -> Vec<ImageDraw> {
+    let mut out = Vec::new();
+    for batch in &draw_list.batches {
+        if let DrawBatch::Images {
+            image_id,
+            crossfade_to,
+            scissor,
+            edge_fade,
+            instances,
+        } = batch
+        {
+            for &inst in instances {
+                out.push((*scissor, *edge_fade, *image_id, *crossfade_to, inst));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn image_cover_contain_and_fill_emit_correct_dst_and_uv() {
+    let scale = 1.5_f32;
+    let mut text_engine = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+
+    let (mut store, cover_id) = image_store_with(200, 100);
+    let contain_id =
+        store.insert(ImageData::from_rgba(200, 100, vec![255; 200 * 100 * 4]).expect("img"));
+    let fill_id = store.insert(ImageData::from_rgba(64, 64, vec![255; 64 * 64 * 4]).expect("img"));
+
+    let style = |fit| ImageStyle {
+        fit,
+        ..ImageStyle::default()
+    };
+    let root: Element<()> = col()
+        .w(100.0)
+        .h(300.0)
+        .child(image(cover_id, style(ImageFit::Cover)).w(100.0).h(100.0))
+        .child(
+            image(contain_id, style(ImageFit::Contain))
+                .w(100.0)
+                .h(100.0),
+        )
+        .child(image(fill_id, style(ImageFit::Fill)).w(100.0).h(100.0));
+
+    layout_and_paint(
+        root,
+        (Some(100.0), Some(300.0)),
+        scale,
+        &interaction,
+        &mut text_engine,
+        &store,
+        &mut draw_list,
+    );
+
+    let images = collect_images(&draw_list);
+    assert_eq!(images.len(), 3, "one image instance per element");
+    assert_eq!(draw_list.image_count(), 3);
+
+    // Cover: 200x100 into 100x100 -> src_aspect 2 > dst_aspect 1: crop x by 50%.
+    let (_, _, id0, _, cover) = images[0];
+    assert_eq!(id0, cover_id);
+    assert_rect_approx(cover.dst, [0.0, 0.0, 150.0, 150.0], "cover dst");
+    assert_rect_approx(cover.uv0, [0.25, 0.0, 0.5, 1.0], "cover uv0");
+
+    // Contain: letterbox 100x50 centered vertically inside y=100..200 slot.
+    let (_, _, id1, _, contain) = images[1];
+    assert_eq!(id1, contain_id);
+    assert_rect_approx(
+        contain.dst,
+        [0.0, (100.0 + 25.0) * scale, 150.0, 75.0],
+        "contain letterboxed dst",
+    );
+    assert_rect_approx(contain.uv0, [0.0, 0.0, 1.0, 1.0], "contain uv0");
+
+    // Fill: full dst, full UVs.
+    let (_, _, id2, _, fill) = images[2];
+    assert_eq!(id2, fill_id);
+    assert_rect_approx(fill.dst, [0.0, 300.0, 150.0, 150.0], "fill dst");
+    assert_rect_approx(fill.uv0, [0.0, 0.0, 1.0, 1.0], "fill uv0");
+}
+
+#[test]
+fn image_rounded_wave_and_border_clips_without_spurious_quads() {
+    let scale = 1.5_f32;
+    let mut text_engine = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+
+    let (mut store, id_round) = image_store_with(64, 64);
+    let id_wave = store.insert(ImageData::from_rgba(64, 64, vec![255; 64 * 64 * 4]).expect("img"));
+    let id_anim = store.insert(ImageData::from_rgba(64, 64, vec![255; 64 * 64 * 4]).expect("img"));
+    let id_border =
+        store.insert(ImageData::from_rgba(64, 64, vec![255; 64 * 64 * 4]).expect("img"));
+
+    let root: Element<()> = row()
+        .w(280.0)
+        .h(60.0)
+        .gap(10.0)
+        .child(
+            image(id_round, ImageStyle::default())
+                .w(60.0)
+                .h(60.0)
+                .rounded(12.0)
+                .smoothing(0.6),
+        )
+        .child(image(id_wave, ImageStyle::default()).w(60.0).h(60.0).wave())
+        .child(
+            image(id_anim, ImageStyle::default())
+                .w(60.0)
+                .h(60.0)
+                .wave_animated(1.25, 0.04),
+        )
+        .child(
+            image(id_border, ImageStyle::default())
+                .w(60.0)
+                .h(60.0)
+                .wave()
+                .border(2.0, Rgba::WHITE),
+        );
+
+    layout_and_paint(
+        root,
+        (Some(280.0), Some(60.0)),
+        scale,
+        &interaction,
+        &mut text_engine,
+        &store,
+        &mut draw_list,
+    );
+
+    // Image elements own their clip/border inside the textured pass: no
+    // KIND_WAVE or border quads may be emitted over/under the images.
+    assert_eq!(draw_list.quad_count(), 0, "no shape quads for pure images");
+
+    let images = collect_images(&draw_list);
+    assert_eq!(images.len(), 4);
+
+    let (_, _, _, _, rounded) = images[0];
+    assert_approx(rounded.misc[0], IMAGE_CLIP_ROUNDED, "rounded clip mode");
+    assert_rect_approx(
+        rounded.radii,
+        [12.0 * scale; 4],
+        "rounded radii in buffer px",
+    );
+    assert_approx(rounded.misc[1], 0.6, "smoothing");
+
+    let (_, _, _, _, wave) = images[1];
+    assert_approx(wave.misc[0], IMAGE_CLIP_WAVE, "wave clip mode");
+    assert_rect_approx(wave.radii, [0.0, 0.075, 9.0, 0.0], "default wave params");
+
+    let (_, _, _, _, anim) = images[2];
+    assert_approx(anim.misc[0], IMAGE_CLIP_WAVE, "animated wave clip mode");
+    assert_rect_approx(anim.radii, [1.25, 0.04, 9.0, 0.0], "animated wave params");
+
+    let (_, _, _, _, bordered) = images[3];
+    assert_approx(bordered.misc[0], IMAGE_CLIP_WAVE, "bordered wave clip mode");
+    assert_approx(
+        bordered.misc[2],
+        2.0 * scale,
+        "border width carried by the image instance",
+    );
+    assert_eq!(bordered.border, Rgba::WHITE.to_array(), "border color");
+}
+
+#[test]
+fn image_crossfade_uses_independent_uvs_per_source_aspect() {
+    let mut text_engine = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+
+    // Wide source A (2:1) crossfading into tall source B (1:4).
+    let (mut store, id_a) = image_store_with(400, 200);
+    let id_b = store.insert(ImageData::from_rgba(100, 400, vec![255; 100 * 400 * 4]).expect("img"));
+
+    let style = ImageStyle {
+        fit: ImageFit::Cover,
+        crossfade_to: Some(id_b),
+        crossfade_t: 0.5,
+        ..ImageStyle::default()
+    };
+    let root: Element<()> = col()
+        .w(100.0)
+        .h(100.0)
+        .child(image(id_a, style).w(100.0).h(100.0));
+
+    layout_and_paint(
+        root,
+        (Some(100.0), Some(100.0)),
+        1.0,
+        &interaction,
+        &mut text_engine,
+        &store,
+        &mut draw_list,
+    );
+
+    let images = collect_images(&draw_list);
+    assert_eq!(images.len(), 1);
+    let (_, _, id, crossfade_to, inst) = images[0];
+    assert_eq!(id, id_a);
+    assert_eq!(crossfade_to, Some(id_b));
+    // Source A 400x200 into 100x100: crop x -> [0.25, 0, 0.5, 1].
+    assert_rect_approx(inst.uv0, [0.25, 0.0, 0.5, 1.0], "crossfade uv0");
+    // Source B 100x400 into 100x100: src_aspect 0.25 -> vh 0.25, v0 0.375.
+    assert_rect_approx(inst.uv1, [0.0, 0.375, 1.0, 0.25], "crossfade uv1");
+    assert_approx(inst.fx[0], 0.5, "crossfade_t");
+
+    // Non-zero crossfade_t with crossfade_to: None must clamp to 0.0 so no
+    // ghost blend happens against a missing second texture.
+    let mut dl_none = DrawList::default();
+    let stale_style = ImageStyle {
+        fit: ImageFit::Cover,
+        crossfade_to: None,
+        crossfade_t: 0.75,
+        ..ImageStyle::default()
+    };
+    layout_and_paint(
+        col()
+            .w(100.0)
+            .h(100.0)
+            .child(image::<()>(id_a, stale_style).w(100.0).h(100.0)),
+        (Some(100.0), Some(100.0)),
+        1.0,
+        &interaction,
+        &mut text_engine,
+        &store,
+        &mut dl_none,
+    );
+    let imgs_none = collect_images(&dl_none);
+    assert_eq!(imgs_none.len(), 1);
+    assert_approx(imgs_none[0].4.fx[0], 0.0, "gated crossfade_t");
+}
+
+#[test]
+fn image_fx_opacity_transform_scissor_and_edge_fade_propagate() {
+    let scale = 2.0_f32;
+    let mut text_engine = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+
+    let (store, id) = image_store_with(64, 64);
+    let tf = SubtreeTransform {
+        translate_x: 8.0,
+        translate_y: 4.0,
+        scale: 0.5,
+        opacity: 0.6,
+    };
+    let fade_edges = Edges {
+        top: 5.0,
+        right: 0.0,
+        bottom: 0.0,
+        left: 0.0,
+    };
+    let style = ImageStyle {
+        blur: 0.5,
+        desaturate: 0.25,
+        opacity: 0.5,
+        ..ImageStyle::default()
+    };
+
+    let root: Element<()> = col()
+        .w(200.0)
+        .h(100.0)
+        .clip()
+        .edge_fade(fade_edges)
+        .child(box_().transform(tf).child(image(id, style).w(50.0).h(50.0)));
+
+    layout_and_paint(
+        root,
+        (Some(200.0), Some(100.0)),
+        scale,
+        &interaction,
+        &mut text_engine,
+        &store,
+        &mut draw_list,
+    );
+
+    let images = collect_images(&draw_list);
+    assert_eq!(images.len(), 1);
+    let (scissor, edge_fade, _, _, inst) = images[0];
+
+    // Clip on the parent produces a physical scissor for the image batch.
+    assert_eq!(
+        scissor,
+        Some(ScissorRect {
+            x: 0,
+            y: 0,
+            w: 400,
+            h: 200,
+        })
+    );
+    // Parent edge_fade flows onto the image batch, scaled to buffer px.
+    assert_eq!(
+        edge_fade,
+        Some(EdgeFade {
+            rect: [0.0, 0.0, 400.0, 200.0],
+            widths: [0.0, 0.0, 10.0, 0.0],
+        })
+    );
+    // Blur/desaturate pass through; opacity composes style * subtree tf.
+    assert_approx(inst.fx[1], 0.5, "blur");
+    assert_approx(inst.fx[2], 0.25, "desaturate");
+    assert_approx(inst.misc[3], 0.3, "style.opacity * tf.opacity");
+
+    // box_ stretches to the column's 200px width, so its center is (100,25)
+    // and tf composes about that: tx = 8 + 100*(1-0.5) = 58, ty = 4 + 25*0.5
+    // = 16.5. The 50x50 image sits at its left edge at buffer scale 2:
+    //   dst = (58*2, 16.5*2, 50*0.5*2, 50*0.5*2) = (116, 33, 50, 50)
+    assert_rect_approx(inst.dst, [116.0, 33.0, 50.0, 50.0], "transformed dst");
+}
+
+#[test]
+fn image_batches_preserve_z_order_with_quads_and_glyphs() {
+    let mut text_engine = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let interaction = InteractionState::default();
+
+    let (store, id) = image_store_with(64, 64);
+
+    let root: Element<()> = col()
+        .w(100.0)
+        .h(400.0)
+        .child(box_().w(100.0).h(100.0).bg(Rgba::WHITE))
+        .child(image(id, ImageStyle::default()).w(100.0).h(100.0))
+        .child(
+            text("Hi", FontSpec::ui(14.0), Rgba::WHITE)
+                .w(100.0)
+                .h(100.0),
+        )
+        .child(box_().w(100.0).h(100.0).bg(Rgba::BLACK));
+
+    layout_and_paint(
+        root,
+        (Some(100.0), Some(400.0)),
+        1.0,
+        &interaction,
+        &mut text_engine,
+        &store,
+        &mut draw_list,
+    );
+
+    let kinds: Vec<&'static str> = draw_list
+        .batches
+        .iter()
+        .map(|b| match b {
+            DrawBatch::Quads { .. } => "quads",
+            DrawBatch::Images { .. } => "images",
+            DrawBatch::Glyphs { .. } => "glyphs",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        vec!["quads", "images", "glyphs", "quads"],
+        "quad -> image -> glyph -> quad z-order preserved"
+    );
 }

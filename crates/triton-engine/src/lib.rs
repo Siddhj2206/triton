@@ -47,7 +47,7 @@ pub use timer::TimerScheduler;
 pub use triton_design::motion::Spring;
 pub use ui::{
     BlurRect, BuiltFrame, Element, InputEvent, InteractionState, Key, NodeKey, TextAlign, box_,
-    col, icon, row, text,
+    col, icon, image, row, text,
 };
 pub use widgets::{
     ButtonTone, SwitchState, TextInputAction, TextInputState, button, concentric_inner,

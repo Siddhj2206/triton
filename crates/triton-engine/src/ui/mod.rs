@@ -16,8 +16,11 @@ use triton_design::material::Material;
 use triton_design::shape::CORNER_SMOOTHING;
 
 use crate::gpu::{
-    DrawList, EdgeFade, KIND_FILL, KIND_SHADOW, KIND_TOP_HIGHLIGHT, KIND_WAVE, QuadInstance,
-    ScissorRect,
+    DrawList, EdgeFade, IMAGE_CLIP_ROUNDED, IMAGE_CLIP_WAVE, ImageInstance, KIND_FILL, KIND_SHADOW,
+    KIND_TOP_HIGHLIGHT, KIND_WAVE, QuadInstance, ScissorRect,
+};
+use crate::image::{
+    ImageFit, ImageId, ImageStore, ImageStyle, compute_contain_dst, compute_uv_rect,
 };
 use crate::style::{Corners, DropShadow, Edges, FontSpec, Rect, Rgba, SubtreeTransform, Theme};
 use crate::text::TextEngine;
@@ -234,6 +237,10 @@ pub enum ElementContent {
         color: Rgba,
         align: TextAlign,
         wrap: bool,
+    },
+    Image {
+        id: ImageId,
+        style: ImageStyle,
     },
 }
 
@@ -691,6 +698,28 @@ pub fn icon<M>(glyph: Icon, style: IconStyle, size: f32, color: impl Into<Rgba>)
         .flex_shrink(0.0)
 }
 
+/// Textured image leaf backed by the engine's [`ImageStore`] (wallpapers,
+/// album art, avatars, live screencopy previews).
+///
+/// Supports the standard layout/visual builders: `.w()`, `.h()`, `.size()`,
+/// `.rounded()`, `.smoothing()`, `.wave()`, `.wave_animated()`, `.opacity()`,
+/// `.shadow()`, `.border()`, `.transform()`, `.edge_fade()`, `.on_click()`.
+pub fn image<M>(id: ImageId, style: ImageStyle) -> Element<M> {
+    Element {
+        key: None,
+        layout: Style::default(),
+        visual: VisualStyle::default(),
+        content: ElementContent::Image { id, style },
+        children: Vec::new(),
+        handlers: Handlers::default(),
+        scrollable: false,
+        focusable: false,
+        captures_input: false,
+        wave: None,
+        edge_fade: None,
+    }
+}
+
 impl<M> Element<M> {
     pub fn text_align(mut self, align: TextAlign) -> Self {
         if let ElementContent::Text { align: a, .. } = &mut self.content {
@@ -915,6 +944,9 @@ pub fn measure_tree<M>(
 
 /// Layout and paint `root` into `draw_list`, returning a [`BuiltFrame`] with
 /// blur regions, input regions, and interactive hit targets.
+///
+/// `images` is the CPU-side [`ImageStore`]; image elements resolve source
+/// pixel dimensions from it for `Cover`/`Contain`/`Fill` fitting.
 #[allow(clippy::too_many_arguments)]
 pub fn layout_and_paint<M>(
     root: Element<M>,
@@ -922,6 +954,7 @@ pub fn layout_and_paint<M>(
     scale: f32,
     interaction: &InteractionState,
     text: &mut TextEngine,
+    images: &ImageStore,
     draw_list: &mut DrawList,
 ) -> BuiltFrame<M> {
     draw_list.clear();
@@ -956,6 +989,7 @@ pub fn layout_and_paint<M>(
         scale,
         interaction,
         text,
+        images,
         draw_list,
         &mut scratch_glyphs,
         &mut frame,
@@ -983,6 +1017,9 @@ fn build_taffy_nodes<M>(tree: &mut TaffyTree<TextMeasureContext>, elem: &Element
                 },
             )
             .expect("taffy text leaf"),
+        ElementContent::Image { .. } => tree
+            .new_leaf(elem.layout.clone())
+            .expect("taffy image leaf"),
         ElementContent::Container => {
             let child_ids: Vec<NodeId> = elem
                 .children
@@ -1039,6 +1076,7 @@ fn paint_node<M>(
     scale: f32,
     interaction: &InteractionState,
     text: &mut TextEngine,
+    images: &ImageStore,
     draw_list: &mut DrawList,
     scratch_glyphs: &mut Vec<crate::gpu::GlyphInstance>,
     frame: &mut BuiltFrame<M>,
@@ -1115,14 +1153,24 @@ fn paint_node<M>(
         elem.visual.fill
     };
 
+    // Image elements own their clip/border via `ImageInstance` (the textured
+    // pass draws wave/rounded clips and inner borders on top of the image), so
+    // a `.wave()` or `.border()` image never emits a quad that would sit over
+    // or under it. An explicit `fill` still paints a shape quad behind the
+    // image (e.g. a `Contain` letterbox backdrop).
+    let is_image = matches!(elem.content, ElementContent::Image { .. });
     let has_shape = fill.is_some()
-        || elem.visual.border_width > 0.0
         || elem.visual.top_highlight.is_some()
-        || elem.wave.is_some();
+        || (!is_image && (elem.visual.border_width > 0.0 || elem.wave.is_some()));
 
     let clamped_radii = elem.visual.radii.clamped(local_rect.w, local_rect.h);
     if has_shape && screen_rect.w > 0.0 && screen_rect.h > 0.0 {
         let fill_arr = fill.unwrap_or(Rgba::TRANSPARENT).to_array();
+        let quad_border_w = if is_image {
+            0.0
+        } else {
+            elem.visual.border_width * eff_scale
+        };
         let (kind, radii, border_arr, border_w) = if let Some((phase, amp)) = elem.wave {
             (
                 KIND_WAVE,
@@ -1131,14 +1179,14 @@ fn paint_node<M>(
                     .border_color
                     .unwrap_or(Rgba::TRANSPARENT)
                     .to_array(),
-                elem.visual.border_width * eff_scale,
+                quad_border_w,
             )
         } else if let Some(hl) = elem.visual.top_highlight {
             (
                 KIND_TOP_HIGHLIGHT,
                 clamped_radii.map(|r| r * eff_scale),
                 hl.to_array(),
-                elem.visual.border_width * eff_scale,
+                quad_border_w,
             )
         } else {
             (
@@ -1148,7 +1196,7 @@ fn paint_node<M>(
                     .border_color
                     .unwrap_or(Rgba::TRANSPARENT)
                     .to_array(),
-                elem.visual.border_width * eff_scale,
+                quad_border_w,
             )
         };
         draw_list.push_quad_faded(
@@ -1217,7 +1265,81 @@ fn paint_node<M>(
         draw_list.push_glyphs_faded(scissor, edge_fade, scratch_glyphs);
     }
 
-    // 4. Optional text caret (rendered inside this node's clip)
+    // 4. Image content (textured quad batch, z-ordered with quads/glyphs)
+    if let ElementContent::Image { id, style } = &elem.content
+        && !screen_rect.is_empty()
+    {
+        let (src_w, src_h) = images
+            .dimensions(*id)
+            .map_or((screen_rect.w, screen_rect.h), |(w, h)| {
+                (w as f32, h as f32)
+            });
+        let full_rect = [screen_rect.x, screen_rect.y, screen_rect.w, screen_rect.h];
+        let (dst_rect, uv0) = match style.fit {
+            ImageFit::Contain => (
+                compute_contain_dst(src_w, src_h, full_rect),
+                [0.0, 0.0, 1.0, 1.0],
+            ),
+            ImageFit::Cover | ImageFit::Fill => (
+                full_rect,
+                compute_uv_rect(src_w, src_h, screen_rect.w, screen_rect.h, style.fit),
+            ),
+        };
+        // Independent Cover/Contain/Fill UVs for the crossfade target so two
+        // differently-proportioned wallpapers both crop correctly mid-fade.
+        let uv1 = style.crossfade_to.map_or([0.0, 0.0, 1.0, 1.0], |to_id| {
+            images
+                .dimensions(to_id)
+                .map_or([0.0, 0.0, 1.0, 1.0], |(w, h)| {
+                    compute_uv_rect(w as f32, h as f32, screen_rect.w, screen_rect.h, style.fit)
+                })
+        });
+        let (clip_mode, radii) = if let Some((phase, amp)) = elem.wave {
+            (IMAGE_CLIP_WAVE, [phase, amp, 9.0, 0.0])
+        } else {
+            (IMAGE_CLIP_ROUNDED, clamped_radii.map(|r| r * eff_scale))
+        };
+        draw_list.push_image_faded(
+            *id,
+            style.crossfade_to,
+            scissor,
+            edge_fade,
+            ImageInstance {
+                dst: [
+                    dst_rect[0] * scale,
+                    dst_rect[1] * scale,
+                    dst_rect[2] * scale,
+                    dst_rect[3] * scale,
+                ],
+                radii,
+                uv0,
+                uv1,
+                border: elem
+                    .visual
+                    .border_color
+                    .unwrap_or(Rgba::TRANSPARENT)
+                    .to_array(),
+                misc: [
+                    clip_mode,
+                    elem.visual.smoothing,
+                    elem.visual.border_width * eff_scale,
+                    (style.opacity * tf.opacity).clamp(0.0, 1.0),
+                ],
+                fx: [
+                    if style.crossfade_to.is_some() {
+                        style.crossfade_t.clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    },
+                    style.blur.clamp(0.0, 1.0),
+                    style.desaturate.clamp(0.0, 1.0),
+                    0.0,
+                ],
+            },
+        );
+    }
+
+    // 5. Optional text caret (rendered inside this node's clip)
     if let Some((cx_off, ch, ccol)) = elem.visual.caret {
         let caret_x = screen_rect.x + cx_off * tf.scale;
         let caret_y = screen_rect.y + (screen_rect.h - ch * tf.scale) * 0.5;
@@ -1239,7 +1361,7 @@ fn paint_node<M>(
         );
     }
 
-    // 5. Scroll, clipping, and edge-fade setup for children
+    // 6. Scroll, clipping, and edge-fade setup for children
     let child_clip = if elem.visual.clip {
         Some(match clip_rect {
             Some(prev) => prev.intersect(screen_rect),
@@ -1308,7 +1430,7 @@ fn paint_node<M>(
         });
     }
 
-    // 6. Recurse into children
+    // 7. Recurse into children
     let child_origin = (local_rect.x, local_rect.y - scroll_y);
     for (cid, child_elem) in child_ids.into_iter().zip(elem.children) {
         paint_node(
@@ -1322,13 +1444,14 @@ fn paint_node<M>(
             scale,
             interaction,
             text,
+            images,
             draw_list,
             scratch_glyphs,
             frame,
         );
     }
 
-    // 7. Overlay subtle scrollbar thumb when scrollable content overflows viewport
+    // 8. Overlay subtle scrollbar thumb when scrollable content overflows viewport
     if elem.scrollable && content_height > local_rect.h + 1.0 {
         let track_inset = 6.0;
         let track_h = (local_rect.h - track_inset * 2.0).max(8.0);
@@ -1422,6 +1545,7 @@ mod tests {
             1.75,
             &interaction,
             &mut text,
+            &ImageStore::new(),
             &mut draw_list,
         );
 
@@ -1497,6 +1621,7 @@ mod tests {
             1.0,
             &interaction,
             &mut text,
+            &ImageStore::new(),
             &mut draw_list,
         );
 

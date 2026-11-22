@@ -60,6 +60,7 @@ use triton_design::shape::rounded_rect_bands;
 use crate::anim::Animator;
 use crate::error::EngineError;
 use crate::gpu::{DrawList, Gpu};
+use crate::image::ImageStore;
 use crate::platform::egl::{Egl, EglSurface};
 use crate::platform::wl_egl::{EglWindow, WlEgl};
 use crate::text::TextEngine;
@@ -170,6 +171,9 @@ pub struct ViewContext<'a> {
     pub interaction: &'a InteractionState,
     pub text: &'a mut TextEngine,
     pub anim: &'a mut Animator,
+    /// CPU-side image registry; views can inspect [`ImageStore::dimensions`]
+    /// to size elements from source pixel dimensions.
+    pub images: &'a ImageStore,
 }
 
 impl fmt::Debug for ViewContext<'_> {
@@ -231,6 +235,15 @@ pub trait ShellApp: 'static {
         Vec::new()
     }
 
+    /// Optional hook to insert, update, or remove images in the engine's
+    /// [`ImageStore`] (wallpapers, album art, avatars, screencopy frames).
+    ///
+    /// Called after `on_start`, after `update`, after `on_timer`, and before
+    /// every `view`, giving apps `&mut self` + `&mut ImageStore` without
+    /// `RefCell`. Queued uploads/deletions are drained to the GPU on the next
+    /// rendered frame.
+    fn sync_images(&mut self, _images: &mut ImageStore) {}
+
     /// Called once right before the event loop exits, with per-surface metrics.
     fn on_exit(&mut self, _metrics: &HashMap<Self::SurfaceId, SurfaceMetrics>) {}
 }
@@ -260,6 +273,7 @@ pub fn run<A: ShellApp>(app: A) -> Result<(), EngineError> {
     )?;
     let start_cmds = runtime.app.on_start(Instant::now());
     runtime.apply_commands(start_cmds, &qh);
+    runtime.app.sync_images(&mut runtime.images);
     runtime.sync_surfaces(&qh)?;
 
     event_loop
@@ -317,6 +331,7 @@ struct Runtime<A: ShellApp> {
     wl_egl: WlEgl,
     gpu: Option<Gpu>,
     text: TextEngine,
+    images: ImageStore,
     draw_list: DrawList,
 
     hosts: HashMap<A::SurfaceId, SurfaceHost<A>>,
@@ -378,6 +393,7 @@ impl<A: ShellApp> Runtime<A> {
             wl_egl,
             gpu: None,
             text,
+            images: ImageStore::new(),
             draw_list: DrawList::default(),
             hosts: HashMap::new(),
             keyboard: None,
@@ -543,6 +559,7 @@ impl<A: ShellApp> Runtime<A> {
                     interaction: &interaction,
                     text: &mut self.text,
                     anim: &mut anim,
+                    images: &self.images,
                 };
                 let tree = self.app.view(id, &mut ctx);
                 anim.end_frame();
@@ -586,6 +603,7 @@ impl<A: ShellApp> Runtime<A> {
                             let now = Instant::now();
                             let cmds = rt.app.on_timer(tag, now);
                             rt.apply_commands(cmds, &qh_clone);
+                            rt.app.sync_images(&mut rt.images);
                             let _ = rt.sync_surfaces(&qh_clone);
                             TimeoutAction::Drop
                         },
@@ -621,6 +639,8 @@ impl<A: ShellApp> Runtime<A> {
     fn present(&mut self, id: A::SurfaceId, qh: &QueueHandle<Self>) {
         let now = Instant::now();
         self.text.begin_frame();
+        // Let the app stage image inserts/updates/removals before view + paint.
+        self.app.sync_images(&mut self.images);
 
         let (logical, scale, sizing) = {
             let Some(host) = self.hosts.get_mut(&id) else {
@@ -643,6 +663,7 @@ impl<A: ShellApp> Runtime<A> {
                 interaction: &host.interaction,
                 text: &mut self.text,
                 anim: &mut host.animator,
+                images: &self.images,
             };
             let el = self.app.view(id, &mut ctx);
             host.animator.end_frame();
@@ -670,6 +691,7 @@ impl<A: ShellApp> Runtime<A> {
                 scale,
                 &host.interaction,
                 &mut self.text,
+                &self.images,
                 &mut self.draw_list,
             )
         };
@@ -744,9 +766,9 @@ impl<A: ShellApp> Runtime<A> {
             return;
         }
         self.egl.set_swap_interval(0);
-        if let Some(gpu) = &self.gpu {
+        if let Some(gpu) = &mut self.gpu {
             let mut atlas = self.text.atlas_upload();
-            gpu.render(bw, bh, &self.draw_list, &mut atlas);
+            gpu.render(bw, bh, &self.draw_list, &mut atlas, &mut self.images);
         }
         let damage = [[
             0,
@@ -772,6 +794,7 @@ impl<A: ShellApp> Runtime<A> {
         for msg in msgs {
             all_cmds.extend(self.app.update(id, msg, now));
         }
+        self.app.sync_images(&mut self.images);
         if let Err(e) = self.sync_surfaces(qh) {
             tracing::error!(%e, "sync_surfaces after input failed");
         }
