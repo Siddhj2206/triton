@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-default-members = ["crates/triton-engine", "crates/triton-kit"]
+default-members = ["crates/triton-engine", "crates/triton-kit", "crates/triton"]
 
 [workspace.package]
 edition = "2024"
@@ -13,12 +13,15 @@ publish = false
 # internal
 triton-design = { path = "crates/triton-design" }
 triton-engine = { path = "crates/triton-engine" }
+triton-kit = { path = "crates/triton-kit" }
 # external (members re-enable the features they need)
+anyhow = { version = "1", default-features = false }
 cosmic-text = { version = "0.15", default-features = false }
 etagere = { version = "0.2", default-features = false }
 glow = { version = "0.16", default-features = false }
 khronos-egl = { version = "6.0", default-features = false }
 libloading = "0.9"
+serde = { version = "1", default-features = false }
 serde_json = "1.0.154"
 smithay-client-toolkit = { version = "0.21", default-features = false }
 taffy = { version = "0.15", default-features = false }
