@@ -16,6 +16,7 @@ triton-engine = { path = "crates/triton-engine" }
 triton-kit = { path = "crates/triton-kit" }
 # external (members re-enable the features they need)
 anyhow = { version = "1", default-features = false }
+image = { version = "0.25", default-features = false }
 cosmic-text = { version = "0.15", default-features = false }
 etagere = { version = "0.2", default-features = false }
 glow = { version = "0.16", default-features = false }

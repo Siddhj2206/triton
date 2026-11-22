@@ -2,16 +2,16 @@
 //! `(SurfaceRole, OutputName)` surface reconciliation.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use tracing::warn;
 use triton_design::color::{Scheme, Variant};
-use triton_design::material::Material;
-use triton_design::shape::RADII;
 use triton_engine::{
-    AppCommand, Element, OutputInfo, ShellApp, SurfaceAnchor, SurfaceKeyboard, SurfaceLayer,
-    SurfaceSize, SurfaceSpec, Theme, ViewContext, box_,
+    AppCommand, Element, EventSender, ImageStore, OutputInfo, ShellApp, SurfaceAnchor,
+    SurfaceKeyboard, SurfaceLayer, SurfaceSize, SurfaceSpec, Theme, ViewContext, box_,
 };
-use triton_kit::panel;
 
 use crate::bar::{BarClock, BarController};
 use crate::ipc::{BarCommand, IpcCommand, IpcResponse, OsdCommand, ThemeCommand};
@@ -21,6 +21,11 @@ use crate::state::{
     BackendMode, BarMode, OutputKey, ShellEvent, ShellState, ShellStatusSnapshot, SurfaceRole,
     SurfaceSummary, variant_as_str,
 };
+use crate::wallpaper::{WallpaperImage, WallpaperSet, crossfade_duration, view_background};
+
+/// Timer tag for releasing outgoing wallpaper textures once a crossfade settles.
+/// (Fixed tags: `TIMER_OSD_HIDE = 1`, `TIMER_BAR_CLOCK = 2`, `TIMER_OSD_REAP = 3`.)
+pub const TIMER_WALLPAPER_SETTLE: u32 = 4;
 
 /// Copyable surface identifier combining a [`SurfaceRole`] with a stable
 /// [`OutputKey`].
@@ -52,6 +57,8 @@ pub struct TritonShell {
     name_to_key: HashMap<String, OutputKey>,
     key_to_name: HashMap<OutputKey, String>,
     next_output_key: u32,
+    wallpapers: WallpaperSet,
+    event_sender: Option<EventSender<ShellEvent>>,
     /// Non-blocking niri action dispatch (set only under `--real-services`).
     niri_sink: Option<NiriActionSender>,
 }
@@ -67,6 +74,8 @@ impl TritonShell {
             name_to_key: HashMap::new(),
             key_to_name: HashMap::new(),
             next_output_key: 1,
+            wallpapers: WallpaperSet::default(),
+            event_sender: None,
             niri_sink: None,
         };
         let initial_outputs = shell.state.outputs.clone();
@@ -115,6 +124,17 @@ impl TritonShell {
         &mut self.state
     }
 
+    /// Install the external event sender so wallpaper decodes can be spawned
+    /// off-thread and delivered back as [`ShellEvent`]s.
+    pub fn set_event_sender(&mut self, sender: EventSender<ShellEvent>) {
+        self.event_sender = Some(sender);
+    }
+
+    /// Borrow the wallpaper registry (decoded cache + per-output fades).
+    pub fn wallpapers(&self) -> &WallpaperSet {
+        &self.wallpapers
+    }
+
     /// Resolve an [`OutputKey`] back to its compositor output name.
     pub fn output_name(&self, key: OutputKey) -> Option<&str> {
         self.key_to_name.get(&key).map(String::as_str)
@@ -157,6 +177,8 @@ impl TritonShell {
             osd_active: self.state.osd.as_ref().is_some_and(|o| o.visible),
             active_surfaces,
             wallpaper,
+            mean_luminance: self.state.wallpaper.mean_luminance,
+            bright_backdrop: self.state.wallpaper.is_bright_backdrop(),
             workspace_count: self.state.workspaces.len(),
             focused_window_title: self.state.focused_window.as_ref().map(|w| w.title.clone()),
         }
@@ -191,13 +213,12 @@ impl TritonShell {
                     AppCommand::RedrawAll,
                 ]
             }
-            ShellEvent::SetWallpaper { path, output } => {
-                if let Some(output_name) = output {
-                    self.state.wallpaper.per_output.insert(output_name, path);
-                } else {
-                    self.state.wallpaper.default_path = Some(path);
-                }
-                vec![AppCommand::RedrawAll]
+            ShellEvent::SetWallpaper { path, output } => self.set_wallpaper(path, output, now),
+            ShellEvent::WallpaperReady { image } => self.wallpaper_ready(image, now),
+            ShellEvent::WallpaperFailed { path, error } => {
+                warn!(path = %path.display(), "wallpaper decode failed: {error}");
+                self.wallpapers.on_decode_failed(&path);
+                Vec::new()
             }
             ShellEvent::ApplyTheme {
                 scheme,
@@ -226,6 +247,7 @@ impl TritonShell {
             }
             ShellEvent::SetReduceMotion(enabled) => {
                 self.state.reduce_motion = enabled;
+                self.wallpapers.set_reduce_motion(enabled);
                 self.bar.set_reduce_motion(enabled, now);
                 if let Some(ref mut osd) = self.state.osd {
                     osd.set_reduce_motion(enabled, now);
@@ -235,6 +257,7 @@ impl TritonShell {
             ShellEvent::OutputsChanged(outputs) => self.reconcile_outputs(&outputs, now),
             ShellEvent::FocusedOutputChanged(output) => {
                 self.state.focused_output = output;
+                self.refresh_active_wallpaper();
                 vec![AppCommand::RedrawAll]
             }
             ShellEvent::WorkspacesUpdated(workspaces) => {
@@ -426,8 +449,110 @@ impl TritonShell {
             }
         }
 
+        self.refresh_wallpaper_targets(now);
+        self.refresh_active_wallpaper();
         cmds.push(AppCommand::RedrawAll);
         cmds
+    }
+
+    /// Update the wallpaper target globally or per output and kick off any
+    /// needed off-thread decode.
+    fn set_wallpaper(
+        &mut self,
+        path: PathBuf,
+        output: Option<String>,
+        now: Instant,
+    ) -> Vec<AppCommand<SurfaceId>> {
+        if let Some(output_name) = output {
+            self.state.wallpaper.per_output.insert(output_name, path);
+        } else {
+            // A new global default retargets every output without an explicit
+            // per-output override.
+            self.state.wallpaper.default_path = Some(path);
+        }
+        self.refresh_wallpaper_targets(now);
+        let mut cmds = vec![AppCommand::RedrawAll];
+        if self.wallpapers.has_active_fades() {
+            cmds.push(AppCommand::ScheduleTimer {
+                tag: TIMER_WALLPAPER_SETTLE,
+                delay: crossfade_duration(self.state.reduce_motion),
+            });
+        }
+        cmds
+    }
+
+    /// A decoded wallpaper landed from the worker thread: queue its GPU upload
+    /// (fades begin in `sync_images`) and arm the settle timer when an output
+    /// is transitioning to it.
+    fn wallpaper_ready(
+        &mut self,
+        image: Arc<WallpaperImage>,
+        now: Instant,
+    ) -> Vec<AppCommand<SurfaceId>> {
+        let will_fade = self.wallpapers.will_transition_to(&image.path);
+        self.wallpapers.on_decoded(image, now);
+        self.refresh_active_wallpaper();
+        let mut cmds = vec![AppCommand::RedrawAll];
+        if will_fade || self.wallpapers.has_active_fades() {
+            cmds.push(AppCommand::ScheduleTimer {
+                tag: TIMER_WALLPAPER_SETTLE,
+                delay: crossfade_duration(self.state.reduce_motion),
+            });
+        }
+        cmds
+    }
+
+    /// Point every connected output at its effective wallpaper path
+    /// (per-output override, else `default_path`) and spawn off-thread decodes
+    /// for any path with no decoded pixels yet.
+    fn refresh_wallpaper_targets(&mut self, now: Instant) {
+        let targets: Vec<(OutputKey, PathBuf)> = self
+            .state
+            .outputs
+            .iter()
+            .filter_map(|o| {
+                let key = *self.name_to_key.get(&o.name)?;
+                let path = self.state.wallpaper.path_for(&o.name)?.clone();
+                Some((key, path))
+            })
+            .collect();
+        for (key, path) in targets {
+            self.wallpapers.request(key, &path, now);
+        }
+        self.spawn_needed_decodes();
+    }
+
+    /// Spawn a `triton-wallpaper` decode worker for every desired path with no
+    /// cached pixels and no decode already in flight. Without an event sender
+    /// (headless tests inject `WallpaperReady` directly) this is a no-op.
+    fn spawn_needed_decodes(&mut self) {
+        let Some(sender) = self.event_sender.clone() else {
+            return;
+        };
+        for path in self.wallpapers.undecoded_desires() {
+            self.wallpapers.mark_decoding(&path);
+            if let Err(err) = crate::wallpaper::spawn_decode(path.clone(), sender.clone()) {
+                warn!(path = %path.display(), error = %err, "failed to spawn wallpaper decode");
+                self.wallpapers.on_decode_failed(&path);
+            }
+        }
+    }
+
+    /// Refresh `mean_luminance` / `active_image` in shell state from the
+    /// decoded image committed to the focused output — the freshest desired
+    /// image once its decode landed, otherwise whatever is still displayed.
+    fn refresh_active_wallpaper(&mut self) {
+        let target_key = self
+            .state
+            .target_output_name()
+            .and_then(|name| self.name_to_key.get(name).copied());
+        let desired_image = target_key
+            .and_then(|key| self.wallpapers.desired_path(key))
+            .and_then(|path| self.wallpapers.image_for_path(&path));
+        let image = desired_image
+            .or_else(|| target_key.and_then(|key| self.wallpapers.displayed_image(key)));
+        self.state.wallpaper.mean_luminance = image.as_ref().map_or(0.0, |img| img.mean_luminance);
+        self.state.wallpaper.active_image = image;
     }
 
     fn sync_output_registry(
@@ -474,12 +599,6 @@ impl TritonShell {
 
     fn bar_spec(&self, output: &OutputInfo) -> Option<SurfaceSpec> {
         BarController::surface_spec(self.state.bar_mode, output)
-    }
-
-    fn view_background(&self) -> Element<ShellMessage> {
-        panel(Material::Solid, RADII.tiled, &self.state.theme)
-            .w_full()
-            .h_full()
     }
 
     fn view_bar(&self, id: SurfaceId, ctx: &mut ViewContext<'_>) -> Element<ShellMessage> {
@@ -535,7 +654,9 @@ impl ShellApp for TritonShell {
 
     fn view(&self, id: Self::SurfaceId, ctx: &mut ViewContext<'_>) -> Element<Self::Message> {
         match id.role {
-            SurfaceRole::Background => self.view_background(),
+            SurfaceRole::Background => {
+                view_background(&self.wallpapers, id.output, &self.state.theme, ctx.now)
+            }
             SurfaceRole::Bar => self.view_bar(id, ctx),
             SurfaceRole::Osd => match self.state.osd.as_ref() {
                 Some(osd) => osd::view(osd, &self.state.theme, self.state.reduce_motion, ctx),
@@ -569,11 +690,11 @@ impl ShellApp for TritonShell {
 
     fn is_animating(&self, id: Self::SurfaceId, now: Instant) -> bool {
         match id.role {
+            SurfaceRole::Background => self.wallpapers.is_animating(id.output, now),
             SurfaceRole::Bar => self.bar.is_animating(id.output, now),
             // The app-owned presence channel drives frames during the
             // enter/exit morph; once settled the surface goes idle (0% CPU).
             SurfaceRole::Osd => self.state.osd.as_ref().is_some_and(|o| !o.is_settled(now)),
-            _ => false,
         }
     }
 
@@ -610,7 +731,24 @@ impl ShellApp for TritonShell {
         self.bar.on_pointer_leave(id, &self.state, now)
     }
 
+    fn sync_images(&mut self, images: &mut ImageStore) {
+        self.wallpapers.sync(images);
+    }
+
     fn on_timer(&mut self, tag: u32, now: Instant) -> Vec<AppCommand<Self::SurfaceId>> {
+        if tag == TIMER_WALLPAPER_SETTLE {
+            // Release outgoing textures whose crossfade completed; re-arm
+            // if a later fade is still running.
+            let mut cmds = vec![AppCommand::RedrawAll];
+            if let Some(remaining) = self.wallpapers.settle(now) {
+                cmds.push(AppCommand::ScheduleTimer {
+                    tag: TIMER_WALLPAPER_SETTLE,
+                    delay: remaining,
+                });
+            }
+            self.refresh_active_wallpaper();
+            return cmds;
+        }
         match tag {
             TIMER_OSD_HIDE => {
                 let Some(osd) = self.state.osd.as_mut() else {

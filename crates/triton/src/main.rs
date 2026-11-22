@@ -96,6 +96,9 @@ fn run_daemon(args: &DaemonArgs) -> Result<()> {
     );
 
     let mut app = TritonShell::new(args.backend);
+    // Lets `SetWallpaper` spawn off-thread decode workers that deliver
+    // `WallpaperReady`/`WallpaperFailed` back into this same event loop.
+    app.set_event_sender(event_tx.clone());
 
     // ADR-0004: the only write the host `config.kdl` ever gets, and only under
     // `--real-services`. The fake dev backend never touches niri config.

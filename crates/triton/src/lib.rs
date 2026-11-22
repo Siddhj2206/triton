@@ -16,6 +16,7 @@ pub mod niri_ipc;
 pub mod osd;
 pub mod shell;
 pub mod state;
+pub mod wallpaper;
 
 pub use bar::{
     BAR_HIDE_DELAY, BAR_REVEAL_DELAY_DEFAULT, BAR_REVEAL_DELAY_FULLSCREEN, BAR_REVEAL_EDGE_HEIGHT,
@@ -37,8 +38,13 @@ pub use niri_ipc::{NIRI_SOCKET_ENV, NiriAction, NiriActionSender, NiriIpc, NiriI
 pub use osd::{
     OSD_HOLD_DURATION, OSD_REAP_INTERVAL, OsdPayload, OsdState, TIMER_OSD_HIDE, TIMER_OSD_REAP,
 };
-pub use shell::{ShellMessage, SurfaceId, TritonShell};
+pub use shell::{ShellMessage, SurfaceId, TIMER_WALLPAPER_SETTLE, TritonShell};
 pub use state::{
     BackendMode, BarMode, FocusedWindow, OutputKey, ShellEvent, ShellState, ShellStatusSnapshot,
     StatusSummary, SurfaceRole, SurfaceSummary, WallpaperState, WorkspaceInfo,
+};
+pub use wallpaper::{
+    BRIGHT_BACKDROP_THRESHOLD, CROSSFADE_DURATION, CROSSFADE_DURATION_REDUCED, Crossfade,
+    WallpaperError, WallpaperImage, WallpaperSet, crossfade_duration, mean_relative_luminance,
+    spawn_decode, view_background,
 };

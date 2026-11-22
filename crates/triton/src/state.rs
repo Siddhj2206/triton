@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 use serde::{Deserialize, Serialize};
 use triton_design::color::{Scheme, Variant};
@@ -10,6 +10,7 @@ use triton_engine::{OutputInfo, Theme};
 
 use crate::ipc::{IpcCommand, IpcResponse};
 use crate::osd::{OsdPayload, OsdState};
+use crate::wallpaper::{BRIGHT_BACKDROP_THRESHOLD, WallpaperImage};
 
 /// Selects whether the daemon runs against the safe fake dev backend or live
 /// system integrations.
@@ -132,8 +133,13 @@ impl Default for StatusSummary {
 pub struct WallpaperState {
     pub per_output: BTreeMap<String, PathBuf>,
     pub default_path: Option<PathBuf>,
-    /// Mean relative luminance (`0.0..=1.0`); values `> 0.6` trigger adaptive Mica alpha.
+    /// Mean relative luminance (`0.0..=1.0`) of the wallpaper active on the
+    /// focused output; values `> BRIGHT_BACKDROP_THRESHOLD` trigger adaptive
+    /// Mica alpha.
     pub mean_luminance: f32,
+    /// Decoded pixels of the wallpaper active on the focused output, shared
+    /// with #19 `material-colors` extraction (`image.data.rgba`).
+    pub active_image: Option<Arc<WallpaperImage>>,
 }
 
 impl WallpaperState {
@@ -142,9 +148,10 @@ impl WallpaperState {
         self.per_output.get(output).or(self.default_path.as_ref())
     }
 
-    /// Returns `true` when the active wallpaper exceeds the bright-backdrop threshold (`0.6`).
+    /// Returns `true` when the active wallpaper exceeds the bright-backdrop
+    /// threshold (`BRIGHT_BACKDROP_THRESHOLD`).
     pub fn is_bright_backdrop(&self) -> bool {
-        self.mean_luminance > 0.6
+        self.mean_luminance > BRIGHT_BACKDROP_THRESHOLD
     }
 }
 
@@ -277,7 +284,7 @@ pub struct SurfaceSummary {
 }
 
 /// Serializable daemon status returned by `triton msg status`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShellStatusSnapshot {
     pub backend: String,
     pub outputs: Vec<String>,
@@ -288,6 +295,8 @@ pub struct ShellStatusSnapshot {
     pub osd_active: bool,
     pub active_surfaces: Vec<SurfaceSummary>,
     pub wallpaper: Option<String>,
+    pub mean_luminance: f32,
+    pub bright_backdrop: bool,
     pub workspace_count: usize,
     pub focused_window_title: Option<String>,
 }
@@ -318,6 +327,12 @@ pub enum ShellEvent {
         path: PathBuf,
         output: Option<String>,
     },
+    /// A wallpaper finished decoding on the worker thread; `image` carries the
+    /// GPU-ready RGBA8 pixels and derived metrics, shared with #19.
+    WallpaperReady { image: Arc<WallpaperImage> },
+    /// A wallpaper decode failed on the worker thread; affected outputs keep
+    /// their previous wallpaper.
+    WallpaperFailed { path: PathBuf, error: String },
     /// Apply a theme update (scheme, variant, and/or adaptive Mica luminance).
     ApplyTheme {
         scheme: Option<Box<Scheme>>,
