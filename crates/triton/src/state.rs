@@ -9,6 +9,7 @@ use triton_design::color::{Scheme, Variant};
 use triton_engine::{OutputInfo, Theme};
 
 use crate::ipc::{IpcCommand, IpcResponse};
+use crate::osd::{OsdPayload, OsdState};
 
 /// Selects whether the daemon runs against the safe fake dev backend or live
 /// system integrations.
@@ -124,27 +125,6 @@ impl Default for StatusSummary {
             unread_notifications: 0,
         }
     }
-}
-
-/// Typed payload displayed by the morph-in-place OSD pill (#17).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-#[non_exhaustive]
-pub enum OsdPayload {
-    Volume { level: f32, muted: bool },
-    Brightness { level: f32 },
-    Mic { muted: bool },
-    KeyboardLayout { name: String },
-    Workspace { label: String },
-    LowBattery { percent: u8 },
-}
-
-/// Active OSD state tracked by the shell.
-#[derive(Debug, Clone, PartialEq)]
-pub struct OsdState {
-    pub payload: OsdPayload,
-    pub output: String,
-    pub visible: bool,
 }
 
 /// Per-output wallpaper paths and adaptive Mica luminance state (#18).

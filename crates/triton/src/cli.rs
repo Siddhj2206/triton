@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 use crate::ipc::{BarCommand, IpcCommand, OsdCommand, ThemeCommand};
-use crate::state::{BackendMode, OsdPayload};
+use crate::osd::OsdPayload;
+use crate::state::BackendMode;
 
 /// Usage text printed for `triton --help`.
 pub const USAGE: &str = "\

@@ -2,7 +2,7 @@
 //! `(SurfaceRole, OutputName)` surface reconciliation.
 
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use triton_design::color::{Scheme, Variant};
 use triton_design::icon::{Icon, IconStyle};
@@ -11,23 +11,16 @@ use triton_design::shape::{RADII, SIZE, SPACE};
 use triton_design::typography::TypeStyle;
 use triton_engine::{
     AppCommand, Element, NodeKey, OutputInfo, ShellApp, SurfaceAnchor, SurfaceKeyboard,
-    SurfaceLayer, SurfaceSize, SurfaceSpec, Theme, ViewContext, icon, row, text,
+    SurfaceLayer, SurfaceSize, SurfaceSpec, Theme, ViewContext, box_, icon, row, text,
 };
-use triton_kit::{
-    PillStatus, Progress, island, panel, pill, shadow_gutter, status_pill, wavy_progress,
-};
+use triton_kit::{PillStatus, island, panel, pill, shadow_gutter, status_pill};
 
 use crate::ipc::{BarCommand, IpcCommand, IpcResponse, OsdCommand, ThemeCommand};
+use crate::osd::{self, OSD_HOLD_DURATION, OsdPayload, OsdState, TIMER_OSD_HIDE, TIMER_OSD_REAP};
 use crate::state::{
-    BackendMode, BarMode, OsdPayload, OsdState, OutputKey, ShellEvent, ShellState,
-    ShellStatusSnapshot, SurfaceRole, SurfaceSummary, variant_as_str,
+    BackendMode, BarMode, OutputKey, ShellEvent, ShellState, ShellStatusSnapshot, SurfaceRole,
+    SurfaceSummary, variant_as_str,
 };
-
-/// Timer tag for dismissing the OSD pill after its hold period.
-pub const TIMER_OSD_HIDE: u32 = 1;
-
-/// Default OSD hold duration (`docs/design-spec.md`: 1.2 s).
-pub const OSD_HOLD_DURATION: Duration = Duration::from_millis(1200);
 
 /// Default logical width used when an output does not report a logical size yet.
 const DEFAULT_OUTPUT_WIDTH: u32 = 1920;
@@ -35,10 +28,6 @@ const DEFAULT_OUTPUT_WIDTH: u32 = 1920;
 /// Stable max extent height for the floating autohide bar (8 px top offset +
 /// 56 px bar height + `ShadowToken::FLOATING` top/bottom gutters).
 const BAR_AUTOHIDE_EXTENT_H: u32 = 224;
-
-/// Stable max extent dimensions for the morph-in-place Glass OSD pill.
-const OSD_EXTENT_W: u32 = 420;
-const OSD_EXTENT_H: u32 = 224;
 
 /// Copyable surface identifier combining a [`SurfaceRole`] with a stable
 /// [`OutputKey`].
@@ -157,11 +146,12 @@ impl TritonShell {
                 self.state.toggle_bar_hidden();
                 vec![AppCommand::RedrawAll]
             }
-            ShellEvent::ShowOsd { payload, output } => self.show_osd(payload, output),
+            ShellEvent::ShowOsd { payload, output } => self.show_osd(payload, output, now),
             ShellEvent::HideOsd => {
                 self.state.osd = None;
                 vec![
                     AppCommand::CancelTimer(TIMER_OSD_HIDE),
+                    AppCommand::CancelTimer(TIMER_OSD_REAP),
                     AppCommand::RedrawAll,
                 ]
             }
@@ -200,6 +190,9 @@ impl TritonShell {
             }
             ShellEvent::SetReduceMotion(enabled) => {
                 self.state.reduce_motion = enabled;
+                if let Some(ref mut osd) = self.state.osd {
+                    osd.set_reduce_motion(enabled, now);
+                }
                 vec![AppCommand::SetReduceMotion(enabled), AppCommand::RedrawAll]
             }
             ShellEvent::OutputsChanged(outputs) => self.reconcile_outputs(&outputs),
@@ -327,6 +320,7 @@ impl TritonShell {
         &mut self,
         payload: OsdPayload,
         output: Option<String>,
+        now: Instant,
     ) -> Vec<AppCommand<SurfaceId>> {
         let target = output
             .filter(|name| self.state.outputs.iter().any(|o| o.name == *name))
@@ -336,12 +330,21 @@ impl TritonShell {
             return Vec::new();
         };
 
-        self.state.osd = Some(OsdState {
-            payload,
-            output: target_output,
-            visible: true,
-        });
+        // Payload switches and mid-exit revivals morph in place: the surface id
+        // never changes, so the compositor keeps the same layer surface.
+        match self.state.osd.as_mut() {
+            Some(osd) => osd.show(payload, target_output, now),
+            None => {
+                self.state.osd = Some(OsdState::entering(
+                    payload,
+                    target_output,
+                    self.state.reduce_motion,
+                    now,
+                ));
+            }
+        }
 
+        // Re-arming the same tag refreshes the hold deadline on every event.
         vec![
             AppCommand::ScheduleTimer {
                 tag: TIMER_OSD_HIDE,
@@ -447,23 +450,6 @@ impl TritonShell {
         }
     }
 
-    fn osd_spec(output_name: &str) -> SurfaceSpec {
-        SurfaceSpec {
-            namespace: SurfaceRole::Osd.namespace().to_owned(),
-            layer: SurfaceLayer::Overlay,
-            anchor: SurfaceAnchor::BOTTOM,
-            margin: (0, 0, 48, 0),
-            keyboard: SurfaceKeyboard::None,
-            exclusive_zone: 0,
-            sizing: SurfaceSize::StableExtent {
-                width: OSD_EXTENT_W,
-                height: OSD_EXTENT_H,
-            },
-            shaped_input: true,
-            output: Some(output_name.to_owned()),
-        }
-    }
-
     fn view_background(&self) -> Element<ShellMessage> {
         panel(Material::Solid, RADII.tiled, &self.state.theme)
             .w_full()
@@ -535,110 +521,6 @@ impl TritonShell {
             }
         }
     }
-
-    fn view_osd(&self, ctx: &mut ViewContext<'_>) -> Element<ShellMessage> {
-        let theme = &self.state.theme;
-        let content = match self.state.osd.as_ref().map(|o| &o.payload) {
-            Some(OsdPayload::Volume { level, muted }) => {
-                let glyph = if *muted {
-                    Icon::VolumeOff
-                } else {
-                    Icon::VolumeUp
-                };
-                row()
-                    .gap(SPACE[2])
-                    .items_center()
-                    .child(icon(
-                        glyph,
-                        IconStyle::Filled,
-                        SIZE.icon_m,
-                        theme.scheme.on_surface,
-                    ))
-                    .child(wavy_progress(
-                        NodeKey::named("osd-progress"),
-                        160.0,
-                        4.0,
-                        Progress::Determinate(level.clamp(0.0, 1.0)),
-                        theme,
-                        ctx.anim,
-                    ))
-            }
-            Some(OsdPayload::Brightness { level }) => row()
-                .gap(SPACE[2])
-                .items_center()
-                .child(icon(
-                    Icon::BrightnessHigh,
-                    IconStyle::Filled,
-                    SIZE.icon_m,
-                    theme.scheme.on_surface,
-                ))
-                .child(wavy_progress(
-                    NodeKey::named("osd-progress"),
-                    160.0,
-                    4.0,
-                    Progress::Determinate(level.clamp(0.0, 1.0)),
-                    theme,
-                    ctx.anim,
-                )),
-            Some(OsdPayload::Mic { muted }) => row()
-                .gap(SPACE[2])
-                .items_center()
-                .child(icon(
-                    if *muted { Icon::MicOff } else { Icon::Mic },
-                    IconStyle::Filled,
-                    SIZE.icon_m,
-                    theme.scheme.on_surface,
-                ))
-                .child(text(
-                    if *muted { "Mic muted" } else { "Mic live" },
-                    TypeStyle::LABEL_L,
-                    theme.scheme.on_surface,
-                )),
-            Some(OsdPayload::KeyboardLayout { name }) => row()
-                .gap(SPACE[2])
-                .items_center()
-                .child(icon(
-                    Icon::Keyboard,
-                    IconStyle::Outlined,
-                    SIZE.icon_m,
-                    theme.scheme.on_surface,
-                ))
-                .child(text(
-                    name.clone(),
-                    TypeStyle::LABEL_L,
-                    theme.scheme.on_surface,
-                )),
-            Some(OsdPayload::Workspace { label }) => {
-                row().gap(SPACE[2]).items_center().child(text(
-                    format!("Workspace {label}"),
-                    TypeStyle::LABEL_L,
-                    theme.scheme.on_surface,
-                ))
-            }
-            Some(OsdPayload::LowBattery { percent }) => row()
-                .gap(SPACE[2])
-                .items_center()
-                .child(icon(
-                    Icon::BatteryAlert,
-                    IconStyle::Filled,
-                    SIZE.icon_m,
-                    theme.scheme.error,
-                ))
-                .child(text(
-                    format!("Battery {percent}%"),
-                    TypeStyle::LABEL_L,
-                    theme.scheme.on_surface,
-                )),
-            None => row(),
-        };
-
-        shadow_gutter(
-            panel(Material::Glass, RADII.full, theme)
-                .px(SPACE[4])
-                .py(SPACE[2])
-                .child(content),
-        )
-    }
 }
 
 impl ShellApp for TritonShell {
@@ -669,8 +551,9 @@ impl ShellApp for TritonShell {
             }
         }
 
+        // The OSD stays mounted through its exit morph; the reap timer drops
+        // `state.osd` once the morph settles, unmounting the surface cleanly.
         if let Some(ref osd) = self.state.osd
-            && osd.visible
             && let Some(&output_key) = self.name_to_key.get(&osd.output)
         {
             specs.push((
@@ -678,7 +561,7 @@ impl ShellApp for TritonShell {
                     role: SurfaceRole::Osd,
                     output: output_key,
                 },
-                Self::osd_spec(&osd.output),
+                osd::surface_spec(&osd.output),
             ));
         }
 
@@ -689,7 +572,10 @@ impl ShellApp for TritonShell {
         match id.role {
             SurfaceRole::Background => self.view_background(),
             SurfaceRole::Bar => self.view_bar(id, ctx),
-            SurfaceRole::Osd => self.view_osd(ctx),
+            SurfaceRole::Osd => match self.state.osd.as_ref() {
+                Some(osd) => osd::view(osd, &self.state.theme, self.state.reduce_motion, ctx),
+                None => box_(),
+            },
         }
     }
 
@@ -711,8 +597,13 @@ impl ShellApp for TritonShell {
         }
     }
 
-    fn is_animating(&self, _id: Self::SurfaceId, _now: Instant) -> bool {
-        false
+    fn is_animating(&self, id: Self::SurfaceId, now: Instant) -> bool {
+        match id.role {
+            // The app-owned presence channel drives frames during the
+            // enter/exit morph; once settled the surface goes idle (0% CPU).
+            SurfaceRole::Osd => self.state.osd.as_ref().is_some_and(|o| !o.is_settled(now)),
+            _ => false,
+        }
     }
 
     fn on_outputs_changed(
@@ -723,11 +614,43 @@ impl ShellApp for TritonShell {
         self.reconcile_outputs(outputs)
     }
 
-    fn on_timer(&mut self, tag: u32, _now: Instant) -> Vec<AppCommand<Self::SurfaceId>> {
-        if tag == TIMER_OSD_HIDE {
-            self.state.osd = None;
-            return vec![AppCommand::RedrawAll];
+    fn on_timer(&mut self, tag: u32, now: Instant) -> Vec<AppCommand<Self::SurfaceId>> {
+        match tag {
+            TIMER_OSD_HIDE => {
+                let Some(osd) = self.state.osd.as_mut() else {
+                    return Vec::new();
+                };
+                if osd.is_exiting() {
+                    return Vec::new();
+                }
+                osd.dismiss(now);
+                vec![
+                    AppCommand::ScheduleTimer {
+                        tag: TIMER_OSD_REAP,
+                        delay: osd::OSD_REAP_INTERVAL,
+                    },
+                    AppCommand::RedrawAll,
+                ]
+            }
+            TIMER_OSD_REAP => {
+                let Some(osd) = self.state.osd.as_ref() else {
+                    return Vec::new();
+                };
+                if !osd.is_exiting() {
+                    // Revived mid-exit: a stale reap is a no-op.
+                    return Vec::new();
+                }
+                if osd.is_settled(now) {
+                    self.state.osd = None;
+                    vec![AppCommand::RedrawAll]
+                } else {
+                    vec![AppCommand::ScheduleTimer {
+                        tag: TIMER_OSD_REAP,
+                        delay: osd::OSD_REAP_INTERVAL,
+                    }]
+                }
+            }
+            _ => Vec::new(),
         }
-        Vec::new()
     }
 }
