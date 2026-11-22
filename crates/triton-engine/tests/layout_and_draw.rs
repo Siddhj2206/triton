@@ -2359,3 +2359,58 @@ fn keydown_syncs_caps_lock_to_interaction_state() {
     assert!(dirty_off);
     assert!(!interaction.caps_lock());
 }
+
+#[test]
+fn input_opaque_descendant_inside_scroll_area_still_scrolls() {
+    let mut text = TextEngine::new();
+    let mut draw_list = DrawList::default();
+    let mut interaction = InteractionState::default();
+
+    let scroller = NodeKey::named("scroller");
+    let card = NodeKey::named("opaque-card");
+    let root: Element<()> = col()
+        .id(scroller)
+        .w(200.0)
+        .h(100.0)
+        .scroll_y()
+        .children((0..5).map(|i| {
+            box_()
+                .id(if i == 0 {
+                    card
+                } else {
+                    NodeKey::from_pair("card", i)
+                })
+                .w(200.0)
+                .h(60.0)
+                .input_opaque()
+        }));
+
+    let frame = layout_and_paint(
+        root,
+        (Some(200.0), Some(100.0)),
+        1.0,
+        &interaction,
+        &mut text,
+        &ImageStore::new(),
+        &mut draw_list,
+    );
+
+    // Hovering an input_opaque child inside the scroll area still marks scroll_hovered.
+    frame.dispatch_event(
+        &InputEvent::PointerMove { x: 50.0, y: 30.0 },
+        &mut interaction,
+    );
+    assert!(interaction.is_scroll_hovered(scroller));
+
+    // Wheel scrolling over the input_opaque child scrolls the enclosing container.
+    let (_, dirty) = frame.dispatch_event(
+        &InputEvent::Scroll {
+            x: 50.0,
+            y: 30.0,
+            delta_y: 40.0,
+        },
+        &mut interaction,
+    );
+    assert!(dirty);
+    assert_approx(interaction.scroll_offset(scroller), 40.0, "scroll offset");
+}

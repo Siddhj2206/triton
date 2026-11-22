@@ -922,6 +922,10 @@ pub struct HitEntry<M> {
     pub clip: Option<Rect>,
     pub scrollable: bool,
     pub scrollbar: ScrollbarStyle,
+    /// Enclosing scrollable container key when this element is painted inside a
+    /// `scroll_y()` subtree, so `input_opaque` descendants inside a scroll area
+    /// still route wheel scrolling and `scroll_hovered` to their own scroller.
+    pub scroll_ancestor: Option<NodeKey>,
     /// Element is opaque to hit-testing: interactive entries painted beneath
     /// it (earlier in the hit list) cannot receive pointer events.
     pub input_opaque: bool,
@@ -1045,10 +1049,9 @@ impl<M> BuiltFrame<M> {
             }
             InputEvent::PointerDown { x, y, .. } => {
                 interaction.pointer_pos = Some((x, y));
-                if let Some((entry, key, grab_offset, initial_scroll)) =
+                if let Some((key, grab_offset, initial_scroll)) =
                     self.scrollbar_hit_at(x, y, interaction)
                 {
-                    let _ = entry;
                     interaction.scrollbar_dragging = Some(key);
                     interaction.scrollbar_grab_offset = grab_offset;
                     interaction.set_scroll_offset(key, initial_scroll);
@@ -1150,15 +1153,26 @@ impl<M> BuiltFrame<M> {
         })
     }
 
-    /// Topmost scrollable entry under `(x, y)`; an `input_opaque` entry above a
-    /// scroll container blocks wheel events from reaching it.
+    /// Topmost scrollable entry under `(x, y)`; an `input_opaque` overlay painted
+    /// outside a scroll container blocks wheel events from reaching lower scroll
+    /// containers, while `input_opaque` descendants inside a scroll container
+    /// still route to their enclosing scroller.
     fn top_scrollable_at(&self, x: f32, y: f32) -> Option<&HitEntry<M>> {
         for e in self.hits.iter().rev() {
             if !e.rect.contains(x, y) || e.clip.is_some_and(|c| !c.contains(x, y)) {
                 continue;
             }
-            if e.scrollable || e.input_opaque {
-                return if e.scrollable { Some(e) } else { None };
+            if e.scrollable {
+                return Some(e);
+            }
+            if e.input_opaque {
+                let anc = e.scroll_ancestor?;
+                return self.hits.iter().rev().find(|h| {
+                    h.scrollable
+                        && h.key == Some(anc)
+                        && h.rect.contains(x, y)
+                        && h.clip.is_none_or(|c| c.contains(x, y))
+                });
             }
         }
         None
@@ -1185,13 +1199,13 @@ impl<M> BuiltFrame<M> {
     }
 
     /// Hit-test the scrollbar strip of the topmost overflowing scroll container
-    /// at `(x, y)`, returning `(entry, key, grab_offset, initial_scroll)`.
+    /// at `(x, y)`, returning `(key, grab_offset, initial_scroll)`.
     fn scrollbar_hit_at(
         &self,
         x: f32,
         y: f32,
         interaction: &InteractionState,
-    ) -> Option<(&HitEntry<M>, NodeKey, f32, f32)> {
+    ) -> Option<(NodeKey, f32, f32)> {
         let entry = self.top_scrollable_at(x, y)?;
         let key = entry.key?;
         let sb = entry.scrollbar;
@@ -1202,7 +1216,8 @@ impl<M> BuiltFrame<M> {
         if x < entry.rect.x + entry.rect.w - hit_w {
             return None;
         }
-        let (track_h, thumb_h, max_scroll) = scrollbar_metrics(entry);
+        let (track_h, thumb_h, max_scroll) =
+            compute_scrollbar_geometry(entry.rect.h, entry.content_height, sb);
         let cur = interaction.scroll_offset(key);
         let progress = (cur / max_scroll).clamp(0.0, 1.0);
         let thumb_y = entry.rect.y + sb.track_inset + progress * (track_h - thumb_h);
@@ -1212,21 +1227,24 @@ impl<M> BuiltFrame<M> {
             let grab = thumb_h * 0.5;
             (grab, scrollbar_offset_for_y(entry, y, grab))
         };
-        Some((entry, key, grab_offset, initial_scroll))
+        Some((key, grab_offset, initial_scroll))
     }
 }
 
-fn scrollbar_metrics<M>(entry: &HitEntry<M>) -> (f32, f32, f32) {
-    let sb = entry.scrollbar;
-    let track_h = (entry.rect.h - sb.track_inset * 2.0).max(8.0);
-    let thumb_h =
-        ((entry.rect.h / entry.content_height) * track_h).clamp(sb.min_thumb.min(track_h), track_h);
-    let max_scroll = (entry.content_height - entry.rect.h).max(1.0);
+fn compute_scrollbar_geometry(
+    viewport_h: f32,
+    content_h: f32,
+    sb: ScrollbarStyle,
+) -> (f32, f32, f32) {
+    let track_h = (viewport_h - sb.track_inset * 2.0).max(8.0);
+    let thumb_h = ((viewport_h / content_h) * track_h).clamp(sb.min_thumb.min(track_h), track_h);
+    let max_scroll = (content_h - viewport_h).max(1.0);
     (track_h, thumb_h, max_scroll)
 }
 
 fn scrollbar_offset_for_y<M>(entry: &HitEntry<M>, y: f32, grab_offset: f32) -> f32 {
-    let (track_h, thumb_h, max_scroll) = scrollbar_metrics(entry);
+    let (track_h, thumb_h, max_scroll) =
+        compute_scrollbar_geometry(entry.rect.h, entry.content_height, entry.scrollbar);
     let travel = (track_h - thumb_h).max(1.0);
     let thumb_top = y - (entry.rect.y + entry.scrollbar.track_inset) - grab_offset;
     ((thumb_top / travel).clamp(0.0, 1.0)) * max_scroll
@@ -1299,6 +1317,7 @@ pub fn layout_and_paint<M>(
         root,
         (0.0, 0.0),
         SubtreeTransform::IDENTITY,
+        None,
         None,
         None,
         scale,
@@ -1388,6 +1407,7 @@ fn paint_node<M>(
     parent_tf: SubtreeTransform,
     clip_rect: Option<Rect>,
     edge_fade: Option<EdgeFade>,
+    scroll_ancestor: Option<NodeKey>,
     scale: f32,
     interaction: &InteractionState,
     text: &mut TextEngine,
@@ -1450,6 +1470,7 @@ fn paint_node<M>(
             SubtreeTransform::IDENTITY,
             None,
             None,
+            scroll_ancestor,
             scale,
             interaction,
             text,
@@ -1896,6 +1917,7 @@ fn paint_node<M>(
             clip: clip_rect,
             scrollable: elem.scrollable,
             scrollbar: elem.scrollbar,
+            scroll_ancestor,
             input_opaque: elem.input_opaque,
             content_height,
             focusable: elem.focusable,
@@ -1908,6 +1930,11 @@ fn paint_node<M>(
 
     // 7. Recurse into children
     let child_origin = (local_rect.x, local_rect.y - scroll_y);
+    let child_scroll_ancestor = if elem.scrollable {
+        elem.key
+    } else {
+        scroll_ancestor
+    };
     for (cid, child_elem) in child_ids.into_iter().zip(elem.children) {
         paint_node(
             tree,
@@ -1917,6 +1944,7 @@ fn paint_node<M>(
             tf,
             child_clip,
             child_edge_fade,
+            child_scroll_ancestor,
             scale,
             interaction,
             text,
@@ -1934,10 +1962,8 @@ fn paint_node<M>(
         && elem.scrollbar.color.a > 0.0
     {
         let sb = elem.scrollbar;
-        let track_h = (local_rect.h - sb.track_inset * 2.0).max(8.0);
-        let thumb_h =
-            ((local_rect.h / content_height) * track_h).clamp(sb.min_thumb.min(track_h), track_h);
-        let max_scroll = (content_height - local_rect.h).max(1.0);
+        let (track_h, thumb_h, max_scroll) =
+            compute_scrollbar_geometry(local_rect.h, content_height, sb);
         let progress = (scroll_y / max_scroll).clamp(0.0, 1.0);
         let thumb_y = screen_rect.y + (sb.track_inset + progress * (track_h - thumb_h)) * tf.scale;
         let thumb_w = sb.width;
