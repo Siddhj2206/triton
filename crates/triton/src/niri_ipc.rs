@@ -250,7 +250,12 @@ fn handshake(socket_path: &Path) -> Result<(BufReader<UnixStream>, OutputSizes),
     }
 
     match send_request(&mut stream, &wire::Request::EventStream)? {
-        Ok(_) => Ok((stream, outputs)),
+        Ok(_) => {
+            // Clear the handshake timeout so idle stretches on the event stream
+            // never kill the connection; `Drop` unblocks `read_line` via shutdown.
+            stream.get_ref().set_read_timeout(None)?;
+            Ok((stream, outputs))
+        }
         Err(msg) => Err(NiriIpcError::RequestRejected(format!("EventStream: {msg}"))),
     }
 }
@@ -796,5 +801,92 @@ mod wire {
             #[expect(dead_code, reason = "not consumed by triton yet")]
             stream_id: u64,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+    use triton_engine::event_channel;
+
+    #[test]
+    fn event_stream_clears_read_timeout_and_delivers_events_after_idle_pause() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let sock_path = dir.path().join("niri.sock");
+        let listener = UnixListener::bind(&sock_path).expect("bind mock socket");
+
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept client");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut line = String::new();
+
+            // 1. Outputs handshake
+            reader.read_line(&mut line).expect("read Outputs");
+            stream
+                .write_all(
+                    b"{\"Ok\":{\"Outputs\":{\"eDP-1\":{\"logical\":{\"width\":1920,\"height\":1080}}}}}\n",
+                )
+                .expect("write Outputs reply");
+            line.clear();
+
+            // 2. EventStream handshake
+            reader.read_line(&mut line).expect("read EventStream");
+            stream
+                .write_all(b"{\"Ok\":\"Handled\"}\n")
+                .expect("write EventStream reply");
+            stream.flush().expect("flush reply");
+
+            // Wait for the test to confirm read_timeout is None and pause briefly,
+            // then deliver an event on the idle stream.
+            release_rx.recv().expect("wait for release signal");
+            writeln!(
+                stream,
+                "{{\"WorkspacesChanged\":{{\"workspaces\":[{{\"id\":1,\"idx\":1,\"name\":null,\"output\":\"eDP-1\",\"is_urgent\":false,\"is_active\":true,\"is_focused\":true,\"active_window_id\":null}}]}}}}"
+            )
+            .expect("write delayed event");
+            stream.flush().expect("flush delayed event");
+
+            // Keep socket open until client shuts it down.
+            line.clear();
+            let _ = reader.read_line(&mut line);
+        });
+
+        let (tx, rx) = event_channel::<ShellEvent>();
+        let ipc = NiriIpc::connect_to(&sock_path, tx).expect("connect_to succeeds");
+
+        // Regression check: handshake must clear the 5 s read timeout before
+        // entering the blocking event loop.
+        assert_eq!(
+            ipc.event_socket.read_timeout().expect("query read_timeout"),
+            None,
+            "event stream socket must have no read timeout after handshake"
+        );
+
+        // Release the delayed event on the idle stream and confirm delivery.
+        release_tx.send(()).expect("release delayed event");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut received = Vec::new();
+        while std::time::Instant::now() < deadline {
+            received.extend(rx.drain());
+            if received
+                .iter()
+                .any(|e| matches!(e, ShellEvent::WorkspacesUpdated(_)))
+            {
+                break;
+            }
+            thread::yield_now();
+        }
+        assert!(
+            received
+                .iter()
+                .any(|e| matches!(e, ShellEvent::WorkspacesUpdated(_))),
+            "stream must still deliver events after an idle stretch"
+        );
+
+        drop(ipc);
+        server.join().expect("server thread exits cleanly");
     }
 }

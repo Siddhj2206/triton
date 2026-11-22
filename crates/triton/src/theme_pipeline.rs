@@ -7,10 +7,8 @@
 //! `gsettings` strictly behind [`BackendMode::RealServices`].
 
 use std::fs;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use material_colors::color::Rgb;
 use material_colors::hct::Hct;
@@ -18,9 +16,11 @@ use material_colors::image::extract_color;
 use material_colors::scheme::variant::SchemeTonalSpot;
 use thiserror::Error;
 use tracing::warn;
-use triton_design::color::{Color, Scheme, Variant, with_alpha};
+use triton_design::color::{Color, STATE_LAYER, Scheme, Variant, with_alpha};
+use triton_design::material::ShadowToken;
 use triton_engine::ImageData;
 
+use crate::fs_util;
 use crate::niri_config::{self, NiriConfigError};
 use crate::state::BackendMode;
 
@@ -145,12 +145,7 @@ pub fn apply_gsettings(variant: Variant, backend: BackendMode) -> Result<bool, T
 /// Tests and isolated sessions should pass an explicit `config_root` directly
 /// rather than calling this.
 pub fn xdg_config_home() -> Option<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(xdg));
-    }
-    std::env::var_os("HOME")
-        .filter(|v| !v.is_empty())
-        .map(|home| PathBuf::from(home).join(".config"))
+    fs_util::xdg_config_home()
 }
 
 /// Maximum sample dimension along each axis before quantizing wallpaper pixels.
@@ -242,7 +237,10 @@ pub fn render_gtk4_css(scheme: &Scheme, variant: Variant) -> String {
     let destructive_bg = hex6(scheme.error);
     let destructive_fg = hex6(scheme.on_error);
     let warning_bg = hex6(scheme.signal_warn);
-    let warning_fg = hex6(Color::from_rgb8(0x19, 0x1B, 0x20));
+    let warning_fg = hex6(match variant {
+        Variant::Dark => scheme.surface,
+        Variant::Light => scheme.on_surface,
+    });
     let success_bg = hex6(scheme.tertiary);
     let success_fg = hex6(scheme.on_tertiary);
     let window_bg = hex6(scheme.surface);
@@ -264,14 +262,14 @@ pub fn render_gtk4_css(scheme: &Scheme, variant: Variant) -> String {
     let sidebar_backdrop = hex6(scheme.surface);
     let secondary_sidebar_bg = hex6(scheme.surface_container);
     let secondary_sidebar_fg = hex6(scheme.on_surface);
-    let shade = rgba_css(with_alpha(
-        Color::BLACK,
-        match variant {
-            Variant::Dark => 0.36,
-            Variant::Light => 0.12,
-        },
+    let shade = rgba_css(match variant {
+        Variant::Dark => ShadowToken::FLOATING.color,
+        Variant::Light => with_alpha(Color::BLACK, STATE_LAYER.disabled_container),
+    });
+    let scrollbar_outline = rgba_css(with_alpha(
+        scheme.outline_variant,
+        ShadowToken::RAISED.color.a,
     ));
-    let scrollbar_outline = rgba_css(with_alpha(scheme.outline_variant, 0.5));
 
     format!(
         "{GENERATED_CSS_HEADER}\
@@ -411,39 +409,8 @@ pub fn sync_config_files(
 /// Write `content` to a sibling temp file, `fsync` it, and rename it over
 /// `dest` so watchers never observe a half-written CSS file.
 fn atomic_write(dest: &Path, content: &str) -> Result<(), ThemePipelineError> {
-    static NEXT_NONCE: AtomicU64 = AtomicU64::new(0);
-    let nonce = NEXT_NONCE.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id();
-    let file_name = dest.file_name().map_or_else(
-        || "gtk.css".to_owned(),
-        |n| n.to_string_lossy().into_owned(),
-    );
-    let tmp = dest.with_file_name(format!(".{file_name}.{pid}.{nonce}.tmp"));
-
-    let mut file =
-        fs::File::create(&tmp).map_err(ThemePipelineError::io("create temp file", &tmp))?;
-    if let Err(err) = file
-        .write_all(content.as_bytes())
-        .and_then(|()| file.sync_all())
-    {
-        let _ = fs::remove_file(&tmp);
-        return Err(ThemePipelineError::Io {
-            op: "write",
-            path: tmp,
-            source: err,
-        });
-    }
-    drop(file);
-
-    if let Err(err) = fs::rename(&tmp, dest) {
-        let _ = fs::remove_file(&tmp);
-        return Err(ThemePipelineError::Io {
-            op: "rename",
-            path: dest.to_path_buf(),
-            source: err,
-        });
-    }
-    Ok(())
+    fs_util::atomic_write(dest, content, "gtk.css")
+        .map_err(|(op, path, source)| ThemePipelineError::Io { op, path, source })
 }
 
 fn hex6(c: Color) -> String {

@@ -18,7 +18,6 @@
 
 use std::fmt::Write as _;
 use std::fs;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -26,6 +25,7 @@ use triton_design::color::{Color, Scheme, Variant, with_alpha};
 use triton_design::material::Material;
 use triton_design::shape::RADII;
 
+use crate::fs_util;
 use crate::state::{BarMode, SurfaceRole};
 
 /// Directory inside the niri config dir that Triton owns outright.
@@ -69,12 +69,7 @@ impl NiriConfigError {
 /// Callers that need an explicit dir (tests, the nested dev session) should
 /// pass their own path to the writers instead of calling this.
 pub fn niri_config_dir() -> Option<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
-        return Some(PathBuf::from(xdg).join("niri"));
-    }
-    std::env::var_os("HOME")
-        .filter(|v| !v.is_empty())
-        .map(|home| PathBuf::from(home).join(".config").join("niri"))
+    fs_util::xdg_config_home().map(|dir| dir.join("niri"))
 }
 
 /// Render `triton/index.kdl`: the entry point included by `config.kdl`.
@@ -375,31 +370,8 @@ fn ensure_include_line(config_path: &Path) -> Result<(), NiriConfigError> {
 /// `fsync`, rename. niri watches the directory so the rename is the reload
 /// trigger — a half-written file is never observed.
 fn atomic_write(path: &Path, contents: &str) -> Result<(), NiriConfigError> {
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("triton.kdl");
-    let tmp_path = path.with_file_name(format!(".{file_name}.tmp"));
-
-    let write_result = (|| {
-        let mut file = fs::File::create(&tmp_path)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()
-    })();
-    if let Err(source) = write_result {
-        let _ = fs::remove_file(&tmp_path);
-        return Err(NiriConfigError::Io {
-            op: "write",
-            path: tmp_path,
-            source,
-        });
-    }
-
-    fs::rename(&tmp_path, path).map_err(|source| NiriConfigError::Io {
-        op: "rename",
-        path: path.to_path_buf(),
-        source,
-    })
+    fs_util::atomic_write(path, contents, "triton.kdl")
+        .map_err(|(op, path, source)| NiriConfigError::Io { op, path, source })
 }
 
 /// Format a [`Color`] as an 8-digit RGBA hex literal (`#rrggbbaa`), matching

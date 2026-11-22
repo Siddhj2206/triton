@@ -348,12 +348,23 @@ fn wallpaper_covers_new_outputs_on_hotplug_and_drops_removed_ones() {
 
     // Removing eDP-1 unmounts its surfaces and releases its texture reference.
     let _ = session.remove_output(&mut shell, "eDP-1");
+    session.sync_app_images(&mut shell);
     assert!(
         shell
             .surfaces()
             .iter()
             .all(|(id, _)| id.role != SurfaceRole::Background
                 || shell.surface_descriptor(*id).map(|(_, n)| n) != Some("eDP-1"))
+    );
+    assert_eq!(
+        session.images().dimensions(shared),
+        None,
+        "unplugging eDP-1 must release its wallpaper texture ref"
+    );
+    assert_eq!(
+        session.images().dimensions(dp_new),
+        Some((8, 8)),
+        "remaining output DP-1 must keep its wallpaper texture"
     );
 }
 

@@ -23,7 +23,7 @@ use triton_engine::{
 use crate::bar::BarClock;
 use crate::osd::OsdPayload;
 use crate::shell::{SurfaceId, TritonShell};
-use crate::state::{BackendMode, BarMode, ShellEvent, SurfaceRole};
+use crate::state::{BackendMode, BarMode, ShellEvent, SurfaceRole, variant_as_str};
 
 /// Default logical→physical scale for headless rendering (design canvas).
 pub const DEFAULT_SCALE: f32 = 1.75;
@@ -203,7 +203,7 @@ pub fn run(args: &HeadlessArgs) -> Result<HeadlessReport, HeadlessError> {
             }
             session.render_surface(&mut app, id, spec.sizing);
 
-            let stem = format!("{}-{}", role.as_str(), variant_str(variant));
+            let stem = format!("{}-{}", role.as_str(), variant_as_str(variant));
             if let (Some(base), Some(r)) = (&args.snap, renderer.as_mut()) {
                 let out = artifact_path(base, snap_is_file, single_target, &stem, "png");
                 if let Some(parent) = out.parent()
@@ -274,13 +274,6 @@ fn find_surface(
 fn session_size(args: &HeadlessArgs) -> (f32, f32) {
     args.size
         .map_or((1920.0, 1080.0), |(w, h)| (w as f32, h as f32))
-}
-
-fn variant_str(variant: Variant) -> &'static str {
-    match variant {
-        Variant::Dark => "dark",
-        Variant::Light => "light",
-    }
 }
 
 fn backdrop(args: &HeadlessArgs, variant: Variant) -> Rgba {

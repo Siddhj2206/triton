@@ -11,15 +11,18 @@
 //! - **Hidden:** Cleanly unmounts bar surfaces.
 
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use triton_design::color::STATE_LAYER;
 use triton_design::icon::{Icon, IconStyle};
 use triton_design::material::{Material, ShadowToken};
 use triton_design::motion::{Animated, Motion, Spring};
 use triton_design::shape::{RADII, SIZE, SPACE};
 use triton_design::typography::TypeStyle;
 use triton_engine::{
-    AppCommand, DropShadow, Edges, Element, FontSpec, NodeKey, OutputInfo, Rgba, SubtreeTransform,
+    AppCommand, DropShadow, Edges, Element, NodeKey, OutputInfo, Rgba, SubtreeTransform,
     SurfaceAnchor, SurfaceKeyboard, SurfaceLayer, SurfaceSize, SurfaceSpec, Theme, ViewContext,
     box_, icon, row, text,
 };
@@ -30,15 +33,16 @@ use triton_kit::{
 
 use crate::shell::{ShellMessage, SurfaceId};
 use crate::state::{BarMode, OutputKey, ShellState, StatusSummary, SurfaceRole, WorkspaceInfo};
+use crate::timer::TimerTag;
 
 /// Timer tag for minute-aligned live clock ticks (0% idle CPU between ticks).
-pub const TIMER_BAR_CLOCK: u32 = 2;
+pub const TIMER_BAR_CLOCK: u32 = TimerTag::BarClock.to_u32();
 
 /// Height in logical pixels of the Autohide top reveal edge.
 pub const BAR_REVEAL_EDGE_HEIGHT: f32 = 2.0;
 
-/// Top offset in logical pixels for floating Autohide Glass islands.
-pub const BAR_TOP_OFFSET: f32 = 8.0;
+/// Top offset in logical pixels for floating Autohide Glass islands (`SPACE[1]`).
+pub const BAR_TOP_OFFSET: f32 = SPACE[1];
 
 /// Default pointer-hover delay before revealing the Autohide bar (`120 ms`).
 pub const BAR_REVEAL_DELAY_DEFAULT: Duration = Duration::from_millis(120);
@@ -65,41 +69,14 @@ const BAR_TITLE_EDGE_FADE: f32 = 24.0;
 /// Settle threshold for the 0..=1 bar reveal animation.
 const REVEAL_EPSILON: f32 = 0.001;
 
-/// Base tag for per-output autohide reveal/hide timers (keeps tags disjoint from
-/// fixed tags `TIMER_OSD_HIDE = 1`, `TIMER_BAR_CLOCK = 2`, `TIMER_OSD_REAP = 3`).
-const TIMER_BAR_OUTPUT_BASE: u32 = 0x1000;
-
 /// Deterministic timer tag for scheduling Autohide reveal on `output`.
 pub const fn bar_reveal_timer_tag(output: OutputKey) -> u32 {
-    TIMER_BAR_OUTPUT_BASE + output.0 * 2
+    TimerTag::BarReveal(output).to_u32()
 }
 
 /// Deterministic timer tag for scheduling Autohide hide on `output`.
 pub const fn bar_hide_timer_tag(output: OutputKey) -> u32 {
-    TIMER_BAR_OUTPUT_BASE + output.0 * 2 + 1
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BarTimerKind {
-    Reveal,
-    Hide,
-}
-
-const fn decode_bar_timer_tag(tag: u32) -> Option<(OutputKey, BarTimerKind)> {
-    if tag < TIMER_BAR_OUTPUT_BASE {
-        return None;
-    }
-    let offset = tag - TIMER_BAR_OUTPUT_BASE;
-    let key = OutputKey(offset / 2);
-    if key.0 == 0 {
-        return None;
-    }
-    let kind = if offset.is_multiple_of(2) {
-        BarTimerKind::Reveal
-    } else {
-        BarTimerKind::Hide
-    };
-    Some((key, kind))
+    TimerTag::BarHide(output).to_u32()
 }
 
 /// Configurable Autohide timing parameters.
@@ -136,15 +113,18 @@ pub struct BarClock {
 }
 
 impl BarClock {
-    /// Anchor the clock to the current [`SystemTime`] at `now`.
+    /// Anchor the clock to the current [`SystemTime`] at `now`, resolving the
+    /// system's local timezone offset from `$TZ` or `/etc/localtime`.
     pub fn system(now: Instant) -> Self {
         let since_epoch = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::ZERO);
+        let unix_secs = since_epoch.as_secs();
+        let utc_offset_secs = local_utc_offset_secs(i64::try_from(unix_secs).unwrap_or(i64::MAX));
         Self {
-            anchor_unix_secs: since_epoch.as_secs(),
+            anchor_unix_secs: unix_secs,
             anchor_subsec_nanos: since_epoch.subsec_nanos(),
-            utc_offset_secs: 0,
+            utc_offset_secs,
             anchor: now,
         }
     }
@@ -413,51 +393,51 @@ impl BarController {
         cmds
     }
 
-    /// Handle Bar-owned timer tags (`TIMER_BAR_CLOCK` and per-output autohide
-    /// reveal/hide timers). Returns `None` if `tag` does not belong to the Bar.
+    /// Handle Bar-owned timer tags (`TimerTag::BarClock`, `TimerTag::BarReveal`,
+    /// `TimerTag::BarHide`). Returns `None` if `tag` does not belong to the Bar.
     pub fn on_timer(
         &mut self,
         tag: u32,
         state: &ShellState,
         now: Instant,
     ) -> Option<Vec<AppCommand<SurfaceId>>> {
-        if tag == TIMER_BAR_CLOCK {
-            let mut cmds = vec![AppCommand::ScheduleTimer {
-                tag: TIMER_BAR_CLOCK,
-                delay: self.clock.delay_until_next_minute(now),
-            }];
-            if state.bar_mode != BarMode::Hidden {
-                cmds.push(AppCommand::RedrawAll);
+        match TimerTag::from_u32(tag)? {
+            TimerTag::BarClock => {
+                let mut cmds = vec![AppCommand::ScheduleTimer {
+                    tag: TimerTag::BarClock.to_u32(),
+                    delay: self.clock.delay_until_next_minute(now),
+                }];
+                if state.bar_mode != BarMode::Hidden {
+                    cmds.push(AppCommand::RedrawAll);
+                }
+                Some(cmds)
             }
-            return Some(cmds);
-        }
-
-        let (output_key, kind) = decode_bar_timer_tag(tag)?;
-        let out = self.outputs.get_mut(&output_key)?;
-        if state.bar_mode != BarMode::Autohide {
-            return Some(Vec::new());
-        }
-        let surface_id = SurfaceId {
-            role: SurfaceRole::Bar,
-            output: output_key,
-        };
-        match kind {
-            BarTimerKind::Reveal => {
-                if out.pointer_inside {
+            TimerTag::BarReveal(output_key) => {
+                let out = self.outputs.get_mut(&output_key)?;
+                if state.bar_mode == BarMode::Autohide && out.pointer_inside {
                     out.revealed = true;
                     out.reveal_anim.set_target(1.0, now);
-                    return Some(vec![AppCommand::Redraw(surface_id)]);
+                    return Some(vec![AppCommand::Redraw(SurfaceId {
+                        role: SurfaceRole::Bar,
+                        output: output_key,
+                    })]);
                 }
+                Some(Vec::new())
             }
-            BarTimerKind::Hide => {
-                if !out.pointer_inside {
+            TimerTag::BarHide(output_key) => {
+                let out = self.outputs.get_mut(&output_key)?;
+                if state.bar_mode == BarMode::Autohide && !out.pointer_inside {
                     out.revealed = false;
                     out.reveal_anim.set_target(0.0, now);
-                    return Some(vec![AppCommand::Redraw(surface_id)]);
+                    return Some(vec![AppCommand::Redraw(SurfaceId {
+                        role: SurfaceRole::Bar,
+                        output: output_key,
+                    })]);
                 }
+                Some(Vec::new())
             }
+            TimerTag::OsdHide | TimerTag::OsdReap | TimerTag::WallpaperSettle => None,
         }
-        Some(Vec::new())
     }
 
     /// Returns `true` only while the Bar reveal/retract animation for `output`
@@ -585,10 +565,19 @@ impl BarController {
                 -(SIZE.bar_height + BAR_TOP_OFFSET) * (1.0 - progress)
             };
 
+            let mut left_content =
+                row()
+                    .gap(SPACE[2])
+                    .items_center()
+                    .child(view_workspaces(output_name, state, ctx));
+            if let Some(title_el) = view_focused_title(output_name, state) {
+                left_content = left_content.child(title_el);
+            }
+
             let left_island = shadow_gutter(
                 island(theme)
                     .id(NodeKey::named(&format!("bar-island-left-{output_name}")))
-                    .child(view_workspaces(output_name, state, ctx)),
+                    .child(left_content),
             );
 
             let right_island = shadow_gutter(
@@ -597,7 +586,7 @@ impl BarController {
                     .child(self.view_right_cluster(output_name, state, ctx)),
             );
 
-            let mut islands_row = row()
+            let islands_row = row()
                 .id(NodeKey::named(&format!("bar-islands-{output_name}")))
                 .absolute()
                 .inset_xy(0.0, BAR_TOP_OFFSET - gutter_top)
@@ -609,19 +598,9 @@ impl BarController {
                     opacity,
                     ..SubtreeTransform::IDENTITY
                 })
-                .child(left_island);
+                .child(left_island)
+                .child(right_island);
 
-            if let Some(title_el) = view_focused_title(output_name, state) {
-                let center_island = shadow_gutter(
-                    island(theme)
-                        .id(NodeKey::named(&format!("bar-island-center-{output_name}")))
-                        .px(SPACE[3])
-                        .child(title_el),
-                );
-                islands_row = islands_row.child(center_island);
-            }
-
-            islands_row = islands_row.child(right_island);
             root = root.child(islands_row);
         }
 
@@ -705,7 +684,7 @@ fn view_workspaces(
         });
         let occupied = ws.active_window_id.is_some();
         if !ws.is_active && !occupied && !ws.is_urgent {
-            el = el.opacity(0.6);
+            el = el.opacity(1.0 - STATE_LAYER.disabled_content);
         }
         if ws.is_urgent {
             el = badged(el, Badge::Dot(ring), theme);
@@ -754,12 +733,12 @@ fn view_clock(
         .items_center()
         .child(text(
             clock.format_time(now),
-            FontSpec::display(22.0).weight(600),
+            TypeStyle::HEADLINE_M,
             Rgba::from_color(theme.scheme.on_surface),
         ))
         .child(text(
             clock.format_date(now),
-            FontSpec::ui(12.0).weight(500),
+            TypeStyle::BODY_S,
             Rgba::from_color(theme.scheme.on_surface_variant),
         ))
 }
@@ -897,5 +876,249 @@ fn view_notification_bell(
         badged(bell, Badge::Count(status.unread_notifications), theme)
     } else {
         bell
+    }
+}
+
+/// Resolve the local timezone's UTC offset in seconds at `unix_secs` without
+/// `unsafe` FFI: honors `$TZ` (`TZif` path, IANA zone name under
+/// `/usr/share/zoneinfo`, or POSIX `STDoffset`) and falls back to
+/// `/etc/localtime`, then UTC (`0`).
+fn local_utc_offset_secs(unix_secs: i64) -> i64 {
+    if let Ok(tz) = std::env::var("TZ") {
+        let trimmed = tz.trim();
+        if trimmed.is_empty() {
+            return 0;
+        }
+        let spec = trimmed.strip_prefix(':').unwrap_or(trimmed);
+        if spec.starts_with('/') {
+            if let Some(off) = tzif_offset_from_file(Path::new(spec), unix_secs) {
+                return off;
+            }
+        } else {
+            let zoneinfo = Path::new("/usr/share/zoneinfo").join(spec);
+            if let Some(off) = tzif_offset_from_file(&zoneinfo, unix_secs) {
+                return off;
+            }
+            if let Some(off) = parse_posix_tz_offset(spec) {
+                return off;
+            }
+        }
+        return 0;
+    }
+    tzif_offset_from_file(Path::new("/etc/localtime"), unix_secs).unwrap_or(0)
+}
+
+fn tzif_offset_from_file(path: &Path, unix_secs: i64) -> Option<i64> {
+    let bytes = fs::read(path).ok()?;
+    parse_tzif_offset(&bytes, unix_secs)
+}
+
+/// Parse a `TZif` (RFC 8536) v1/v2/v3 binary buffer and return the UTC offset in
+/// seconds active at `unix_secs`.
+fn parse_tzif_offset(data: &[u8], unix_secs: i64) -> Option<i64> {
+    let (v1_version, v1_end, v1_offset) = parse_tzif_block(data, 0, false, unix_secs)?;
+    if matches!(v1_version, b'2' | b'3')
+        && let Some((_, _, v2_offset)) = parse_tzif_block(data, v1_end, true, unix_secs)
+    {
+        return Some(v2_offset);
+    }
+    Some(v1_offset)
+}
+
+fn read_be_u32(data: &[u8], offset: usize) -> Option<u32> {
+    let slice: [u8; 4] = data.get(offset..offset + 4)?.try_into().ok()?;
+    Some(u32::from_be_bytes(slice))
+}
+
+fn read_be_i32(data: &[u8], offset: usize) -> Option<i32> {
+    let slice: [u8; 4] = data.get(offset..offset + 4)?.try_into().ok()?;
+    Some(i32::from_be_bytes(slice))
+}
+
+fn read_be_i64(data: &[u8], offset: usize) -> Option<i64> {
+    let slice: [u8; 8] = data.get(offset..offset + 8)?.try_into().ok()?;
+    Some(i64::from_be_bytes(slice))
+}
+
+/// Parse one `TZif` header + data block starting at `start`.
+/// Returns `(version_byte, block_end_offset, utc_offset_secs)`.
+fn parse_tzif_block(
+    data: &[u8],
+    start: usize,
+    wide: bool,
+    unix_secs: i64,
+) -> Option<(u8, usize, i64)> {
+    const HEADER_LEN: usize = 44;
+    let header = data.get(start..start + HEADER_LEN)?;
+    if &header[0..4] != b"TZif" {
+        return None;
+    }
+    let version = header[4];
+    let isutcnt = read_be_u32(header, 20)? as usize;
+    let isstdcnt = read_be_u32(header, 24)? as usize;
+    let leapcnt = read_be_u32(header, 28)? as usize;
+    let timecnt = read_be_u32(header, 32)? as usize;
+    let typecnt = read_be_u32(header, 36)? as usize;
+    let charcnt = read_be_u32(header, 40)? as usize;
+    if typecnt == 0 {
+        return None;
+    }
+
+    let time_size = if wide { 8 } else { 4 };
+    let leap_size = if wide { 12 } else { 8 };
+
+    let times_start = start + HEADER_LEN;
+    let types_start = times_start.checked_add(timecnt.checked_mul(time_size)?)?;
+    let ttinfos_start = types_start.checked_add(timecnt)?;
+    let chars_start = ttinfos_start.checked_add(typecnt.checked_mul(6)?)?;
+    let leaps_start = chars_start.checked_add(charcnt)?;
+    let std_start = leaps_start.checked_add(leapcnt.checked_mul(leap_size)?)?;
+    let ut_start = std_start.checked_add(isstdcnt)?;
+    let block_end = ut_start.checked_add(isutcnt)?;
+    if block_end > data.len() {
+        return None;
+    }
+
+    let type_index = if timecnt == 0 {
+        0usize
+    } else {
+        // Binary search for the first transition strictly after `unix_secs`.
+        let mut lo = 0usize;
+        let mut hi = timecnt;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let pos = times_start + mid * time_size;
+            let transition = if wide {
+                read_be_i64(data, pos)?
+            } else {
+                i64::from(read_be_i32(data, pos)?)
+            };
+            if transition <= unix_secs {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo == 0 {
+            0usize
+        } else {
+            usize::from(*data.get(types_start + lo - 1)?)
+        }
+    };
+
+    if type_index >= typecnt {
+        return None;
+    }
+    let utoff = read_be_i32(data, ttinfos_start + type_index * 6)?;
+    Some((version, block_end, i64::from(utoff)))
+}
+
+/// Parse the standard offset of a simple POSIX TZ string (e.g. `"UTC"`,
+/// `"EST5"`, `"IST-5:30"`). POSIX signs are inverted relative to ISO/UTC
+/// offsets (`+5` means 5 hours west of UTC = `-18000` seconds).
+fn parse_posix_tz_offset(spec: &str) -> Option<i64> {
+    let rest = if let Some(after_lt) = spec.strip_prefix('<') {
+        let (_, tail) = after_lt.split_once('>')?;
+        tail
+    } else {
+        let end = spec
+            .find(|c: char| !c.is_ascii_alphabetic())
+            .unwrap_or(spec.len());
+        if end == 0 {
+            return None;
+        }
+        &spec[end..]
+    };
+
+    if rest.is_empty() {
+        return Some(0);
+    }
+
+    let (sign, digits) = if let Some(tail) = rest.strip_prefix('+') {
+        (-1_i64, tail)
+    } else if let Some(tail) = rest.strip_prefix('-') {
+        (1_i64, tail)
+    } else {
+        (-1_i64, rest)
+    };
+
+    let end = digits
+        .find(|c: char| !c.is_ascii_digit() && c != ':')
+        .unwrap_or(digits.len());
+    let offset_part = &digits[..end];
+    let mut parts = offset_part.split(':');
+    let hours: i64 = parts.next()?.parse().ok()?;
+    let mins: i64 = match parts.next() {
+        Some(m) => m.parse().ok()?,
+        None => 0,
+    };
+    let secs: i64 = match parts.next() {
+        Some(s) => s.parse().ok()?,
+        None => 0,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(sign * (hours * 3600 + mins * 60 + secs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_tzif_v2(transitions: &[(i64, u8)], offsets: &[i32]) -> Vec<u8> {
+        let mut buf = Vec::new();
+
+        // Empty v1 header + single ttinfo so v2 follows immediately.
+        buf.extend_from_slice(b"TZif2");
+        buf.extend_from_slice(&[0u8; 15]);
+        buf.extend_from_slice(&0u32.to_be_bytes()); // isutcnt
+        buf.extend_from_slice(&0u32.to_be_bytes()); // isstdcnt
+        buf.extend_from_slice(&0u32.to_be_bytes()); // leapcnt
+        buf.extend_from_slice(&0u32.to_be_bytes()); // timecnt
+        buf.extend_from_slice(&1u32.to_be_bytes()); // typecnt
+        buf.extend_from_slice(&1u32.to_be_bytes()); // charcnt
+        buf.extend_from_slice(&0i32.to_be_bytes()); // ttinfo[0].utoff
+        buf.extend_from_slice(&[0u8, 0u8]); // dst, idx
+        buf.push(0); // abbr
+
+        // v2 header + 64-bit transitions.
+        buf.extend_from_slice(b"TZif2");
+        buf.extend_from_slice(&[0u8; 15]);
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&0u32.to_be_bytes());
+        buf.extend_from_slice(&(transitions.len() as u32).to_be_bytes());
+        buf.extend_from_slice(&(offsets.len() as u32).to_be_bytes());
+        buf.extend_from_slice(&1u32.to_be_bytes());
+        for &(ts, _) in transitions {
+            buf.extend_from_slice(&ts.to_be_bytes());
+        }
+        for &(_, idx) in transitions {
+            buf.push(idx);
+        }
+        for &off in offsets {
+            buf.extend_from_slice(&off.to_be_bytes());
+            buf.extend_from_slice(&[0u8, 0u8]);
+        }
+        buf.push(0);
+        buf
+    }
+
+    #[test]
+    fn parses_tzif_v2_transitions_and_posix_tz_offsets() {
+        // Standard (-5h) and DST (-4h) transitions around 2026.
+        let data = build_tzif_v2(
+            &[(1_772_953_200, 1), (1_793_512_800, 0)],
+            &[-18_000, -14_400],
+        );
+        assert_eq!(parse_tzif_offset(&data, 1_770_000_000), Some(-18_000));
+        assert_eq!(parse_tzif_offset(&data, 1_780_000_000), Some(-14_400));
+        assert_eq!(parse_tzif_offset(&data, 1_800_000_000), Some(-18_000));
+
+        assert_eq!(parse_posix_tz_offset("UTC"), Some(0));
+        assert_eq!(parse_posix_tz_offset("EST5"), Some(-18_000));
+        assert_eq!(parse_posix_tz_offset("IST-5:30"), Some(19_800));
+        assert_eq!(parse_posix_tz_offset("<+09>-9"), Some(32_400));
     }
 }

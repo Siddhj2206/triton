@@ -477,3 +477,95 @@ fn real_services_syncs_gtk_and_niri_files_while_fake_mode_writes_nothing() {
         "BackendMode::Fake must never write gtk.css or colors.kdl"
     );
 }
+
+#[test]
+fn real_services_regenerates_layer_rules_on_bar_mode_and_variant_changes() {
+    let real_dir = tempfile::tempdir().expect("temp dir for layer rules");
+    let mut shell = TritonShell::new(BackendMode::RealServices);
+    shell.set_theme_sync(ThemeSyncConfig::files_only(real_dir.path().to_path_buf()));
+
+    let session = HeadlessSession::<ShellMessage>::new((1920.0, 1080.0), 1.0);
+    let layer_rules_path = real_dir
+        .path()
+        .join("niri")
+        .join("triton")
+        .join("layer-rules.kdl");
+
+    // Switching from default Autohide to Pinned switches triton-bar to Mica (xray true).
+    let _ = shell.handle_event(ShellEvent::SetBarMode(BarMode::Pinned), session.now());
+    let pinned_kdl = std::fs::read_to_string(&layer_rules_path).expect("read pinned layer-rules");
+    assert_eq!(
+        pinned_kdl,
+        triton::niri_config::render_layer_rules(Variant::Dark, BarMode::Pinned)
+    );
+    assert!(pinned_kdl.contains("xray true"));
+
+    // ToggleBarHidden flips Pinned -> Hidden (triton-bar back to Glass / xray false).
+    let _ = shell.handle_event(ShellEvent::ToggleBarHidden, session.now());
+    let hidden_kdl = std::fs::read_to_string(&layer_rules_path).expect("read hidden layer-rules");
+    assert_eq!(
+        hidden_kdl,
+        triton::niri_config::render_layer_rules(Variant::Dark, BarMode::Hidden)
+    );
+    assert!(!hidden_kdl.contains("xray true"));
+
+    // ToggleBarHidden again restores Pinned (xray true).
+    let _ = shell.handle_event(ShellEvent::ToggleBarHidden, session.now());
+    let restored_kdl =
+        std::fs::read_to_string(&layer_rules_path).expect("read restored layer-rules");
+    assert_eq!(
+        restored_kdl,
+        triton::niri_config::render_layer_rules(Variant::Dark, BarMode::Pinned)
+    );
+
+    // Switching back to Autohide switches triton-bar to Glass (xray false).
+    let _ = shell.handle_event(ShellEvent::SetBarMode(BarMode::Autohide), session.now());
+    let autohide_kdl =
+        std::fs::read_to_string(&layer_rules_path).expect("read autohide layer-rules");
+    assert_eq!(
+        autohide_kdl,
+        triton::niri_config::render_layer_rules(Variant::Dark, BarMode::Autohide)
+    );
+    assert!(autohide_kdl.contains("xray false"));
+
+    // Variant change via IPC regenerates layer-rules.kdl for Light.
+    std::fs::remove_file(&layer_rules_path).expect("remove layer-rules before variant change");
+    let (reply_tx, reply_rx) = mpsc::channel();
+    let _ = shell.handle_event(
+        ShellEvent::Ipc {
+            command: IpcCommand::Theme {
+                action: ThemeCommand::Light,
+            },
+            reply: reply_tx,
+        },
+        session.now(),
+    );
+    assert!(matches!(reply_rx.recv().unwrap(), IpcResponse::Ok { .. }));
+    let light_kdl = std::fs::read_to_string(&layer_rules_path).expect("read light layer-rules");
+    assert_eq!(
+        light_kdl,
+        triton::niri_config::render_layer_rules(Variant::Light, BarMode::Autohide)
+    );
+
+    // Fake dev mode must never write layer-rules.kdl even when ThemeSyncConfig is set.
+    let fake_dir = tempfile::tempdir().expect("temp dir for fake layer rules");
+    let mut fake_shell = TritonShell::new(BackendMode::Fake);
+    fake_shell.set_theme_sync(ThemeSyncConfig::files_only(fake_dir.path().to_path_buf()));
+    let _ = fake_shell.handle_event(ShellEvent::SetBarMode(BarMode::Pinned), session.now());
+    let _ = fake_shell.handle_event(ShellEvent::ToggleBarHidden, session.now());
+    let _ = fake_shell.handle_event(
+        ShellEvent::ApplyTheme {
+            scheme: None,
+            variant: Some(Variant::Light),
+            mean_luminance: None,
+        },
+        session.now(),
+    );
+    assert!(
+        std::fs::read_dir(fake_dir.path())
+            .expect("read fake dir")
+            .next()
+            .is_none(),
+        "BackendMode::Fake must never write layer-rules.kdl"
+    );
+}
