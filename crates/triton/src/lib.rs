@@ -10,6 +10,7 @@
 
 pub mod cli;
 pub mod ipc;
+pub mod niri_config;
 pub mod shell;
 pub mod state;
 
@@ -17,6 +18,11 @@ pub use cli::{CliCommand, CliError, DaemonArgs, MsgArgs, parse_args};
 pub use ipc::{
     BarCommand, IpcCommand, IpcError, IpcResponse, IpcServer, OsdCommand, ThemeCommand,
     resolve_socket_path, send_command,
+};
+pub use niri_config::{
+    INCLUDE_LINE, NiriConfigError, OWNED_DIR, install, niri_config_dir, render_binds,
+    render_colors, render_index, render_layer_rules, write_colors, write_layer_rules,
+    write_owned_files,
 };
 pub use shell::{ShellMessage, SurfaceId, TIMER_OSD_HIDE, TritonShell};
 pub use state::{

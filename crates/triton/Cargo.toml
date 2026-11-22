@@ -24,3 +24,6 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 triton-design.workspace = true
 triton-engine.workspace = true
 triton-kit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
